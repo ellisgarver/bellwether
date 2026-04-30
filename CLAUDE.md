@@ -18,6 +18,13 @@ architectural decisions are in `docs/handoff_to_claude_code.md` and
 - Paywalled ingestion uses ProQuest TDM Studio only — not Factiva (license prohibits it).
 - Any deviation from the above requires a new ADR in `docs/architecture_decisions.md` first.
 
+## Communication style
+
+- For every file created or significantly modified, explain in chat what it does, why it exists, and how it connects to adjacent modules.
+- Before every continuation step, summarize what was just completed and what the next step will do — never start a new step silently.
+- Never say "shall I continue?" without that context attached.
+- Never add Co-Authored-By lines to commit messages.
+
 ## Resuming a mid-pilot session
 
 If a session ends while the Phase 1 pilot is running, **do not restart from scratch**.
