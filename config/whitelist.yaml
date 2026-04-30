@@ -1,0 +1,272 @@
+# =============================================================================
+# Outlet Whitelist
+# =============================================================================
+# ~30-40 outlets organized by tier. The whitelist is the *gate* on what enters
+# the corpus — GDELT URLs from outlets not on this list are discarded.
+#
+# Each entry includes:
+#   - domain: matched against GDELT source URL (case-insensitive, www-stripped)
+#   - aliases: alternate domains for the same outlet
+#   - tier: 1-3 (see below)
+#   - access: free | paywalled | mixed
+#   - retrieval: how full text is obtained (gdelt_url | fed_site | factiva | proquest | rss | none)
+#   - notes: outlet-specific quirks
+#
+# Tiers:
+#   Tier 1 — Core analytical financial press. Highest priority. Required.
+#   Tier 2 — Adjacent analytical publications. Strong macro focus.
+#   Tier 3 — Institutional / official sources. Free, authoritative.
+#
+# DO NOT add Tier 4 (general business news, blogs) without explicit
+# scope-change documentation. Adding noise here propagates to every
+# downstream stage.
+# =============================================================================
+
+schema_version: "1.0.0"
+
+tier_1_core_financial_press:
+  - id: wsj
+    name: "Wall Street Journal"
+    domains: ["wsj.com"]
+    access: paywalled
+    retrieval: factiva
+    notes: "Anchor outlet. Factiva license covers historical full-text."
+
+  - id: ft
+    name: "Financial Times (US edition)"
+    domains: ["ft.com"]
+    access: paywalled
+    retrieval: factiva
+    notes: "Use US edition feed; Factiva covers historical."
+
+  - id: bloomberg
+    name: "Bloomberg News"
+    domains: ["bloomberg.com"]
+    access: paywalled
+    retrieval: factiva
+    notes: "Opinion pieces tagged separately; treat both as in-scope but flag in metadata."
+
+  - id: reuters
+    name: "Reuters"
+    domains: ["reuters.com"]
+    access: mixed
+    retrieval: factiva
+    notes: "Heavy real-time wire content; filter aggressively to analytical pieces."
+
+  - id: nyt_business
+    name: "New York Times Business / DealBook"
+    domains: ["nytimes.com"]
+    section_filter: ["business", "dealbook", "economy"]
+    access: paywalled
+    retrieval: proquest
+    notes: "Section filter critical; full paper is too broad."
+
+  - id: economist
+    name: "The Economist"
+    domains: ["economist.com"]
+    access: paywalled
+    retrieval: factiva
+    notes: "Finance & economics + briefings sections only."
+
+  - id: barrons
+    name: "Barron's"
+    domains: ["barrons.com"]
+    access: paywalled
+    retrieval: factiva
+
+  - id: marketwatch
+    name: "MarketWatch"
+    domains: ["marketwatch.com"]
+    access: free
+    retrieval: gdelt_url
+    notes: "Mostly free; analytical columns only — filter out tickers/quotes pages."
+
+  - id: cnbc
+    name: "CNBC"
+    domains: ["cnbc.com"]
+    access: free
+    retrieval: gdelt_url
+    notes: "Free but noisy; require keyword match and length>500 words."
+
+  - id: foreign_affairs
+    name: "Foreign Affairs"
+    domains: ["foreignaffairs.com"]
+    access: paywalled
+    retrieval: proquest
+    notes: "Macro-geopolitical analysis, low volume but very high signal."
+
+tier_2_adjacent_analytical:
+  - id: project_syndicate
+    name: "Project Syndicate"
+    domains: ["project-syndicate.org"]
+    access: free
+    retrieval: gdelt_url
+    notes: "Op-eds from prominent economists; high signal."
+
+  - id: voxeu
+    name: "VoxEU / CEPR"
+    domains: ["cepr.org", "voxeu.org"]
+    access: free
+    retrieval: gdelt_url
+
+  - id: bloomberg_opinion
+    name: "Bloomberg Opinion"
+    domains: ["bloomberg.com/opinion"]
+    access: paywalled
+    retrieval: factiva
+    notes: "Tagged separately from Bloomberg News for narrative-vs-news separation."
+
+  - id: ft_alphaville
+    name: "FT Alphaville"
+    domains: ["ftalphaville.ft.com"]
+    access: free
+    retrieval: gdelt_url
+
+  - id: brookings_econ
+    name: "Brookings Economic Studies"
+    domains: ["brookings.edu"]
+    section_filter: ["economy", "research/economic-studies"]
+    access: free
+    retrieval: gdelt_url
+
+  - id: peterson
+    name: "Peterson Institute for International Economics"
+    domains: ["piie.com"]
+    access: free
+    retrieval: gdelt_url
+
+  - id: cfr
+    name: "Council on Foreign Relations"
+    domains: ["cfr.org"]
+    section_filter: ["world", "geoeconomics"]
+    access: free
+    retrieval: gdelt_url
+    notes: "Filter to economic/financial pieces; foreign policy generalist content out of scope."
+
+  - id: foreign_policy
+    name: "Foreign Policy magazine"
+    domains: ["foreignpolicy.com"]
+    access: paywalled
+    retrieval: proquest
+    notes: "Filter to economy/markets; geopolitics out of scope unless macro-financial."
+
+  - id: atlantic_econ
+    name: "The Atlantic — Business/Economy"
+    domains: ["theatlantic.com"]
+    section_filter: ["business", "economy"]
+    access: paywalled
+    retrieval: proquest
+
+  - id: yahoo_finance
+    name: "Yahoo Finance"
+    domains: ["finance.yahoo.com"]
+    access: free
+    retrieval: gdelt_url
+    notes: "Heavy filter required — most content is ticker pages, not articles."
+
+  - id: forbes_econ
+    name: "Forbes — Markets/Economy"
+    domains: ["forbes.com"]
+    section_filter: ["money", "markets", "economy"]
+    access: free
+    retrieval: gdelt_url
+    notes: "Personal-finance content noisy; require macro keyword match."
+
+  - id: business_insider_econ
+    name: "Business Insider — Markets"
+    domains: ["businessinsider.com"]
+    section_filter: ["markets", "economy"]
+    access: mixed
+    retrieval: gdelt_url
+
+  - id: axios_macro
+    name: "Axios Macro"
+    domains: ["axios.com"]
+    section_filter: ["business", "economy"]
+    access: free
+    retrieval: gdelt_url
+
+  - id: politico_econ
+    name: "Politico — Economy"
+    domains: ["politico.com"]
+    section_filter: ["economy", "finance"]
+    access: free
+    retrieval: gdelt_url
+
+tier_3_institutional:
+  - id: federalreserve
+    name: "Federal Reserve Board"
+    domains: ["federalreserve.gov"]
+    access: free
+    retrieval: fed_site
+    notes: "FOMC statements, minutes, Beige Book, speeches, MPRs."
+
+  - id: frb_ny
+    name: "Federal Reserve Bank of New York"
+    domains: ["newyorkfed.org"]
+    access: free
+    retrieval: fed_site
+
+  - id: frb_sf
+    name: "Federal Reserve Bank of San Francisco"
+    domains: ["frbsf.org"]
+    access: free
+    retrieval: fed_site
+
+  - id: imf
+    name: "International Monetary Fund"
+    domains: ["imf.org"]
+    access: free
+    retrieval: institutional_site
+    notes: "WPs + Article IVs + WEO/GFSR; filter to publications, not press releases."
+
+  - id: bis
+    name: "Bank for International Settlements"
+    domains: ["bis.org"]
+    access: free
+    retrieval: institutional_site
+    notes: "Working Papers + Quarterly Reviews."
+
+  - id: oecd
+    name: "OECD Economics"
+    domains: ["oecd.org"]
+    section_filter: ["economy", "finance"]
+    access: free
+    retrieval: institutional_site
+
+  - id: nber
+    name: "NBER Working Papers"
+    domains: ["nber.org"]
+    access: free
+    retrieval: institutional_site
+    notes: "Macro/finance categories only; filter to relevant JEL codes."
+
+  - id: ssrn_finance
+    name: "SSRN — Financial Economics Network"
+    domains: ["ssrn.com"]
+    access: free
+    retrieval: institutional_site
+    notes: "Free abstracts always; many full PDFs free in finance."
+
+  - id: cea
+    name: "Council of Economic Advisers"
+    domains: ["whitehouse.gov/cea", "cea.gov"]
+    access: free
+    retrieval: gov_site
+
+  - id: bea
+    name: "Bureau of Economic Analysis"
+    domains: ["bea.gov"]
+    access: free
+    retrieval: gov_site
+
+# -----------------------------------------------------------------------------
+# Explicit OUT-OF-SCOPE list — outlets that GDELT may surface but we exclude.
+# Documented to make the exclusion deliberate and auditable.
+# -----------------------------------------------------------------------------
+excluded_examples:
+  - { domain: "seekingalpha.com",  reason: "User-generated; quality variance too high" }
+  - { domain: "zerohedge.com",     reason: "Editorial slant skews narrative formation" }
+  - { domain: "investopedia.com",  reason: "Reference material, not narrative discourse" }
+  - { domain: "fool.com",          reason: "Single-stock retail focus; out of macro scope" }
+  - { domain: "benzinga.com",      reason: "Real-time wire; reverse-causality concern" }

@@ -1,0 +1,199 @@
+# =============================================================================
+# Macro Narrative Dynamics — Master Configuration
+# =============================================================================
+# This file locks every parameter that must be pre-specified for reproducibility
+# and to guard against post-hoc tuning. See Appendix A of the project plan.
+#
+# DO NOT MODIFY VALUES UNDER `locked` AFTER PHASE 1 PILOT IS COMPLETE without
+# documenting the change in docs/architecture_decisions.md and incrementing
+# the schema_version below.
+# =============================================================================
+
+schema_version: "1.0.0"
+project_name: "macro-narrative-dynamics"
+
+# -----------------------------------------------------------------------------
+# Temporal scope
+# -----------------------------------------------------------------------------
+temporal:
+  historical_start: "2010-01-01"
+  historical_end: "auto"            # "auto" = today minus 7d (handled in code)
+  train_test_split: "2020-01-01"    # Walk-forward boundary; 2010-2019 train, 2020-now test
+  live_update_frequency: "weekly"   # cron: weekly batch
+  live_update_day: "monday"         # day of week for the cron trigger
+
+# -----------------------------------------------------------------------------
+# Embedding (locked)
+# -----------------------------------------------------------------------------
+# Two-model strategy:
+#  - PRIMARY: modern, strong general-purpose model. Used for all production work.
+#  - COMPARATOR: older model with cleaner pre-2021 cutoff, used ONLY for the
+#    mandatory look-ahead sensitivity check (config.validation.lookahead_check).
+#
+# This formalizes the look-ahead bias argument: if cluster quality and stage
+# classifications are stable across primary and comparator on pre-2021 data,
+# the bias is bounded. If not, we caveat and (per kill criteria) consider the
+# fallback scope.
+embedding:
+  primary:
+    model: "Qwen/Qwen3-Embedding-0.6B"
+    revision: "main"               # Pin to specific commit hash before Phase 2
+    dimensions: 1024
+    max_seq_len: 32768
+    instruction_aware: true
+    instruction_prefix: "Instruct: Represent this financial article for narrative clustering\nQuery: "
+    # Set to Qwen3-Embedding-4B if RCC capacity allows; identical interface
+    upgrade_path: "Qwen/Qwen3-Embedding-4B"
+  comparator:
+    model: "sentence-transformers/all-mpnet-base-v2"
+    revision: "main"               # Pin before Phase 2
+    dimensions: 768
+    max_seq_len: 384
+    instruction_aware: false
+  # Article preprocessing applied before embedding
+  article:
+    truncation_tokens: 600         # Headline + first 600 tokens of body
+    include_headline: true
+    include_lead_paragraph: true   # First paragraph is high-signal
+    normalize_whitespace: true
+
+# -----------------------------------------------------------------------------
+# Clustering (locked, with sensitivity sweep values)
+# -----------------------------------------------------------------------------
+clustering:
+  framework: "bertopic"
+  umap:
+    n_neighbors: 15
+    min_dist: 0.1
+    n_components: 5
+    metric: "cosine"
+    random_state: 42
+  hdbscan:
+    min_cluster_size: 20           # default
+    min_samples: 5
+    cluster_selection_method: "eom"
+    metric: "euclidean"            # operates on UMAP-reduced space
+    # Sensitivity sweep — runs in parallel as the "strict / default / permissive"
+    # parameter triple referenced in plan §8.1
+    sweep_min_cluster_size: [10, 20, 40]
+  ctfidf:
+    reduce_frequent_words: true
+    bm25_weighting: true
+  granularity:
+    # Hierarchical merging into three levels for analysis at multiple scales
+    fine_target: 200               # Approximate target count
+    medium_target: 60              # "narrative" is defined at this level
+    coarse_target: 15
+    silhouette_thresholds:         # Pre-specified merge thresholds
+      fine: 0.30
+      medium: 0.45
+      coarse: 0.60
+
+# -----------------------------------------------------------------------------
+# Dynamics fitting (locked)
+# -----------------------------------------------------------------------------
+dynamics:
+  smoothing_window_days: 7         # Centered moving average to remove weekend dips
+  models_to_fit:
+    - "logistic"                   # MVP fallback — most stable
+    - "sir"                        # Primary epidemiological model
+    - "gompertz"
+    - "exponential"                # For pre-emergence narratives only
+  inference:
+    framework: "pymc"
+    draws: 2000
+    tune: 1000
+    chains: 4
+    target_accept: 0.95
+    cores: "auto"                  # min(chains, available_cpus)
+    random_seed: 42
+  priors:
+    # Weakly informative; documented in dynamics/models.py
+    sir:
+      beta_mean: 0.3
+      beta_sd: 0.5
+      gamma_mean: 0.1
+      gamma_sd: 0.2
+    logistic:
+      L_log_mean: 5.0              # log(carrying capacity) prior mean
+      L_log_sd: 2.0
+      k_mean: 0.2
+      k_sd: 0.1
+  # Goodness-of-fit threshold for trusting model output (kill criterion 3)
+  min_r_squared: 0.30
+  max_r0_ci_width: 2.0
+
+# -----------------------------------------------------------------------------
+# Stage classification (locked)
+# -----------------------------------------------------------------------------
+stages:
+  pre_emergence_max_articles: 50   # Cumulative articles below this = pre-emergence
+  early_spread_min_r0: 1.0
+  early_spread_pre_peak: true      # Must not have reached peak yet
+  peak_window_days: 14             # +/- around fitted peak day
+  decay_min_pct_below_peak: 0.30   # 30% below peak to be "decay"
+  dormant_max_articles_per_day: 1.0  # Rolling 14-day average
+
+# -----------------------------------------------------------------------------
+# Filtering & deduplication (locked)
+# -----------------------------------------------------------------------------
+filtering:
+  topic:
+    method: "hybrid"               # keyword + embedding-similarity to seed set
+    keyword_min_matches: 2
+    embedding_similarity_threshold: 0.55
+    seed_articles_path: "data/anchors/topic_seed_articles.jsonl"
+  dedup:
+    method: "minhash"
+    num_perm: 128
+    threshold: 0.85                # Jaccard similarity threshold
+    window_hours: 48               # Rolling window for near-duplicate detection
+
+# -----------------------------------------------------------------------------
+# Validation (locked)
+# -----------------------------------------------------------------------------
+validation:
+  anchor_tolerance_days: 14        # Max deviation from documented anchor date
+  bootstrap_replicates: 20
+  bootstrap_random_seed: 42
+  fdr_alpha: 0.05                  # Benjamini-Hochberg FDR threshold
+  required_anchors_recovered: 7    # Out of 10 (kill criterion 2)
+  min_bootstrap_nmi: 0.40          # Across all parameter settings (kill criterion 1)
+  lookahead_check:
+    pre_cutoff_window: ["2010-01-01", "2020-12-31"]
+    post_cutoff_window: ["2021-01-01", "auto"]
+    metric: "silhouette_diff"      # Difference in mean silhouette between windows
+    fail_threshold: 0.15           # Silhouette diff > this = significant lookahead
+
+# -----------------------------------------------------------------------------
+# Reproducibility (locked)
+# -----------------------------------------------------------------------------
+reproducibility:
+  global_random_seed: 42
+  python_version_required: ">=3.11,<3.13"
+  numpy_random_state_pinned: true
+  data_snapshot_dir: "data/snapshots"
+  config_versioning: "git"         # Config changes must commit
+
+# -----------------------------------------------------------------------------
+# Compute & I/O
+# -----------------------------------------------------------------------------
+compute:
+  embedding_batch_size: 32         # Adjust per device VRAM
+  embedding_device: "auto"         # auto | cuda | cuda:0 | cpu | mps
+  embedding_fp16: true             # Use half precision where supported
+  ingestion_max_workers: 4
+  cache_dir: ".cache"
+
+# -----------------------------------------------------------------------------
+# Storage paths
+# -----------------------------------------------------------------------------
+paths:
+  raw_articles: "data/raw/articles"
+  raw_validation: "data/raw/validation"
+  processed_articles: "data/processed/articles.parquet"
+  processed_embeddings: "data/processed/embeddings.npy"
+  processed_clusters: "data/processed/clusters.parquet"
+  processed_dynamics: "data/processed/dynamics.parquet"
+  dashboard_artifacts: "data/processed/dashboard"
+  logs: "logs"

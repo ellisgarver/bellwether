@@ -1,0 +1,59 @@
+# Data directories — never commit raw or processed data
+data/raw/
+data/processed/
+data/snapshots/
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/snapshots/.gitkeep
+
+# Cache & logs
+.cache/
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Notebooks — commit cleaned versions only
+.ipynb_checkpoints/
+notebooks/scratch/
+
+# Env files (never commit secrets)
+.env
+.env.local
+*.key
+
+# Model artifacts (pull on demand)
+models/
+*.bin
+*.safetensors
+*.pkl
+
+# Dashboard build artifacts
+.streamlit/secrets.toml

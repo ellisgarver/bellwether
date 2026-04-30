@@ -1,0 +1,228 @@
+# =============================================================================
+# Topic Filter Keywords
+# =============================================================================
+# Macro-financial keyword seed list used by the topic filter (Stage 2).
+#
+# An article passes the keyword check if it contains AT LEAST
+# `filtering.topic.keyword_min_matches` (default: 2) terms from this list.
+# It must ALSO pass the embedding-similarity check against
+# data/anchors/topic_seed_articles.jsonl.
+#
+# Both checks are required (AND, not OR) to prevent over-broad ingestion.
+#
+# DO NOT lower keyword_min_matches without justification — single-keyword
+# matches admit a flood of off-topic articles (a Reuters piece mentioning
+# "inflation" of NFT prices, etc.).
+# =============================================================================
+
+schema_version: "1.0.0"
+
+categories:
+
+  core_macro:
+    - inflation
+    - deflation
+    - disinflation
+    - reflation
+    - stagflation
+    - recession
+    - recessionary
+    - expansion
+    - business cycle
+    - economic outlook
+    - GDP
+    - gross domestic product
+    - unemployment
+    - jobless
+    - payrolls
+    - nonfarm payrolls
+    - consumer price index
+    - CPI
+    - PCE
+    - personal consumption expenditures
+    - core inflation
+    - headline inflation
+    - sticky inflation
+    - PPI
+    - producer price index
+
+  monetary_policy:
+    - Federal Reserve
+    - FOMC
+    - Fed funds
+    - federal funds rate
+    - interest rate
+    - rate hike
+    - rate cut
+    - rate cycle
+    - rate path
+    - quantitative easing
+    - quantitative tightening
+    - balance sheet
+    - dovish
+    - hawkish
+    - monetary policy
+    - central bank
+    - ECB
+    - European Central Bank
+    - Bank of England
+    - Bank of Japan
+    - BOJ
+    - PBOC
+    - People's Bank of China
+    - Powell
+    - Lagarde
+    - SOMA
+    - reverse repo
+    - discount rate
+    - open market operations
+
+  rates_and_bonds:
+    - yield curve
+    - yield curve inversion
+    - Treasury yields
+    - Treasury market
+    - sovereign yields
+    - breakeven inflation
+    - TIPS
+    - real yields
+    - term premium
+    - bond market
+    - bond auction
+    - duration risk
+    - convexity
+
+  credit:
+    - credit spreads
+    - high yield
+    - investment grade
+    - corporate bonds
+    - default rate
+    - credit conditions
+    - credit cycle
+    - leveraged loans
+    - distressed debt
+
+  banking_and_financial_stability:
+    - bank stress
+    - bank failure
+    - deposit run
+    - banking crisis
+    - regional banks
+    - capital requirements
+    - Basel
+    - Dodd-Frank
+    - systemic risk
+    - too big to fail
+    - lender of last resort
+    - financial stability
+    - bailout
+    - resolution
+    - FDIC
+    - discount window
+
+  currency:
+    - dollar
+    - dollar index
+    - DXY
+    - currency crisis
+    - exchange rate
+    - foreign exchange
+    - reserve currency
+    - currency war
+    - depreciation
+    - appreciation
+    - peg
+    - devaluation
+
+  markets:
+    - stock market
+    - equity market
+    - S&P 500
+    - Nasdaq
+    - Dow Jones
+    - bear market
+    - bull market
+    - market correction
+    - market crash
+    - volatility
+    - VIX
+    - drawdown
+    - selloff
+    - rally
+    - melt-up
+    - market regime
+
+  macro_themes:
+    - soft landing
+    - hard landing
+    - no landing
+    - transitory
+    - wage-price spiral
+    - cost of living
+    - inflation expectations
+    - real wages
+    - productivity boom
+    - secular stagnation
+    - deglobalization
+    - reshoring
+    - friend-shoring
+
+  shocks_and_geopolitics_macro:
+    - sanctions
+    - trade war
+    - tariff
+    - supply chain
+    - supply shock
+    - energy crisis
+    - oil price shock
+    - commodity prices
+    - geopolitical risk
+    - debt ceiling
+    - sovereign debt
+    - default risk
+
+  policy_fiscal:
+    - fiscal policy
+    - government spending
+    - budget deficit
+    - debt-to-GDP
+    - tax cut
+    - tax hike
+    - stimulus
+    - fiscal cliff
+    - Treasury issuance
+
+  housing_and_consumer:
+    - housing market
+    - mortgage rates
+    - home prices
+    - housing affordability
+    - consumer spending
+    - consumer confidence
+    - consumer sentiment
+    - retail sales
+
+# -----------------------------------------------------------------------------
+# Explicit out-of-scope keywords — flag for filter exclusion if dominant
+# -----------------------------------------------------------------------------
+excluded_signals:
+  # Single-stock / micro topics
+  - earnings beat
+  - earnings miss
+  - quarterly results
+  - guidance raised
+  - price target
+  - buy rating
+  - analyst upgrade
+  - analyst downgrade
+  # Pure crypto speculation (NOT crypto-as-macro)
+  - meme coin
+  - altcoin
+  - shitcoin
+  - NFT
+  # Personal finance
+  - personal loan
+  - credit score
+  - retirement planning
+  - 401k tips

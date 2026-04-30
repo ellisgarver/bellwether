@@ -1,0 +1,135 @@
+"""Article embedding.
+
+Two-model setup, locked in config:
+  - PRIMARY: Qwen3-Embedding-0.6B (1024-d, instruction-aware, modern)
+  - COMPARATOR: all-mpnet-base-v2 (768-d, older cutoff, look-ahead clean)
+
+Production work uses ``primary``. The look-ahead sensitivity check
+(plan §7.2) re-runs validation on early anchor narratives with
+``comparator`` and compares results.
+
+The interface returns numpy arrays for downstream BERTopic compatibility.
+"""
+from __future__ import annotations
+
+from typing import Literal
+
+import numpy as np
+
+from mnd.utils.config import load_config
+from mnd.utils.logging import get_logger
+
+log = get_logger(__name__)
+
+ModelRole = Literal["primary", "comparator"]
+
+
+class Embedder:
+    """Unified embedder that loads either the primary or comparator model.
+
+    Use ``Embedder.from_config("primary")`` for normal pipeline runs and
+    ``Embedder.from_config("comparator")`` for the look-ahead sensitivity check.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        *,
+        revision: str = "main",
+        instruction_aware: bool = False,
+        instruction_prefix: str = "",
+        max_seq_len: int = 512,
+        device: str = "auto",
+        fp16: bool = True,
+        batch_size: int = 32,
+    ) -> None:
+        self.model_name = model_name
+        self.revision = revision
+        self.instruction_aware = instruction_aware
+        self.instruction_prefix = instruction_prefix
+        self.max_seq_len = max_seq_len
+        self.device = device
+        self.fp16 = fp16
+        self.batch_size = batch_size
+        self._model = None  # lazy
+
+    @classmethod
+    def from_config(cls, role: ModelRole = "primary") -> "Embedder":
+        cfg = load_config()
+        emb_cfg = cfg["embedding"][role]
+        compute_cfg = cfg.get("compute", {})
+        return cls(
+            model_name=emb_cfg["model"],
+            revision=emb_cfg.get("revision", "main"),
+            instruction_aware=emb_cfg.get("instruction_aware", False),
+            instruction_prefix=emb_cfg.get("instruction_prefix", ""),
+            max_seq_len=emb_cfg.get("max_seq_len", 512),
+            device=compute_cfg.get("embedding_device", "auto"),
+            fp16=compute_cfg.get("embedding_fp16", True),
+            batch_size=compute_cfg.get("embedding_batch_size", 32),
+        )
+
+    def _load(self) -> None:
+        if self._model is not None:
+            return
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:  # pragma: no cover
+            raise ImportError(
+                "sentence-transformers is required. `pip install sentence-transformers`."
+            ) from exc
+
+        log.info("Loading embedding model: %s @ %s", self.model_name, self.revision)
+        device = self._resolve_device()
+        kwargs: dict = {"revision": self.revision} if self.revision != "main" else {}
+        self._model = SentenceTransformer(
+            self.model_name,
+            device=device,
+            model_kwargs=kwargs,
+        )
+        if self.fp16 and device.startswith("cuda"):
+            self._model.half()
+
+    @staticmethod
+    def _resolve_device() -> str:
+        try:
+            import torch
+        except ImportError:  # pragma: no cover
+            return "cpu"
+        if torch.cuda.is_available():
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+
+    def encode(self, texts: list[str], *, show_progress: bool = True) -> np.ndarray:
+        """Encode a batch of texts to embeddings.
+
+        Applies the instruction prefix automatically when ``instruction_aware=True``.
+        Returns float32 array of shape (N, D).
+        """
+        self._load()
+        prepared = (
+            [self.instruction_prefix + t for t in texts] if self.instruction_aware else texts
+        )
+        embeddings = self._model.encode(
+            prepared,
+            batch_size=self.batch_size,
+            show_progress_bar=show_progress,
+            convert_to_numpy=True,
+            normalize_embeddings=True,  # cosine via inner product downstream
+        )
+        return embeddings.astype(np.float32, copy=False)
+
+
+def prepare_text_for_embedding(title: str, body: str, max_tokens: int = 600) -> str:
+    """Combine headline + truncated body. Token-counted truncation is
+    handled by the model's tokenizer; we use a conservative whitespace-token
+    approximation here so we don't have to load the tokenizer to chunk.
+    """
+    text = title.strip()
+    if body:
+        words = body.split()
+        approx_body_words = max(0, max_tokens - len(text.split()))
+        text = f"{text}. {' '.join(words[:approx_body_words])}"
+    return text
