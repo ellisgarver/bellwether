@@ -1,2 +1,5 @@
-"""clustering stage. See plan for module-level responsibilities. Implementation
-deferred to Claude Code session per docs/handoff_to_claude_code.md."""
+"""Clustering stage: BERTopic pipeline with hierarchical merging and stability eval."""
+
+from mnd.clustering.bertopic_pipeline import BertopicPipeline
+
+__all__ = ["BertopicPipeline"]

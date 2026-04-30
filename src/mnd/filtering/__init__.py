@@ -1,2 +1,6 @@
-"""filtering stage. See plan for module-level responsibilities. Implementation
-deferred to Claude Code session per docs/handoff_to_claude_code.md."""
+"""Filtering stage: topic filter and near-duplicate detection."""
+
+from mnd.filtering.dedup import Deduplicator
+from mnd.filtering.topic_filter import TopicFilter
+
+__all__ = ["TopicFilter", "Deduplicator"]

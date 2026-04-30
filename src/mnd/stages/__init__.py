@@ -1,2 +1,5 @@
-"""stages stage. See plan for module-level responsibilities. Implementation
-deferred to Claude Code session per docs/handoff_to_claude_code.md."""
+"""Stage classification: map fitted dynamics to lifecycle stage."""
+
+from mnd.stages.classify import StageClassification, classify_all, classify_stage
+
+__all__ = ["classify_stage", "classify_all", "StageClassification"]
