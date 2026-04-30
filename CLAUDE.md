@@ -35,7 +35,8 @@ first missing one.
 
 | Stage | CLI command | Checkpoint file |
 |---|---|---|
-| ingest | `run_pipeline.py ingest --start … --end …` | `data/raw/articles/*.jsonl` (any file present) |
+| ingest (wayback) | `run_pipeline.py ingest --sources wayback,fed --start … --end …` | `data/raw/articles/wayback_*.jsonl` |
+| ingest (fed) | _(runs as part of wayback,fed above)_ | `data/raw/articles/fed_*.jsonl` |
 | filter | `run_pipeline.py filter` | `data/processed/articles.parquet` |
 | embed | `run_pipeline.py embed --role primary` | `data/processed/embeddings.npy` |
 | cluster | `run_pipeline.py cluster` | `data/processed/clusters.parquet` |
@@ -81,7 +82,7 @@ re-run them (they are fast relative to embed/cluster).
 pip install -r requirements.txt
 
 # Six-month pilot window
-python scripts/run_pipeline.py ingest --start 2023-09-01 --end 2024-02-29 --sources gdelt,fed
+python scripts/run_pipeline.py ingest --start 2023-09-01 --end 2024-02-29 --sources wayback,fed
 python scripts/run_pipeline.py filter
 python scripts/run_pipeline.py embed --role primary
 python scripts/run_pipeline.py cluster
