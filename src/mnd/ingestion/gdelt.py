@@ -50,9 +50,10 @@ class GdeltIngestor(Ingestor):
 
     source_id = "gdelt"
 
-    def __init__(self, max_per_query: int = 250, request_pause_seconds: float = 1.0) -> None:
+    def __init__(self, max_per_query: int = 250, request_pause_seconds: float = 6.0, batch_days: int = 7) -> None:
         self.max_per_query = max_per_query
-        self.request_pause_seconds = request_pause_seconds
+        self.request_pause_seconds = request_pause_seconds  # GDELT rate-limits to 1 req/5s
+        self.batch_days = batch_days  # query in weekly chunks to stay within rate limit
         self._whitelist = _build_whitelist_index()
         self._whitelist_domains = sorted(self._whitelist.keys())
 
@@ -71,38 +72,44 @@ class GdeltIngestor(Ingestor):
                 "gdeltdoc is required. Install via `pip install gdeltdoc`."
             ) from exc
 
+        import time
+
         gd = GdeltDoc()
-        # Single near-keyword to scope GDELT (broad). Domain filtering happens here.
-        filters = Filters(
-            keyword="economy OR inflation OR recession OR markets OR Fed OR monetary",
-            country="US",
-            language="english",
-        )
+        # Broad keyword scopes GDELT to economic coverage; domain filter keeps only whitelist.
+        _KEYWORD = "economy OR inflation OR recession OR markets OR Fed OR monetary"
 
         current = start
+        batch_num = 0
         while current <= end:
-            day_str = current.strftime("%Y%m%d")
-            # GDELT requires a window — use a single-day window.
+            batch_end = min(current + timedelta(days=self.batch_days - 1), end)
+            window_label = f"{current} → {batch_end}"
+
+            # Honour GDELT rate limit: sleep before every request except the first
+            if batch_num > 0:
+                time.sleep(self.request_pause_seconds)
+            batch_num += 1
+
             try:
                 articles_df = gd.article_search(
                     filters=Filters(
                         start_date=current.isoformat(),
-                        end_date=(current + timedelta(days=1)).isoformat(),
-                        keyword=filters.keyword,
-                        country=filters.country,
-                        language=filters.language,
+                        end_date=batch_end.isoformat(),
+                        keyword=_KEYWORD,
+                        country="US",
+                        language="english",
                     )
                 )
-            except Exception as exc:  # pragma: no cover
-                log.warning("GDELT query failed for %s: %s", day_str, exc)
-                current += timedelta(days=1)
+            except Exception as exc:
+                log.warning("GDELT query failed for %s: %s", window_label, exc)
+                current = batch_end + timedelta(days=1)
                 continue
 
             if articles_df is None or len(articles_df) == 0:
-                log.debug("GDELT returned 0 articles for %s", day_str)
-                current += timedelta(days=1)
+                log.debug("GDELT returned 0 articles for %s", window_label)
+                current = batch_end + timedelta(days=1)
                 continue
 
+            n_yielded = 0
             for _, row in articles_df.iterrows():
                 url = str(row.get("url", "")).strip()
                 if not url:
@@ -130,5 +137,7 @@ class GdeltIngestor(Ingestor):
                     word_count=0,
                     raw_metadata={"gdelt_domain": domain, "gdelt_seendate": str(seen_at)},
                 )
+                n_yielded += 1
 
-            current += timedelta(days=1)
+            log.info("GDELT %s: %d whitelisted articles", window_label, n_yielded)
+            current = batch_end + timedelta(days=1)

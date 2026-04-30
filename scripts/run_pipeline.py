@@ -61,15 +61,31 @@ def cli(ctx: click.Context) -> None:
     help="Comma-separated source IDs: gdelt, fed, paywalled. Use 'paywalled' only "
          "when PROQUEST_API_TOKEN is set.",
 )
+@click.option(
+    "--fetch-bodies/--no-fetch-bodies", default=True, show_default=True,
+    help="After GDELT discovery, fetch full text for free outlets via trafilatura.",
+)
+@click.option(
+    "--fetch-workers", default=4, show_default=True, type=int,
+    help="Thread pool size for trafilatura fetching.",
+)
 @click.pass_context
-def ingest(ctx: click.Context, start: str, end: str, sources: str) -> None:
-    """Fetch raw articles from configured ingestion sources."""
+def ingest(
+    ctx: click.Context, start: str, end: str, sources: str,
+    fetch_bodies: bool, fetch_workers: int,
+) -> None:
+    """Fetch raw articles from configured ingestion sources.
+
+    GDELT discovers URLs; trafilatura fills in the body for free outlets.
+    Use --no-fetch-bodies to skip the trafilatura step (metadata-only mode).
+    """
     from datetime import date as date_t
 
     from mnd.ingestion import (
         FederalReserveIngestor,
         GdeltIngestor,
         PaywalledSourceIngestor,
+        fetch_free_outlet_bodies,
     )
 
     cfg = ctx.obj["cfg"]
@@ -95,6 +111,17 @@ def ingest(ctx: click.Context, start: str, end: str, sources: str) -> None:
         try:
             ingestor = ingestor_map[name]()
             articles = list(ingestor.fetch(start_d, end_d))
+
+            # For GDELT: optionally enrich metadata-only records with full text
+            if name == "gdelt" and fetch_bodies and articles:
+                log.info("  Fetching full text for %d GDELT URLs via trafilatura …", len(articles))
+                articles = list(fetch_free_outlet_bodies(
+                    articles,
+                    min_words=200,
+                    max_workers=fetch_workers,
+                    inter_request_delay=1.0,
+                ))
+
             ingestor.write_jsonl(iter(articles), out_path)
             log.info("  Wrote %d articles", len(articles))
         except NotImplementedError as exc:

@@ -56,9 +56,9 @@ class FederalReserveIngestor(Ingestor):
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         yield from self._fetch_fomc_statements(start, end)
+        yield from self._fetch_fomc_minutes(start, end)
         yield from self._fetch_speeches(start, end)
-        # Minutes, Beige Book, MPRs follow the same pattern; implementations
-        # to be filled in during Phase 2 against actual Fed page layouts.
+        yield from self._fetch_beige_books(start, end)
 
     def _fetch_fomc_statements(self, start: date, end: date) -> Iterator[Article]:
         """Walk the FOMC calendars page; emit one Article per statement."""
@@ -110,6 +110,101 @@ class FederalReserveIngestor(Ingestor):
                 retrieval="fed_site",
                 word_count=len(body.split()),
                 raw_metadata={"document_type": "fomc_statement"},
+            )
+
+    def _fetch_fomc_minutes(self, start: date, end: date) -> Iterator[Article]:
+        """Fetch FOMC meeting minutes linked from the calendars page."""
+        try:
+            resp = _get(FOMC_CALENDARS_URL)
+        except Exception as exc:
+            log.error("Failed to fetch FOMC calendar for minutes: %s", exc)
+            return
+        soup = BeautifulSoup(resp.text, "lxml")
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            if "fomcminutes" not in href:
+                continue
+            try:
+                stem = href.rsplit("/", 1)[-1]
+                date_str = stem.replace("fomcminutes", "")[:8]
+                meeting_date = datetime.strptime(date_str, "%Y%m%d").date()
+            except Exception:
+                continue
+            if meeting_date < start or meeting_date > end:
+                continue
+            full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
+            try:
+                page = _get(full_url)
+            except Exception as exc:
+                log.warning("Failed to fetch FOMC minutes %s: %s", full_url, exc)
+                continue
+            body = _extract_text(page.text)
+            if not body:
+                continue
+            yield Article(
+                article_id=_stable_article_id(self.source_id, full_url),
+                source_id="federalreserve",
+                url=full_url,
+                published_at=meeting_date.isoformat() + "T18:00:00Z",
+                retrieved_at=_now_utc_iso(),
+                title=f"FOMC Minutes — {meeting_date.isoformat()}",
+                body=body,
+                author="FOMC",
+                section="fomc_minutes",
+                language="en",
+                tier=3,
+                access="free",
+                retrieval="fed_site",
+                word_count=len(body.split()),
+                raw_metadata={"document_type": "fomc_minutes"},
+            )
+
+    def _fetch_beige_books(self, start: date, end: date) -> Iterator[Article]:
+        """Fetch Beige Book reports from the Fed's beige book index page."""
+        index_url = "https://www.federalreserve.gov/monetarypolicy/beige-book-default.htm"
+        try:
+            resp = _get(index_url)
+        except Exception as exc:
+            log.error("Failed to fetch Beige Book index: %s", exc)
+            return
+        soup = BeautifulSoup(resp.text, "lxml")
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            if "beigebook" not in href.lower():
+                continue
+            # URL pattern: /monetarypolicy/beigebook202309.htm or beigebook/2023/...
+            try:
+                stem = href.rsplit("/", 1)[-1].replace("beigebook", "").replace(".htm", "")
+                pub_date = datetime.strptime(stem[:6], "%Y%m").date()
+            except Exception:
+                continue
+            if pub_date < start or pub_date > end:
+                continue
+            full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
+            try:
+                page = _get(full_url)
+            except Exception as exc:
+                log.warning("Failed to fetch Beige Book %s: %s", full_url, exc)
+                continue
+            body = _extract_text(page.text)
+            if not body or len(body.split()) < 200:
+                continue
+            yield Article(
+                article_id=_stable_article_id(self.source_id, full_url),
+                source_id="federalreserve",
+                url=full_url,
+                published_at=pub_date.isoformat() + "T14:00:00Z",
+                retrieved_at=_now_utc_iso(),
+                title=f"Beige Book — {pub_date.strftime('%B %Y')}",
+                body=body,
+                author="Federal Reserve",
+                section="beige_book",
+                language="en",
+                tier=3,
+                access="free",
+                retrieval="fed_site",
+                word_count=len(body.split()),
+                raw_metadata={"document_type": "beige_book"},
             )
 
     def _fetch_speeches(self, start: date, end: date) -> Iterator[Article]:
