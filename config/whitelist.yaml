@@ -51,6 +51,9 @@ tier_1_core_financial_press:
     domains: ["reuters.com"]
     access: mixed
     retrieval: factiva
+    cdx_url_patterns:
+      - "www.reuters.com/markets/"
+      - "www.reuters.com/business/"
     notes: "Heavy real-time wire content; filter aggressively to analytical pieces."
 
   - id: nyt_business
@@ -79,6 +82,8 @@ tier_1_core_financial_press:
     domains: ["marketwatch.com"]
     access: free
     retrieval: gdelt_url
+    cdx_url_patterns:
+      - "www.marketwatch.com/story/"
     notes: "Mostly free; analytical columns only — filter out tickers/quotes pages."
 
   - id: cnbc
@@ -86,6 +91,9 @@ tier_1_core_financial_press:
     domains: ["cnbc.com"]
     access: free
     retrieval: gdelt_url
+    cdx_url_patterns:
+      - "www.cnbc.com/2023/"
+      - "www.cnbc.com/2024/"
     notes: "Free but noisy; require keyword match and length>500 words."
 
   - id: foreign_affairs
@@ -101,6 +109,10 @@ tier_2_adjacent_analytical:
     domains: ["project-syndicate.org"]
     access: free
     retrieval: gdelt_url
+    cdx_url_patterns:
+      - "www.project-syndicate.org/commentary/"
+      - "www.project-syndicate.org/onpoint/"
+      - "www.project-syndicate.org/bigpicture/"
     notes: "Op-eds from prominent economists; high signal."
 
   - id: voxeu
@@ -108,6 +120,9 @@ tier_2_adjacent_analytical:
     domains: ["cepr.org", "voxeu.org"]
     access: free
     retrieval: gdelt_url
+    cdx_url_patterns:
+      - "cepr.org/voxeu/columns/"
+      - "voxeu.org/article/"
 
   - id: bloomberg_opinion
     name: "Bloomberg Opinion"
@@ -121,6 +136,9 @@ tier_2_adjacent_analytical:
     domains: ["ftalphaville.ft.com"]
     access: free
     retrieval: gdelt_url
+    cdx_url_patterns:
+      - "ftalphaville.ft.com/2023/"
+      - "ftalphaville.ft.com/2024/"
 
   - id: brookings_econ
     name: "Brookings Economic Studies"
@@ -128,12 +146,20 @@ tier_2_adjacent_analytical:
     section_filter: ["economy", "research/economic-studies"]
     access: free
     retrieval: gdelt_url
+    cdx_url_patterns:
+      - "www.brookings.edu/articles/"
+      - "www.brookings.edu/research/"
+      - "www.brookings.edu/blog/"
 
   - id: peterson
     name: "Peterson Institute for International Economics"
     domains: ["piie.com"]
     access: free
     retrieval: gdelt_url
+    cdx_url_patterns:
+      - "www.piie.com/blogs/"
+      - "www.piie.com/research/"
+      - "www.piie.com/publications/"
 
   - id: cfr
     name: "Council on Foreign Relations"
@@ -141,6 +167,11 @@ tier_2_adjacent_analytical:
     section_filter: ["world", "geoeconomics"]
     access: free
     retrieval: gdelt_url
+    cdx_url_patterns:
+      - "www.cfr.org/article/"
+      - "www.cfr.org/backgrounder/"
+      - "www.cfr.org/in-brief/"
+      - "www.cfr.org/report/"
     notes: "Filter to economic/financial pieces; foreign policy generalist content out of scope."
 
   - id: foreign_policy
@@ -162,6 +193,8 @@ tier_2_adjacent_analytical:
     domains: ["finance.yahoo.com"]
     access: free
     retrieval: gdelt_url
+    cdx_url_patterns:
+      - "finance.yahoo.com/news/"
     notes: "Heavy filter required — most content is ticker pages, not articles."
 
   - id: forbes_econ
@@ -170,6 +203,8 @@ tier_2_adjacent_analytical:
     section_filter: ["money", "markets", "economy"]
     access: free
     retrieval: gdelt_url
+    cdx_url_patterns:
+      - "www.forbes.com/sites/"
     notes: "Personal-finance content noisy; require macro keyword match."
 
   - id: business_insider_econ
@@ -178,6 +213,11 @@ tier_2_adjacent_analytical:
     section_filter: ["markets", "economy"]
     access: mixed
     retrieval: gdelt_url
+    cdx_url_patterns:
+      - "www.businessinsider.com/federal-reserve"
+      - "www.businessinsider.com/inflation"
+      - "www.businessinsider.com/economy"
+      - "www.businessinsider.com/recession"
 
   - id: axios_macro
     name: "Axios Macro"
@@ -185,6 +225,9 @@ tier_2_adjacent_analytical:
     section_filter: ["business", "economy"]
     access: free
     retrieval: gdelt_url
+    cdx_url_patterns:
+      - "www.axios.com/2023/"
+      - "www.axios.com/2024/"
 
   - id: politico_econ
     name: "Politico — Economy"
@@ -192,6 +235,8 @@ tier_2_adjacent_analytical:
     section_filter: ["economy", "finance"]
     access: free
     retrieval: gdelt_url
+    cdx_url_patterns:
+      - "www.politico.com/news/"
 
 tier_3_institutional:
   - id: federalreserve
@@ -206,18 +251,29 @@ tier_3_institutional:
     domains: ["newyorkfed.org"]
     access: free
     retrieval: fed_site
+    cdx_url_patterns:
+      - "www.newyorkfed.org/research/staff_reports/"
+      - "www.newyorkfed.org/research/epr/"
+      - "www.newyorkfed.org/medialibrary/media/research/"
 
   - id: frb_sf
     name: "Federal Reserve Bank of San Francisco"
     domains: ["frbsf.org"]
     access: free
     retrieval: fed_site
+    cdx_url_patterns:
+      - "www.frbsf.org/research/publications/"
+      - "www.frbsf.org/economic-research/"
 
   - id: imf
     name: "International Monetary Fund"
     domains: ["imf.org"]
     access: free
     retrieval: institutional_site
+    cdx_url_patterns:
+      - "www.imf.org/en/News/Articles/"
+      - "www.imf.org/en/Publications/WP/"
+      - "www.imf.org/en/Blogs/"
     notes: "WPs + Article IVs + WEO/GFSR; filter to publications, not press releases."
 
   - id: bis
@@ -225,6 +281,10 @@ tier_3_institutional:
     domains: ["bis.org"]
     access: free
     retrieval: institutional_site
+    cdx_url_patterns:
+      - "www.bis.org/speeches/"
+      - "www.bis.org/review/"
+      - "www.bis.org/publ/"
     notes: "Working Papers + Quarterly Reviews."
 
   - id: oecd
@@ -233,12 +293,17 @@ tier_3_institutional:
     section_filter: ["economy", "finance"]
     access: free
     retrieval: institutional_site
+    cdx_url_patterns:
+      - "www.oecd.org/en/publications/"
+      - "www.oecd.org/economic-outlook/"
 
   - id: nber
     name: "NBER Working Papers"
     domains: ["nber.org"]
     access: free
     retrieval: institutional_site
+    cdx_url_patterns:
+      - "www.nber.org/papers/"
     notes: "Macro/finance categories only; filter to relevant JEL codes."
 
   - id: ssrn_finance
@@ -246,19 +311,24 @@ tier_3_institutional:
     domains: ["ssrn.com"]
     access: free
     retrieval: institutional_site
-    notes: "Free abstracts always; many full PDFs free in finance."
+    notes: "Free abstracts always; many full PDFs free in finance. Excluded from Wayback — article URLs always contain query strings."
 
   - id: cea
     name: "Council of Economic Advisers"
     domains: ["whitehouse.gov/cea", "cea.gov"]
     access: free
     retrieval: gov_site
+    cdx_url_patterns:
+      - "www.whitehouse.gov/cea/"
 
   - id: bea
     name: "Bureau of Economic Analysis"
     domains: ["bea.gov"]
     access: free
     retrieval: gov_site
+    cdx_url_patterns:
+      - "www.bea.gov/news/"
+      - "www.bea.gov/research/"
 
 # -----------------------------------------------------------------------------
 # Explicit OUT-OF-SCOPE list — outlets that GDELT may surface but we exclude.

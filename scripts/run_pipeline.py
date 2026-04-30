@@ -11,7 +11,7 @@ Dispatches the six Phase 1 pipeline stages:
 All paths default to config.paths.*. Override with --input / --output flags.
 
 Example Phase 1 pilot run:
-  python scripts/run_pipeline.py ingest --start 2023-09-01 --end 2024-02-29
+  python scripts/run_pipeline.py ingest --start 2023-09-01 --end 2024-02-29 --sources wayback,fed
   python scripts/run_pipeline.py filter
   python scripts/run_pipeline.py embed --role primary
   python scripts/run_pipeline.py cluster
@@ -56,10 +56,12 @@ def cli(ctx: click.Context) -> None:
 @click.option("--start", required=True, help="Start date YYYY-MM-DD")
 @click.option("--end", required=True, help="End date YYYY-MM-DD")
 @click.option(
-    "--sources", default="gdelt,fed",
+    "--sources", default="wayback,fed",
     show_default=True,
-    help="Comma-separated source IDs: gdelt, fed, paywalled. Use 'paywalled' only "
-         "when PROQUEST_API_TOKEN is set.",
+    help="Comma-separated source IDs: wayback, gdelt, fed, paywalled. "
+         "'wayback' is the recommended historical discovery layer (replaces gdelt for bulk runs). "
+         "'gdelt' may be used for near-real-time discovery. "
+         "Use 'paywalled' only when PROQUEST_API_TOKEN is set.",
 )
 @click.option(
     "--fetch-bodies/--no-fetch-bodies", default=True, show_default=True,
@@ -85,6 +87,7 @@ def ingest(
         FederalReserveIngestor,
         GdeltIngestor,
         PaywalledSourceIngestor,
+        WaybackIngestor,
         fetch_free_outlet_bodies,
     )
 
@@ -98,6 +101,7 @@ def ingest(
 
     ingestor_map = {
         "gdelt": GdeltIngestor,
+        "wayback": WaybackIngestor,
         "fed": FederalReserveIngestor,
         "paywalled": PaywalledSourceIngestor,
     }

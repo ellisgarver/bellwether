@@ -164,6 +164,77 @@ acknowledgment that the analytical-source layer is reduced.
 
 ---
 
+## ADR-005: Wayback Machine CDX replaces GDELT as historical discovery layer
+
+- **Status**: Accepted
+- **Date**: 2026-04-30
+
+### Context
+
+ADR-004 designated GDELT 2.0 as the discovery layer for free-outlet URLs.
+During Phase 1 piloting, GDELT's free API applied IP-level rate throttling
+that rejected the majority of requests regardless of per-request delay.
+With 26 weekly batches over a 6-month pilot window (September 2023 – February
+2024), 18 of 26 batches failed with the documented error "Please limit
+requests to one every 5 seconds." Increasing the inter-request delay from
+1 s (original) to 6 s had no effect, confirming the limit is not per-request
+timing but a broader IP-level quota. The result was 0 GDELT-discovered articles.
+
+GDELT's full-text search endpoint (`api.gdeltproject.org/api/v2/doc`) is a
+separate API with potentially different limits, but its reliability for bulk
+historical queries from a single academic IP is untested and not documented.
+
+The Internet Archive Wayback Machine CDX API offers an alternative with
+different properties:
+- No authentication required, no hard documented rate limit on CDX search.
+- Coverage of all major outlets back to mid-2000s.
+- One CDX search call per domain yields many article URLs, so the
+  request count scales with the number of outlets (~20), not with
+  calendar weeks (~26–182).
+- The `if_` endpoint modifier returns raw archived HTML without the
+  Wayback toolbar, which trafilatura can extract cleanly.
+
+### Decision
+
+For **historical bulk ingestion** (date ranges > 7 days), replace GDELT with
+the Wayback Machine CDX as the free-outlet discovery layer. The new
+`WaybackIngestor` class (`src/mnd/ingestion/wayback.py`):
+
+1. Loads all free/mixed-access outlets from `config/whitelist.yaml`.
+2. For each domain, issues one CDX API request covering the full date window.
+3. Filters CDX results to article-like URLs (rejects tag/category/search pages).
+4. Fetches each archived page via `https://web.archive.org/web/{ts}if_/{url}`.
+5. Extracts text + metadata with trafilatura; drops documents < 200 words.
+
+The default pilot command is now `--sources wayback,fed`.
+
+GDELT (`src/mnd/ingestion/gdelt.py`) is **retained** for two use cases:
+- Near-real-time discovery (last 7 days), where request volume is low
+  enough that rate limits are unlikely to trigger.
+- Potential future integration with GDELT's GFT (full-text) endpoint if
+  that API proves reliable.
+
+### Consequences
+
+**Positive**:
+- Bulk historical ingestion is now reliable and reproducible regardless of
+  network conditions or IP reputation.
+- Coverage extends to the full whitelist of ~20 free outlets per run.
+- No new API keys or paid dependencies.
+
+**Negative / risks**:
+- Wayback coverage is retrospective: articles must have been crawled by the
+  Internet Archive. Very recent content (< 24–48 h) may not be archived yet.
+  This does not affect Phase 1 pilot (6-month historical window) but will
+  matter for Phase 6 (weekly live updates), which should use GDELT for
+  recent discovery.
+- The `if_` endpoint has been stable for years but is not formally part of
+  the CDX API contract. Monitor for breakage on future runs.
+- Wayback page fetches are slower than GDELT URL discovery (~1.5 s/page);
+  a 150-article-per-domain cap is in place to bound total runtime.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```
