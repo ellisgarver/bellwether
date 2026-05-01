@@ -226,12 +226,23 @@ def embed(
 @click.option("--articles", default=None, help="Processed articles parquet path")
 @click.option("--embeddings", default=None, help="Embeddings .npy path")
 @click.option("--output", default=None, help="Output clusters parquet path")
+@click.option(
+    "--min-cluster-size",
+    default=None,
+    type=int,
+    help=(
+        "Override config hdbscan.min_cluster_size for this run only. "
+        "PILOT USE ONLY — do not use for Phase 2+ runs. "
+        "Production value (20) stays locked in config.yaml."
+    ),
+)
 @click.pass_context
 def cluster(
     ctx: click.Context,
     articles: str | None,
     embeddings: str | None,
     output: str | None,
+    min_cluster_size: int | None,
 ) -> None:
     """Run BERTopic hierarchical clustering."""
     from mnd.clustering import BertopicPipeline
@@ -246,7 +257,20 @@ def cluster(
     emb = np.load(str(emb_path))
     docs = (df["title"].fillna("") + " " + df["body"].fillna("")).tolist()
 
-    pipeline = BertopicPipeline.from_config()
+    if min_cluster_size is not None:
+        locked_value = cfg["clustering"]["hdbscan"]["min_cluster_size"]
+        log.warning(
+            "PILOT OVERRIDE: hdbscan.min_cluster_size set to %d "
+            "(config.yaml production value: %d). "
+            "This in-memory override does not modify config.yaml. "
+            "Restore to %d for Phase 2 full-corpus runs.",
+            min_cluster_size,
+            locked_value,
+            locked_value,
+        )
+        cfg["clustering"]["hdbscan"]["min_cluster_size"] = min_cluster_size
+
+    pipeline = BertopicPipeline(cfg)
     results = pipeline.fit_transform(docs, emb)
 
     df["topic_fine"] = results["hierarchical"]["fine"]
@@ -270,9 +294,21 @@ def cluster(
 @cli.command()
 @click.option("--articles", default=None)
 @click.option("--embeddings", default=None)
+@click.option(
+    "--min-cluster-size",
+    default=None,
+    type=int,
+    help=(
+        "Override config hdbscan.min_cluster_size for this run only. "
+        "PILOT USE ONLY — production value stays locked in config.yaml."
+    ),
+)
 @click.pass_context
 def stability(
-    ctx: click.Context, articles: str | None, embeddings: str | None
+    ctx: click.Context,
+    articles: str | None,
+    embeddings: str | None,
+    min_cluster_size: int | None,
 ) -> None:
     """Bootstrap stability evaluation — kill criterion 1 (NMI ≥ 0.40)."""
     from mnd.clustering import BertopicPipeline
@@ -286,15 +322,35 @@ def stability(
     emb = np.load(str(emb_path))
     docs = (df["title"].fillna("") + " " + df["body"].fillna("")).tolist()
 
-    pipeline = BertopicPipeline.from_config()
+    if min_cluster_size is not None:
+        locked_value = cfg["clustering"]["hdbscan"]["min_cluster_size"]
+        log.warning(
+            "PILOT OVERRIDE: hdbscan.min_cluster_size set to %d "
+            "(config.yaml production value: %d). "
+            "This in-memory override does not modify config.yaml. "
+            "Restore to %d for Phase 2 full-corpus runs.",
+            min_cluster_size,
+            locked_value,
+            locked_value,
+        )
+        cfg["clustering"]["hdbscan"]["min_cluster_size"] = min_cluster_size
+
+    pipeline = BertopicPipeline(cfg)
     result = pipeline.evaluate_stability(docs, emb)
+
+    all_nmi = result["all_nmi"]
+    median_nmi = float(np.median(all_nmi)) if all_nmi else 0.0
 
     click.echo("\nBootstrap Stability Results")
     click.echo(f"  Replicates : {result['n_replicates']}")
     click.echo(f"  Mean NMI   : {result['mean_nmi']:.3f} ± {result['std_nmi']:.3f}")
+    click.echo(f"  Median NMI : {median_nmi:.3f}")
     click.echo(f"  Mean ARI   : {result['mean_ari']:.3f} ± {result['std_ari']:.3f}")
     click.echo(f"  Threshold  : NMI ≥ {result['min_nmi_threshold']:.2f}")
     click.echo(f"  Status     : {'PASS' if result['passed'] else 'FAIL — kill criterion 1 triggered'}")
+    click.echo("\n  Per-replicate NMI scores:")
+    for i, nmi in enumerate(all_nmi, 1):
+        click.echo(f"    [{i:02d}] {nmi:.3f}")
 
     if not result["passed"]:
         sys.exit(1)
@@ -310,9 +366,20 @@ def stability(
     help="Comma-separated anchor IDs or 'all'",
 )
 @click.option("--clusters", default=None, help="Clusters parquet path")
+@click.option(
+    "--required",
+    default=None,
+    type=int,
+    help=(
+        "Override the minimum number of anchors that must be recovered for PASS. "
+        "Defaults to config.validation.required_anchors_recovered (7). "
+        "Use for pilot runs where fewer than 10 anchors are tested, or where "
+        "some anchors are structurally absent from the corpus window."
+    ),
+)
 @click.pass_context
 def validate(
-    ctx: click.Context, anchors: str, clusters: str | None
+    ctx: click.Context, anchors: str, clusters: str | None, required: int | None
 ) -> None:
     """Anchor recovery validation — kill criterion 2 (≥7/10 recovered)."""
     from mnd.validation import validate_anchor_recovery
@@ -328,7 +395,18 @@ def validate(
 
     results = validate_anchor_recovery(df, anchor_ids=anchor_ids, cfg=cfg)
     n_recovered = sum(1 for r in results if r["recovered"])
-    required = cfg["validation"]["required_anchors_recovered"]
+
+    config_required = cfg["validation"]["required_anchors_recovered"]
+    if required is not None and required != config_required:
+        log.warning(
+            "PILOT OVERRIDE: --required set to %d (config.yaml production value: %d). "
+            "Use only when testing a subset of anchors whose corpus window excludes "
+            "some reference events. Full 10-anchor gate (required=%d) applies in Phase 4.",
+            required,
+            config_required,
+            config_required,
+        )
+    effective_required = required if required is not None else config_required
 
     click.echo("\nAnchor Recovery Results")
     for r in results:
@@ -336,8 +414,9 @@ def validate(
         click.echo(f"  {mark} {r['anchor_id']}: {r['note']}")
 
     click.echo(f"\n  Recovered : {n_recovered}/{len(results)}")
-    click.echo(f"  Required  : {required}")
-    passed = n_recovered >= required
+    click.echo(f"  Required  : {effective_required}" +
+               (f"  (config default: {config_required})" if required is not None else ""))
+    passed = n_recovered >= effective_required
     click.echo(f"  Status    : {'PASS' if passed else 'FAIL — kill criterion 2 triggered'}")
 
     if not passed:

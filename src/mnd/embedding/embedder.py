@@ -87,6 +87,7 @@ class Embedder:
             device=device,
             model_kwargs=kwargs,
         )
+        self._model.max_seq_length = self.max_seq_len
         if self.fp16 and device.startswith("cuda"):
             self._model.half()
 

@@ -235,6 +235,65 @@ GDELT (`src/mnd/ingestion/gdelt.py`) is **retained** for two use cases:
 
 ---
 
+## ADR-006: Reduce `max_seq_len` from 32768 to 512 for local MPS runs
+
+- **Status**: Accepted
+- **Date**: 2026-04-30
+
+### Context
+
+`Qwen/Qwen3-Embedding-0.6B` (ADR-001) supports sequences up to 32768 tokens.
+When `sentence-transformers` batches documents for encoding, it pads each batch
+to the model's `max_seq_length` before the forward pass. On Apple Silicon (MPS),
+the SDPA attention kernel materialises the full causal mask of shape
+`[batch_size × num_heads × seq_len × seq_len]`. With the model's default
+`max_seq_length = 32768` and `embedding_batch_size = 32`, this allocates
+approximately 29 GB per batch — well beyond the unified memory available on a
+MacBook Air M-series. Reducing to `max_seq_len = 2048` still required 8 GB per
+batch (also too large). At 512 tokens the allocation is ≈ 536 MB, which fits
+comfortably alongside model weights (~2.4 GB fp32 / ~1.2 GB fp16).
+
+The article-preprocessing function `prepare_text_for_embedding` already caps
+body text to 600 whitespace-words (≈780 BPE tokens at 1.3 tokens/word), so the
+effective content loss from truncating at 512 BPE tokens is the final ≈270 tokens
+of longer articles. Headline and lead paragraph — the highest-signal text — are
+preserved.
+
+A second fix was required: `embedder.py` was not calling
+`model.max_seq_length = self.max_seq_len` after loading the `SentenceTransformer`,
+so the model always used its built-in default (32768) regardless of the config
+value. This is corrected in the same commit.
+
+### Decision
+
+Set `embedding.primary.max_seq_len: 512` in `config.yaml` for Phase 1 local
+runs (Apple Silicon). This value must be restored to `32768` before Phase 2 full
+corpus embedding on UChicago RCC (CUDA), where memory is not a constraint.
+A comment in `config.yaml` flags the restore point.
+
+Separately, always invoke the pipeline with `USE_TF=0` (set in `.env` or shell)
+to prevent `sentence-transformers` from loading TensorFlow's ≈691 MB dylibs on
+import, which caused the process to stall for 15+ minutes during local testing.
+`USE_TF=0` is added to `.env.example` as a recommended variable.
+
+### Consequences
+
+**Positive**:
+- Phase 1 pilot runs on MacBook Air without out-of-memory crashes.
+- No loss of headline or lead-paragraph content; truncation affects only the
+  tail of longer articles.
+
+**Negative / risks**:
+- Articles longer than ≈400 words of body text are silently truncated at 512
+  tokens. This is acceptable for the pilot corpus (148 articles) but would
+  affect information density on longer Fed minutes and academic papers in the
+  full corpus. **Must restore to 32768 before Phase 2.**
+- The `USE_TF=0` workaround is environment-level, not enforced by the code.
+  If a developer forgets to set it, the first run will stall on TF import.
+  The comment in `.env.example` is the only guard.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

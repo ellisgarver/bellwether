@@ -39,7 +39,7 @@ embedding:
     model: "Qwen/Qwen3-Embedding-0.6B"
     revision: "main"               # Pin to specific commit hash before Phase 2
     dimensions: 1024
-    max_seq_len: 32768
+    max_seq_len: 512               # LOCAL ONLY (MPS/MacBook Air). RESTORE TO 32768 before Phase 2 RCC run — see ADR-006.
     instruction_aware: true
     instruction_prefix: "Instruct: Represent this financial article for narrative clustering\nQuery: "
     # Set to Qwen3-Embedding-4B if RCC capacity allows; identical interface
