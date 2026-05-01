@@ -24,37 +24,60 @@
 
 schema_version: "1.0.0"
 
+# -----------------------------------------------------------------------------
+# Corpus design (Phase 2 decision, 2026-05-01):
+#
+# Tight corpus for temporal consistency:
+#   Tier 1 ProQuest (TDM Studio): WSJ, NYT (business), Economist
+#   Tier 2 Wayback/free:          Reuters, Bloomberg (not in ProQuest GN)
+#   Tier 3 Institutional:         Fed, IMF, BIS, NBER, etc. (unchanged)
+#
+# Dropped from primary analysis (moved to supplementary_outlets below):
+#   Barron's, MarketWatch, Foreign Affairs, Project Syndicate
+#   Reason: ProQuest GN temporal coverage gaps; would bias cross-year comparisons.
+#
+# FT retained but flagged: TDM Studio dataset does not include FT.
+# FT kept as factiva for now; revisit if UChi library access confirmed.
+# -----------------------------------------------------------------------------
+
 tier_1_core_financial_press:
   - id: wsj
     name: "Wall Street Journal"
     domains: ["wsj.com"]
     access: paywalled
-    retrieval: factiva
-    notes: "Anchor outlet. Factiva license covers historical full-text."
+    retrieval: proquest
+    notes: "Anchor outlet. In TDM Studio 'macro narratives dataset' (2010-present)."
 
   - id: ft
     name: "Financial Times (US edition)"
     domains: ["ft.com"]
     access: paywalled
     retrieval: factiva
-    notes: "Use US edition feed; Factiva covers historical."
+    notes: "Not in TDM Studio dataset; Factiva access pending confirmation. Kept in corpus; review in Phase 3."
 
   - id: bloomberg
     name: "Bloomberg News"
     domains: ["bloomberg.com"]
-    access: paywalled
-    retrieval: factiva
-    notes: "Opinion pieces tagged separately; treat both as in-scope but flag in metadata."
+    access: mixed
+    retrieval: wayback
+    cdx_url_patterns:
+      - "www.bloomberg.com/news/articles/"
+      - "www.bloomberg.com/news/features/"
+      - "www.bloomberg.com/news/newsletters/"
+      - "www.bloomberg.com/markets/"
+    notes: "Not in ProQuest Global Newsstream; Tier 2 wire — use Wayback CDX for 2010-present historical bulk, NewsAPI for Phase 6 live updates."
 
   - id: reuters
     name: "Reuters"
     domains: ["reuters.com"]
     access: mixed
-    retrieval: factiva
+    retrieval: wayback
     cdx_url_patterns:
       - "www.reuters.com/markets/"
       - "www.reuters.com/business/"
-    notes: "Heavy real-time wire content; filter aggressively to analytical pieces."
+      - "www.reuters.com/world/us/"
+      - "www.reuters.com/breakingviews/"
+    notes: "Not in ProQuest Global Newsstream; Tier 2 wire — use Wayback CDX for historical, NewsAPI for Phase 6. Filter aggressively to analytical pieces."
 
   - id: nyt_business
     name: "New York Times Business / DealBook"
@@ -62,90 +85,87 @@ tier_1_core_financial_press:
     section_filter: ["business", "dealbook", "economy"]
     access: paywalled
     retrieval: proquest
-    notes: "Section filter critical; full paper is too broad."
+    notes: "In TDM Studio dataset. Section filter critical; full paper is too broad."
 
   - id: economist
     name: "The Economist"
     domains: ["economist.com"]
     access: paywalled
-    retrieval: factiva
-    notes: "Finance & economics + briefings sections only."
-
-  - id: barrons
-    name: "Barron's"
-    domains: ["barrons.com"]
-    access: paywalled
-    retrieval: factiva
-
-  - id: marketwatch
-    name: "MarketWatch"
-    domains: ["marketwatch.com"]
-    access: free
-    retrieval: gdelt_url
-    cdx_url_patterns:
-      - "www.marketwatch.com/story/"
-    notes: "Mostly free; analytical columns only — filter out tickers/quotes pages."
+    retrieval: proquest
+    notes: "In TDM Studio dataset. Finance & economics + briefings sections only."
 
   - id: cnbc
     name: "CNBC"
     domains: ["cnbc.com"]
     access: free
-    retrieval: gdelt_url
+    retrieval: wayback
     cdx_url_patterns:
+      - "www.cnbc.com/2010/"
+      - "www.cnbc.com/2011/"
+      - "www.cnbc.com/2012/"
+      - "www.cnbc.com/2013/"
+      - "www.cnbc.com/2014/"
+      - "www.cnbc.com/2015/"
+      - "www.cnbc.com/2016/"
+      - "www.cnbc.com/2017/"
+      - "www.cnbc.com/2018/"
+      - "www.cnbc.com/2019/"
+      - "www.cnbc.com/2020/"
+      - "www.cnbc.com/2021/"
+      - "www.cnbc.com/2022/"
       - "www.cnbc.com/2023/"
       - "www.cnbc.com/2024/"
+      - "www.cnbc.com/2025/"
     notes: "Free but noisy; require keyword match and length>500 words."
 
-  - id: foreign_affairs
-    name: "Foreign Affairs"
-    domains: ["foreignaffairs.com"]
-    access: paywalled
-    retrieval: proquest
-    notes: "Macro-geopolitical analysis, low volume but very high signal."
-
 tier_2_adjacent_analytical:
-  - id: project_syndicate
-    name: "Project Syndicate"
-    domains: ["project-syndicate.org"]
-    access: free
-    retrieval: gdelt_url
+  - id: bloomberg_opinion
+    name: "Bloomberg Opinion"
+    domains: ["bloomberg.com"]
+    access: mixed
+    retrieval: wayback
     cdx_url_patterns:
-      - "www.project-syndicate.org/commentary/"
-      - "www.project-syndicate.org/onpoint/"
-      - "www.project-syndicate.org/bigpicture/"
-    notes: "Op-eds from prominent economists; high signal."
+      - "www.bloomberg.com/opinion/"
+    notes: "Tagged separately from Bloomberg News for narrative-vs-news separation."
 
   - id: voxeu
     name: "VoxEU / CEPR"
     domains: ["cepr.org", "voxeu.org"]
     access: free
-    retrieval: gdelt_url
+    retrieval: wayback
     cdx_url_patterns:
       - "cepr.org/voxeu/columns/"
       - "voxeu.org/article/"
-
-  - id: bloomberg_opinion
-    name: "Bloomberg Opinion"
-    domains: ["bloomberg.com/opinion"]
-    access: paywalled
-    retrieval: factiva
-    notes: "Tagged separately from Bloomberg News for narrative-vs-news separation."
 
   - id: ft_alphaville
     name: "FT Alphaville"
     domains: ["ftalphaville.ft.com"]
     access: free
-    retrieval: gdelt_url
+    retrieval: wayback
     cdx_url_patterns:
+      - "ftalphaville.ft.com/2010/"
+      - "ftalphaville.ft.com/2011/"
+      - "ftalphaville.ft.com/2012/"
+      - "ftalphaville.ft.com/2013/"
+      - "ftalphaville.ft.com/2014/"
+      - "ftalphaville.ft.com/2015/"
+      - "ftalphaville.ft.com/2016/"
+      - "ftalphaville.ft.com/2017/"
+      - "ftalphaville.ft.com/2018/"
+      - "ftalphaville.ft.com/2019/"
+      - "ftalphaville.ft.com/2020/"
+      - "ftalphaville.ft.com/2021/"
+      - "ftalphaville.ft.com/2022/"
       - "ftalphaville.ft.com/2023/"
       - "ftalphaville.ft.com/2024/"
+      - "ftalphaville.ft.com/2025/"
 
   - id: brookings_econ
     name: "Brookings Economic Studies"
     domains: ["brookings.edu"]
     section_filter: ["economy", "research/economic-studies"]
     access: free
-    retrieval: gdelt_url
+    retrieval: wayback
     cdx_url_patterns:
       - "www.brookings.edu/articles/"
       - "www.brookings.edu/research/"
@@ -155,7 +175,7 @@ tier_2_adjacent_analytical:
     name: "Peterson Institute for International Economics"
     domains: ["piie.com"]
     access: free
-    retrieval: gdelt_url
+    retrieval: wayback
     cdx_url_patterns:
       - "www.piie.com/blogs/"
       - "www.piie.com/research/"
@@ -166,7 +186,7 @@ tier_2_adjacent_analytical:
     domains: ["cfr.org"]
     section_filter: ["world", "geoeconomics"]
     access: free
-    retrieval: gdelt_url
+    retrieval: wayback
     cdx_url_patterns:
       - "www.cfr.org/article/"
       - "www.cfr.org/backgrounder/"
@@ -174,69 +194,19 @@ tier_2_adjacent_analytical:
       - "www.cfr.org/report/"
     notes: "Filter to economic/financial pieces; foreign policy generalist content out of scope."
 
-  - id: foreign_policy
-    name: "Foreign Policy magazine"
-    domains: ["foreignpolicy.com"]
-    access: paywalled
-    retrieval: proquest
-    notes: "Filter to economy/markets; geopolitics out of scope unless macro-financial."
-
-  - id: atlantic_econ
-    name: "The Atlantic — Business/Economy"
-    domains: ["theatlantic.com"]
-    section_filter: ["business", "economy"]
-    access: paywalled
-    retrieval: proquest
-
-  - id: yahoo_finance
-    name: "Yahoo Finance"
-    domains: ["finance.yahoo.com"]
-    access: free
-    retrieval: gdelt_url
-    cdx_url_patterns:
-      - "finance.yahoo.com/news/"
-    notes: "Heavy filter required — most content is ticker pages, not articles."
-
-  - id: forbes_econ
-    name: "Forbes — Markets/Economy"
-    domains: ["forbes.com"]
-    section_filter: ["money", "markets", "economy"]
-    access: free
-    retrieval: gdelt_url
-    cdx_url_patterns:
-      - "www.forbes.com/sites/"
-    notes: "Personal-finance content noisy; require macro keyword match."
-
-  - id: business_insider_econ
-    name: "Business Insider — Markets"
-    domains: ["businessinsider.com"]
-    section_filter: ["markets", "economy"]
-    access: mixed
-    retrieval: gdelt_url
-    cdx_url_patterns:
-      - "www.businessinsider.com/federal-reserve"
-      - "www.businessinsider.com/inflation"
-      - "www.businessinsider.com/economy"
-      - "www.businessinsider.com/recession"
-
   - id: axios_macro
     name: "Axios Macro"
     domains: ["axios.com"]
     section_filter: ["business", "economy"]
     access: free
-    retrieval: gdelt_url
+    retrieval: wayback
     cdx_url_patterns:
+      - "www.axios.com/2020/"
+      - "www.axios.com/2021/"
+      - "www.axios.com/2022/"
       - "www.axios.com/2023/"
       - "www.axios.com/2024/"
-
-  - id: politico_econ
-    name: "Politico — Economy"
-    domains: ["politico.com"]
-    section_filter: ["economy", "finance"]
-    access: free
-    retrieval: gdelt_url
-    cdx_url_patterns:
-      - "www.politico.com/news/"
+      - "www.axios.com/2025/"
 
 tier_3_institutional:
   - id: federalreserve
@@ -331,12 +301,58 @@ tier_3_institutional:
       - "www.bea.gov/research/"
 
 # -----------------------------------------------------------------------------
-# Explicit OUT-OF-SCOPE list — outlets that GDELT may surface but we exclude.
+# Supplementary outlets — dropped from primary corpus (Phase 2 decision,
+# 2026-05-01) due to ProQuest GN temporal coverage gaps. May be re-added
+# as a sensitivity-analysis corpus in Phase 4. Do not ingest by default.
+# -----------------------------------------------------------------------------
+supplementary_outlets:
+  - id: barrons
+    name: "Barron's"
+    domains: ["barrons.com"]
+    access: paywalled
+    retrieval: proquest
+    excluded_reason: "ProQuest GN temporal coverage gaps; dropped for corpus consistency."
+
+  - id: marketwatch
+    name: "MarketWatch"
+    domains: ["marketwatch.com"]
+    access: free
+    retrieval: wayback
+    cdx_url_patterns:
+      - "www.marketwatch.com/story/"
+    excluded_reason: "Dropped for corpus consistency with ProQuest tier. High volume, low analytical depth."
+
+  - id: foreign_affairs
+    name: "Foreign Affairs"
+    domains: ["foreignaffairs.com"]
+    access: paywalled
+    retrieval: proquest
+    excluded_reason: "Primarily geopolitical; macro-financial signal too sparse to justify inclusion."
+
+  - id: project_syndicate
+    name: "Project Syndicate"
+    domains: ["project-syndicate.org"]
+    access: free
+    retrieval: wayback
+    cdx_url_patterns:
+      - "www.project-syndicate.org/commentary/"
+      - "www.project-syndicate.org/onpoint/"
+      - "www.project-syndicate.org/bigpicture/"
+    excluded_reason: "Dropped for corpus consistency; op-ed rather than news-cycle discourse."
+
+# -----------------------------------------------------------------------------
+# Explicit OUT-OF-SCOPE list — outlets we permanently exclude.
 # Documented to make the exclusion deliberate and auditable.
 # -----------------------------------------------------------------------------
-excluded_examples:
+excluded_outlets:
   - { domain: "seekingalpha.com",  reason: "User-generated; quality variance too high" }
   - { domain: "zerohedge.com",     reason: "Editorial slant skews narrative formation" }
   - { domain: "investopedia.com",  reason: "Reference material, not narrative discourse" }
   - { domain: "fool.com",          reason: "Single-stock retail focus; out of macro scope" }
   - { domain: "benzinga.com",      reason: "Real-time wire; reverse-causality concern" }
+  - { domain: "yahoo_finance",     reason: "Aggregator with heavy ticker noise; dropped in Phase 2 for corpus quality" }
+  - { domain: "forbes.com",        reason: "Mixed quality; contributor model inflates volume" }
+  - { domain: "businessinsider.com", reason: "Section filter insufficient to separate macro from general business" }
+  - { domain: "politico.com",      reason: "Political framing dominates; macro-financial signal weak" }
+  - { domain: "theatlantic.com",   reason: "Low volume in macro-financial section; coverage uneven pre-2018" }
+  - { domain: "foreignpolicy.com", reason: "Geopolitical focus; dropped with Foreign Affairs for scope consistency" }

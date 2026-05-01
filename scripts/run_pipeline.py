@@ -1,12 +1,13 @@
 """Pipeline orchestration CLI (plan §9.1).
 
-Dispatches the six Phase 1 pipeline stages:
-  ingest    — fetch raw articles from configured sources
-  filter    — topic filter + near-duplicate removal
-  embed     — encode articles to embeddings (primary or comparator model)
-  cluster   — BERTopic hierarchical clustering
-  stability — bootstrap stability eval (kill criterion 1: mean NMI ≥ 0.40)
-  validate  — anchor narrative recovery (kill criterion 2: ≥7/10 recovered)
+Dispatches pipeline stages:
+  ingest              — fetch raw articles from configured sources
+  filter              — topic filter + near-duplicate removal
+  embed               — encode articles to embeddings (primary or comparator model)
+  cluster             — BERTopic hierarchical clustering
+  stability           — bootstrap stability eval (kill criterion 1: mean NMI ≥ 0.40)
+  validate            — anchor narrative recovery (kill criterion 2: ≥7/10 recovered)
+  corpus-composition  — report article counts per source per year (Phase 2 QA step)
 
 All paths default to config.paths.*. Override with --input / --output flags.
 
@@ -17,6 +18,10 @@ Example Phase 1 pilot run:
   python scripts/run_pipeline.py cluster
   python scripts/run_pipeline.py stability
   python scripts/run_pipeline.py validate --anchors anchor_01_svb,anchor_07_credit_suisse,anchor_10_soft_landing
+
+Phase 2 corpus QA (after full ingestion):
+  python scripts/run_pipeline.py corpus-composition
+  python scripts/run_pipeline.py corpus-composition --by-tier --output data/processed/corpus_composition.csv
 """
 from __future__ import annotations
 
@@ -87,6 +92,7 @@ def ingest(
     from mnd.ingestion import (
         FederalReserveIngestor,
         GdeltIngestor,
+        NewsAPIIngestor,
         PaywalledSourceIngestor,
         WaybackIngestor,
         fetch_free_outlet_bodies,
@@ -105,6 +111,7 @@ def ingest(
         "wayback": WaybackIngestor,
         "fed": FederalReserveIngestor,
         "paywalled": PaywalledSourceIngestor,
+        "newsapi": NewsAPIIngestor,
     }
 
     for name in [s.strip() for s in sources.split(",")]:
@@ -422,6 +429,114 @@ def validate(
 
     if not passed:
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# corpus-composition
+# ---------------------------------------------------------------------------
+
+@cli.command("corpus-composition")
+@click.option("--input-dir", default=None, help="Raw articles directory (default: config.paths.raw_articles)")
+@click.option("--articles", default=None, help="Processed articles parquet path (used if raw dir is empty)")
+@click.option("--output", default=None, help="Write CSV to this path (default: stdout only)")
+@click.option("--by-tier", is_flag=True, default=False, help="Break down counts by tier in addition to source")
+@click.pass_context
+def corpus_composition(
+    ctx: click.Context,
+    input_dir: str | None,
+    articles: str | None,
+    output: str | None,
+    by_tier: bool,
+) -> None:
+    """Report article counts per source per year — Phase 2 corpus QA.
+
+    Reads either the raw JSONL files (preferred) or the processed parquet.
+    Outputs a table to stdout; optionally writes a CSV for downstream analysis.
+
+    Use this after full ingestion to detect:
+      - Coverage gaps (years with zero articles for an outlet)
+      - Balance issues (one outlet dominating the corpus)
+      - Missing Tier 2 wire coverage (Reuters/Bloomberg absent pre-2020)
+    """
+    cfg = ctx.obj["cfg"]
+    root = project_root()
+    raw_dir = Path(input_dir) if input_dir else root / cfg["paths"]["raw_articles"]
+
+    # Load from raw JSONL if available; fall back to processed parquet
+    if raw_dir.exists() and any(raw_dir.glob("*.jsonl")):
+        art_list = _load_raw_articles(raw_dir)
+        records = [
+            {
+                "source_id": a.source_id,
+                "year": a.published_at[:4] if a.published_at else "unknown",
+                "tier": a.tier,
+                "retrieval": a.retrieval,
+            }
+            for a in art_list
+        ]
+        log.info("Loaded %d raw articles from %s", len(records), raw_dir)
+    else:
+        arts_path = Path(articles) if articles else root / cfg["paths"]["processed_articles"]
+        if not arts_path.exists():
+            log.error("No raw articles in %s and no processed parquet at %s. Run `ingest` first.", raw_dir, arts_path)
+            sys.exit(1)
+        df_arts = pd.read_parquet(arts_path)
+        records = []
+        for _, row in df_arts.iterrows():
+            pub = str(row.get("published_at", ""))
+            records.append({
+                "source_id": row.get("source_id", "unknown"),
+                "year": pub[:4] if pub else "unknown",
+                "tier": row.get("tier", 0),
+                "retrieval": row.get("retrieval", "unknown"),
+            })
+        log.info("Loaded %d processed articles from %s", len(records), arts_path)
+
+    if not records:
+        log.warning("No articles found.")
+        sys.exit(0)
+
+    df = pd.DataFrame(records)
+    total = len(df)
+
+    # Count by source × year
+    pivot = (
+        df.groupby(["source_id", "year"])
+        .size()
+        .unstack(fill_value=0)
+        .sort_index()
+    )
+
+    click.echo(f"\nCorpus composition — {total} total articles\n")
+    click.echo(pivot.to_string())
+    click.echo(f"\nTotal by source:\n{df.groupby('source_id').size().sort_values(ascending=False).to_string()}")
+
+    if by_tier:
+        click.echo(f"\nTotal by tier:\n{df.groupby('tier').size().sort_index().to_string()}")
+        click.echo(f"\nTotal by retrieval method:\n{df.groupby('retrieval').size().sort_values(ascending=False).to_string()}")
+
+    # Coverage gaps: sources with years that have 0 articles while other sources have >0
+    all_years = sorted(df["year"].unique())
+    sources = sorted(df["source_id"].unique())
+    gaps = []
+    for src in sources:
+        src_years = set(df[df["source_id"] == src]["year"].unique())
+        missing = [y for y in all_years if y not in src_years and y != "unknown"]
+        if missing:
+            gaps.append((src, missing))
+
+    if gaps:
+        click.echo("\nCoverage gaps (sources missing in year):")
+        for src, missing_years in gaps:
+            click.echo(f"  {src}: missing {', '.join(missing_years)}")
+    else:
+        click.echo("\nNo coverage gaps detected.")
+
+    if output:
+        out_path = Path(output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        pivot.to_csv(out_path)
+        log.info("Wrote corpus composition CSV → %s", out_path)
 
 
 # ---------------------------------------------------------------------------

@@ -55,15 +55,20 @@ class Embedder:
 
     @classmethod
     def from_config(cls, role: ModelRole = "primary") -> "Embedder":
+        import os
         cfg = load_config()
         emb_cfg = cfg["embedding"][role]
         compute_cfg = cfg.get("compute", {})
+        # MND_MAX_SEQ_LEN env var lets local MPS runs override the config value
+        # (config.yaml defaults to 32768 for RCC; set to 512 in .env for MacBook Air)
+        env_seq_len = os.environ.get("MND_MAX_SEQ_LEN")
+        max_seq_len = int(env_seq_len) if env_seq_len else emb_cfg.get("max_seq_len", 32768)
         return cls(
             model_name=emb_cfg["model"],
             revision=emb_cfg.get("revision", "main"),
             instruction_aware=emb_cfg.get("instruction_aware", False),
             instruction_prefix=emb_cfg.get("instruction_prefix", ""),
-            max_seq_len=emb_cfg.get("max_seq_len", 512),
+            max_seq_len=max_seq_len,
             device=compute_cfg.get("embedding_device", "auto"),
             fp16=compute_cfg.get("embedding_fp16", True),
             batch_size=compute_cfg.get("embedding_batch_size", 32),
@@ -80,7 +85,7 @@ class Embedder:
             ) from exc
 
         log.info("Loading embedding model: %s @ %s", self.model_name, self.revision)
-        device = self._resolve_device()
+        device = self._resolve_device(self.device)
         kwargs: dict = {"revision": self.revision} if self.revision != "main" else {}
         self._model = SentenceTransformer(
             self.model_name,
@@ -92,7 +97,12 @@ class Embedder:
             self._model.half()
 
     @staticmethod
-    def _resolve_device() -> str:
+    def _resolve_device(device: str = "auto") -> str:
+        """Resolve the embedding device, respecting the config/env value."""
+        import os
+        env_device = os.environ.get("MND_EMBEDDING_DEVICE", device)
+        if env_device != "auto":
+            return env_device
         try:
             import torch
         except ImportError:  # pragma: no cover
