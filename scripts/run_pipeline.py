@@ -61,7 +61,8 @@ def cli(ctx: click.Context) -> None:
     help="Comma-separated source IDs: wayback, gdelt, fed, paywalled. "
          "'wayback' is the recommended historical discovery layer (replaces gdelt for bulk runs). "
          "'gdelt' may be used for near-real-time discovery. "
-         "Use 'paywalled' only when PROQUEST_API_TOKEN is set.",
+         "Use 'paywalled' only after exporting a TDM Studio dataset (PROQUEST_DATASET_ID must be set). "
+         "See docs/proquest_tdm_setup.md.",
 )
 @click.option(
     "--fetch-bodies/--no-fetch-bodies", default=True, show_default=True,

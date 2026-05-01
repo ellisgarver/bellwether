@@ -68,7 +68,7 @@ re-run them (they are fast relative to embed/cluster).
 
 - [x] Phase 0 — scaffold, configs, anchor set, ingestors, embedding module
 - [x] Phase 1 — filtering, dedup, clustering, dynamics, stages, validation, CLI
-- [ ] Phase 2 — full ingestion 2010–present (RCC; requires PROQUEST_API_TOKEN)
+- [ ] Phase 2 — full ingestion 2010–present (RCC; requires TDM Studio export + PROQUEST_DATASET_ID)
 - [ ] Phase 3 — full corpus embedding, look-ahead sensitivity, multi-model dynamics
 - [ ] Phase 4 — pre-registration finalized, full anchor + fizzled validation
 - [ ] Phase 5 — Streamlit dashboard, Hugging Face Spaces deploy
@@ -99,7 +99,7 @@ python scripts/run_pipeline.py validate --anchors anchor_01_svb,anchor_07_credit
 - Local compute: Apple Silicon MPS (MacBook Air M-series) — `embedding_device: auto` detects it
 - Full corpus runs: UChicago RCC (CUDA) — update `embedding_device` in config or set `MND_EMBEDDING_DEVICE=cuda`
 - FRED key: add to `.env` when available (not required for pilot — FRED is macro indicators only)
-- ProQuest token: add `PROQUEST_API_TOKEN` to `.env` before running `--sources paywalled`
+- ProQuest: export a TDM Studio dataset first (see `docs/proquest_tdm_setup.md`), then set `PROQUEST_DATASET_ID` in `.env` before running `--sources paywalled`
 
 ## Key file locations
 

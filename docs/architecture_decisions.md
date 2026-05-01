@@ -294,6 +294,68 @@ import, which caused the process to stall for 15+ minutes during local testing.
 
 ---
 
+## ADR-007: ProQuest ingestion via TDM Studio export script, not REST API
+
+- **Status**: Accepted
+- **Date**: 2026-05-01
+
+### Context
+
+The original `proquest.py` (ADR-004) assumed ProQuest TDM Studio exposes a
+REST API that can be called with a bearer token (`PROQUEST_API_TOKEN`) from
+outside the platform. In practice, TDM Studio is a self-contained Jupyter
+notebook environment hosted by ProQuest. There is no externally-callable REST
+API; access is through an institutional SSO session that launches a Jupyter
+kernel with the `proquest_tdm` Python client pre-installed. The bearer-token
+approach would never have worked.
+
+The correct integration pattern is:
+
+1. **Dataset creation** (manual, in TDM Studio web UI): the researcher defines
+   search parameters (publication names, date range, keyword filters) and
+   ProQuest builds the dataset. The dataset gets a stable ID (a UUID shown in
+   the project settings).
+2. **Export** (inside TDM Studio Jupyter): a script loads the dataset via
+   `proquest_tdm.TDMClient`, iterates documents, and writes JSONL matching our
+   `Article` schema to a file the researcher downloads.
+3. **Pipeline ingestion** (local machine): `PaywalledSourceIngestor` reads the
+   downloaded JSONL file and yields `Article` objects like any other ingestor.
+
+### Decision
+
+Rewrite `src/mnd/ingestion/proquest.py` as a **dual-role file**:
+
+- When run as `__main__` inside TDM Studio: exports the dataset identified by
+  `PROQUEST_DATASET_ID` to a JSONL file.
+- When imported by the pipeline: `PaywalledSourceIngestor` reads that JSONL
+  file from `data/raw/articles/proquest_{PROQUEST_DATASET_ID}.jsonl`.
+
+Replace `PROQUEST_API_TOKEN` (and `PROQUEST_ACCOUNT_ID`, `PROQUEST_PROJECT_ID`)
+in `.env.example` with `PROQUEST_DATASET_ID`. Add
+`docs/proquest_tdm_setup.md` explaining the manual dataset creation step and
+the export-then-download workflow.
+
+### Consequences
+
+**Positive**:
+- The ingestion path now matches how TDM Studio actually works.
+- No credentials are stored locally (TDM Studio handles auth via SSO).
+- The exported JSONL is a stable, versioned artifact that can be re-ingested
+  without re-running the export.
+
+**Negative / risks**:
+- The export must be run manually inside TDM Studio every time the date range
+  or query changes. This is unavoidable given the platform constraints.
+- The `proquest_tdm` client API must be verified inside the TDM Studio
+  environment; field names and method signatures may differ by version.
+  The `_FIELD_MAP` dict in `proquest.py` handles common variants, but should
+  be spot-checked on the first export run.
+- The pipeline's `--sources paywalled` step requires the JSONL file to already
+  exist locally. Running `ingest --sources paywalled` without the file raises
+  a `FileNotFoundError` with a clear message pointing to the setup docs.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

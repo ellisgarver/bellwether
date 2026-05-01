@@ -125,15 +125,14 @@ def test_ingestors_importable():
     assert a.tier == 1
 
 
-def test_paywalled_ingestor_raises_without_credentials(monkeypatch):
-    """ProQuest TDM ingestor now implemented; raises EnvironmentError when token absent."""
-    import os
+def test_paywalled_ingestor_raises_without_dataset_id(monkeypatch):
+    """PaywalledSourceIngestor raises EnvironmentError when PROQUEST_DATASET_ID is absent."""
     from datetime import date
     from mnd.ingestion import PaywalledSourceIngestor
 
-    monkeypatch.delenv("PROQUEST_API_TOKEN", raising=False)
-    ing = PaywalledSourceIngestor(mode="database_native")
-    with pytest.raises(EnvironmentError, match="PROQUEST_API_TOKEN"):
+    monkeypatch.delenv("PROQUEST_DATASET_ID", raising=False)
+    ing = PaywalledSourceIngestor()
+    with pytest.raises(EnvironmentError, match="PROQUEST_DATASET_ID"):
         list(ing.fetch(date(2024, 1, 1), date(2024, 1, 2)))
 
 
