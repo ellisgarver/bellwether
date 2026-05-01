@@ -23,7 +23,7 @@ pydantic==2.9.2
 # NOTE: torch should be installed per-platform. See README install section
 # for CUDA / ROCm / CPU instructions. The version below is the CPU baseline.
 torch==2.4.1
-transformers==4.45.2
+transformers==4.51.3
 sentence-transformers==3.2.1
 accelerate==1.0.1
 
