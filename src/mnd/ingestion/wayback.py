@@ -33,6 +33,7 @@ from urllib.parse import urlparse
 
 import requests
 import trafilatura
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from mnd.ingestion.base import Article, Ingestor, _now_utc_iso, _stable_article_id
 from mnd.utils.config import load_yaml
@@ -45,6 +46,19 @@ WAYBACK_FETCH = "https://web.archive.org/web/{timestamp}if_/{url}"
 
 USER_AGENT = "MacroNarrativeDynamics/0.1 (academic research; contact via project repo)"
 _HEADERS = {"User-Agent": USER_AGENT}
+
+# Retry CDX requests on transient connection resets and timeouts.
+# Wayback drops connections after bursts of rapid CDX queries; exponential
+# backoff (4 s → 8 s → 16 s) recovers cleanly without hammering the server.
+_CDX_RETRY = retry(
+    retry=retry_if_exception_type((
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+    )),
+    wait=wait_exponential(multiplier=2, min=4, max=30),
+    stop=stop_after_attempt(4),
+    reraise=True,
+)
 
 # Path segments that reliably indicate non-article pages (exact segment match).
 # Keep narrow — over-filtering here silently drops real articles.
@@ -101,6 +115,10 @@ def _load_free_outlets() -> list[dict]:
 def _cdx_query(url_pattern: str, start: date, end: date, limit: int, match_type: str = "domain") -> list[tuple[str, str]]:
     """Query CDX API; return (original_url, timestamp) pairs deduped by urlkey.
 
+    Retries up to 4 times with exponential backoff (4→8→16→30 s) on
+    ConnectionError and Timeout — the two failure modes observed when Wayback
+    drops TCP connections after bursts of rapid requests.
+
     Args:
         url_pattern: CDX url param — e.g. "*.reuters.com/*" or "www.piie.com/blogs/"
         match_type: "domain" for wildcard expansion, "prefix" for path-prefix queries.
@@ -117,8 +135,13 @@ def _cdx_query(url_pattern: str, start: date, end: date, limit: int, match_type:
         ("collapse", "urlkey"),
         ("fl", "original,timestamp"),
     ]
+
+    @_CDX_RETRY
+    def _do_get() -> requests.Response:
+        return requests.get(CDX_API, params=params, headers=_HEADERS, timeout=60)
+
     try:
-        resp = requests.get(CDX_API, params=params, headers=_HEADERS, timeout=60)
+        resp = _do_get()
         resp.raise_for_status()
     except Exception as exc:
         log.warning("CDX query failed for %s: %s", url_pattern, exc)
