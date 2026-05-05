@@ -1,46 +1,62 @@
 #!/bin/bash
-# SLURM job script: full-corpus clustering on UChicago RCC (Midway3).
+# SLURM job script: full-corpus BERTopic clustering on UChicago RCC (Midway3).
 #
-# BERTopic/HDBSCAN is CPU-bound after UMAP reduction. Requests a high-memory
-# CPU node. UMAP on 500k+ embeddings at 1024 dimensions can peak at ~60 GB RAM.
-# Adjust --mem if the corpus is larger or smaller than estimated.
+# BERTopic/HDBSCAN is CPU-bound after UMAP reduction. No GPU required.
 #
-# Submit from the repo root on Midway3 AFTER embed_rcc.sh completes:
+# Resource spec (confirmed 2026-05-04):
+#   Account:   pi-dachxiu
+#   Partition: caslake (standard compute — 32 GB fits comfortably)
+#   CPUs:      8
+#   RAM:       32 GB
+#   Time:      8 h
+#
+# Submit after embed completes:
 #   sbatch scripts/rcc/cluster_rcc.sh
 #
-# Or chain them as a dependency:
+# Or chain as a dependency (preferred):
 #   EMBED_JID=$(sbatch --parsable scripts/rcc/embed_rcc.sh)
 #   sbatch --dependency=afterok:$EMBED_JID scripts/rcc/cluster_rcc.sh
 #
-# Output: data/processed/clusters.parquet + data/processed/topic_info.parquet
+# Runs three granularity levels (fine/medium/coarse) per config.yaml and
+# 20 bootstrap replicates. All UMAP/HDBSCAN parameters are pre-specified in
+# config.yaml — do not tune at this stage.
+#
+# Output:
+#   data/processed/clusters.parquet
+#   data/processed/topic_info.parquet
+#   logs/cluster_rcc_<jobid>.log
+#
+# All data output in /scratch/midway3/ehgarver/ — never in PI project folder.
 
 #SBATCH --job-name=mnd-cluster
-#SBATCH --account=pi-ehgarver          # your own allocation; adjust if under PI account
-#SBATCH --partition=bigmem
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=96G
-#SBATCH --time=06:00:00                # 6 h ceiling; UMAP+HDBSCAN ~2-4 h estimated
+#SBATCH --account=pi-dachxiu
+#SBATCH --partition=caslake
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --time=08:00:00
 #SBATCH --output=logs/cluster_rcc_%j.log
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ehgarver@uchicago.edu
 
 set -euo pipefail
 
-REPO_ROOT="$HOME/Projects/macro-narrative-dynamics"
+REPO_ROOT="/scratch/midway3/ehgarver/macro-narrative-dynamics"
 cd "$REPO_ROOT"
+
+mkdir -p logs data/processed
 
 module load python/anaconda-2023.09
 conda activate mnd
 
 export USE_TF=0
 export KERAS_BACKEND=torch
-export MND_EMBEDDING_DEVICE=cpu   # clustering is CPU-only; no GPU needed
+export MND_EMBEDDING_DEVICE=cpu
 
 echo "Job $SLURM_JOB_ID started: $(date)"
-echo "Running on $(hostname), CPUs: $SLURM_CPUS_PER_TASK, RAM: $SLURM_MEM_PER_NODE MB"
+echo "Running on $(hostname), CPUs: $SLURM_CPUS_PER_TASK, RAM: ${SLURM_MEM_PER_NODE:-32768} MB"
 
 python scripts/run_pipeline.py cluster
 
 echo "Clustering complete: $(date)"
-echo "Output: $REPO_ROOT/data/processed/clusters.parquet"
-ls -lh data/processed/clusters.parquet data/processed/topic_info.parquet
+ls -lh data/processed/clusters.parquet data/processed/topic_info.parquet 2>/dev/null || \
+    echo "WARNING: expected output files not found — check log above"
