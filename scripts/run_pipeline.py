@@ -205,9 +205,15 @@ def embed(
     parquet_path = (
         Path(input_path) if input_path else root / cfg["paths"]["processed_articles"]
     )
-    npy_path = (
-        Path(output) if output else root / cfg["paths"]["processed_embeddings"]
-    )
+    if output:
+        npy_path = Path(output)
+    elif role == "comparator":
+        # Comparator writes to a separate file so primary and comparator jobs
+        # can run in parallel without clobbering each other.
+        base = root / cfg["paths"]["processed_embeddings"]
+        npy_path = base.with_name("embeddings_comparator.npy")
+    else:
+        npy_path = root / cfg["paths"]["processed_embeddings"]
 
     df = pd.read_parquet(parquet_path)
     texts = [
@@ -216,7 +222,7 @@ def embed(
         )
         for row in df.to_dict("records")
     ]
-    log.info("Embedding %d articles with %s model", len(texts), role)
+    log.info("Embedding %d articles with %s model → %s", len(texts), role, npy_path)
 
     embedder = Embedder.from_config(role)  # type: ignore[arg-type]
     embeddings = embedder.encode(texts)
