@@ -61,10 +61,18 @@ def test_random_seed_pinned():
 def test_whitelist_loads_and_has_required_outlets():
     from mnd.utils.config import load_yaml
     wl = load_yaml("config/whitelist.yaml")
-    tier_1_ids = {e["id"] for e in wl["tier_1_core_financial_press"]}
-    # Must include the anchor outlets referenced in plan §6.2
-    for required in ("wsj", "ft", "bloomberg", "reuters", "nyt_business", "economist"):
-        assert required in tier_1_ids, f"missing required tier-1 outlet: {required}"
+    # Phase 2 schema (ADR-008): four tiers, open institutional+academic corpus
+    assert "tier_1_institutional_policy" in wl, "missing tier_1_institutional_policy"
+    assert "tier_4_open_journalism" in wl, "missing tier_4_open_journalism"
+    tier_1_ids = {e["id"] for e in wl["tier_1_institutional_policy"]}
+    tier_2_ids = {e["id"] for e in wl["tier_2_academic_analytical"]}
+    tier_4_ids = {e["id"] for e in wl["tier_4_open_journalism"]}
+    for required in ("fed_board", "imf", "bis"):
+        assert required in tier_1_ids, f"missing required tier-1 institutional source: {required}"
+    for required in ("nber", "voxeu"):
+        assert required in tier_2_ids, f"missing required tier-2 academic source: {required}"
+    for required in ("apnews", "marketwatch"):
+        assert required in tier_4_ids, f"missing required tier-4 journalism source: {required}"
 
 
 def test_keyword_seed_has_minimum_coverage():
@@ -109,31 +117,27 @@ def test_fizzled_seed_marked_as_draft():
 # ---------------------------------------------------------------------------
 
 def test_ingestors_importable():
+    # Phase 2 ingestors (ADR-008): institutional + open journalism
     from mnd.ingestion import (
-        Article, FederalReserveIngestor, FredFetcher, GdeltIngestor,
-        Ingestor, PaywalledSourceIngestor,
+        APNewsIngestor,
+        Article,
+        FederalReserveIngestor,
+        FredFetcher,
+        InstitutionalIngestor,
+        Ingestor,
+        MarketWatchIngestor,
     )
-    assert issubclass(GdeltIngestor, Ingestor)
+    assert issubclass(InstitutionalIngestor, Ingestor)
     assert issubclass(FederalReserveIngestor, Ingestor)
-    assert issubclass(PaywalledSourceIngestor, Ingestor)
+    assert issubclass(APNewsIngestor, Ingestor)
+    assert issubclass(MarketWatchIngestor, Ingestor)
     # Article is a dataclass with the canonical fields
     a = Article(
-        article_id="x", source_id="wsj", url="https://wsj.com/x",
+        article_id="x", source_id="fed_board", url="https://federalreserve.gov/x",
         published_at="2024-01-01T00:00:00Z", retrieved_at="2024-01-01T00:00:00Z",
         title="t",
     )
     assert a.tier == 1
-
-
-def test_paywalled_ingestor_raises_without_dataset_id(monkeypatch):
-    """PaywalledSourceIngestor raises EnvironmentError when PROQUEST_DATASET_ID is absent."""
-    from datetime import date
-    from mnd.ingestion import PaywalledSourceIngestor
-
-    monkeypatch.delenv("PROQUEST_DATASET_ID", raising=False)
-    ing = PaywalledSourceIngestor()
-    with pytest.raises(EnvironmentError, match="PROQUEST_DATASET_ID"):
-        list(ing.fetch(date(2024, 1, 1), date(2024, 1, 2)))
 
 
 # ---------------------------------------------------------------------------
