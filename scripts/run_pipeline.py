@@ -11,13 +11,15 @@ Dispatches pipeline stages:
 
 All paths default to config.paths.*. Override with --input / --output flags.
 
-Example Phase 1 pilot run:
-  python scripts/run_pipeline.py ingest --start 2023-09-01 --end 2024-02-29 --sources wayback,fed
+Phase 2 full-corpus ingestion (run on RCC; see scripts/rcc/ingest_rcc.sh):
+  python scripts/run_pipeline.py ingest --start 2010-01-01 --end 2025-12-31 --sources institutional
+  python scripts/run_pipeline.py ingest --start 2010-01-01 --end 2025-12-31 --sources apnews
+  python scripts/run_pipeline.py ingest --start 2010-01-01 --end 2025-12-31 --sources marketwatch
   python scripts/run_pipeline.py filter
   python scripts/run_pipeline.py embed --role primary
   python scripts/run_pipeline.py cluster
   python scripts/run_pipeline.py stability
-  python scripts/run_pipeline.py validate --anchors anchor_01_svb,anchor_07_credit_suisse,anchor_10_soft_landing
+  python scripts/run_pipeline.py validate --anchors all
 
 Phase 2 corpus QA (after full ingestion):
   python scripts/run_pipeline.py corpus-composition
@@ -61,41 +63,26 @@ def cli(ctx: click.Context) -> None:
 @click.option("--start", required=True, help="Start date YYYY-MM-DD")
 @click.option("--end", required=True, help="End date YYYY-MM-DD")
 @click.option(
-    "--sources", default="wayback,fed",
+    "--sources", default="institutional",
     show_default=True,
-    help="Comma-separated source IDs: wayback, gdelt, fed, paywalled. "
-         "'wayback' is the recommended historical discovery layer (replaces gdelt for bulk runs). "
-         "'gdelt' may be used for near-real-time discovery. "
-         "Use 'paywalled' only after exporting a TDM Studio dataset (PROQUEST_DATASET_ID must be set). "
-         "See docs/proquest_tdm_setup.md.",
-)
-@click.option(
-    "--fetch-bodies/--no-fetch-bodies", default=True, show_default=True,
-    help="After GDELT discovery, fetch full text for free outlets via trafilatura.",
-)
-@click.option(
-    "--fetch-workers", default=4, show_default=True, type=int,
-    help="Thread pool size for trafilatura fetching.",
+    help=(
+        "Comma-separated source IDs: institutional, apnews, marketwatch. "
+        "'institutional' covers Fed, IMF, BIS, CEA, CBO, Treasury/OFR, NBER, SSRN, VoxEU, "
+        "Brookings, PIIE (Tiers 1–3). 'apnews' and 'marketwatch' are Tier 4 open journalism "
+        "via Wayback CDX (ADR-008, ADR-009)."
+    ),
 )
 @click.pass_context
 def ingest(
     ctx: click.Context, start: str, end: str, sources: str,
-    fetch_bodies: bool, fetch_workers: int,
 ) -> None:
-    """Fetch raw articles from configured ingestion sources.
-
-    GDELT discovers URLs; trafilatura fills in the body for free outlets.
-    Use --no-fetch-bodies to skip the trafilatura step (metadata-only mode).
-    """
+    """Fetch raw articles from configured ingestion sources (ADR-008)."""
     from datetime import date as date_t
 
     from mnd.ingestion import (
-        FederalReserveIngestor,
-        GdeltIngestor,
-        NewsAPIIngestor,
-        PaywalledSourceIngestor,
-        WaybackIngestor,
-        fetch_free_outlet_bodies,
+        APNewsIngestor,
+        InstitutionalIngestor,
+        MarketWatchIngestor,
     )
 
     cfg = ctx.obj["cfg"]
@@ -107,11 +94,9 @@ def ingest(
     end_d = date_t.fromisoformat(end)
 
     ingestor_map = {
-        "gdelt": GdeltIngestor,
-        "wayback": WaybackIngestor,
-        "fed": FederalReserveIngestor,
-        "paywalled": PaywalledSourceIngestor,
-        "newsapi": NewsAPIIngestor,
+        "institutional": InstitutionalIngestor,
+        "apnews": APNewsIngestor,
+        "marketwatch": MarketWatchIngestor,
     }
 
     for name in [s.strip() for s in sources.split(",")]:
@@ -123,17 +108,6 @@ def ingest(
         try:
             ingestor = ingestor_map[name]()
             articles = list(ingestor.fetch(start_d, end_d))
-
-            # For GDELT: optionally enrich metadata-only records with full text
-            if name == "gdelt" and fetch_bodies and articles:
-                log.info("  Fetching full text for %d GDELT URLs via trafilatura …", len(articles))
-                articles = list(fetch_free_outlet_bodies(
-                    articles,
-                    min_words=200,
-                    max_workers=fetch_workers,
-                    inter_request_delay=1.0,
-                ))
-
             ingestor.write_jsonl(iter(articles), out_path)
             log.info("  Wrote %d articles", len(articles))
         except NotImplementedError as exc:
@@ -462,7 +436,7 @@ def corpus_composition(
     Use this after full ingestion to detect:
       - Coverage gaps (years with zero articles for an outlet)
       - Balance issues (one outlet dominating the corpus)
-      - Missing Tier 2 wire coverage (Reuters/Bloomberg absent pre-2020)
+      - Missing Tier 4 coverage (AP News / MarketWatch absent pre-2015)
     """
     cfg = ctx.obj["cfg"]
     root = project_root()
