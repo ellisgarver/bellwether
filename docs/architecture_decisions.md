@@ -356,6 +356,174 @@ the export-then-download workflow.
 
 ---
 
+## ADR-008: Phase 2 corpus overhaul — open institutional + AP News + RavenPack dynamics
+
+- **Status**: Accepted
+- **Date**: 2026-05-04
+- **Supersedes**: ADR-005 (Wayback as discovery layer), ADR-007 (ProQuest TDM pipeline), prior Phase 2 corpus spec (tight corpus, finalized 2026-05-01)
+
+### Context
+
+The "tight corpus" architecture finalized 2026-05-01 relied on ProQuest TDM Studio as
+the primary text source for Tier 1 financial press (WSJ, NYT, Economist) plus Wayback
+CDX for wires. A subsequent assessment revealed several compounding problems:
+
+1. **Paywalled text pipeline is fragile.** ProQuest TDM Studio requires a per-export
+   workflow that is not automatable for Phase 6 live updates. License terms prevent
+   any programmatic bulk download outside the Studio environment.
+2. **Coverage is uneven over 2010–present.** ProQuest GN has temporal gaps for several
+   outlets (hence Barron's, MarketWatch already dropped 2026-05-01). WSJ/NYT/Economist
+   are better but cross-year volume comparisons carry systematic risk from index changes.
+3. **Financial journalism is downstream of institutional discourse.** The hypothesis
+   being tested (narrative lifecycle dynamics) applies most cleanly to the formation and
+   diffusion of narratives among policymakers, researchers, and analysts — before the
+   financial press picks them up. Institutional + academic + wire discourse is a closer
+   proxy to the causal process.
+4. **RavenPack via WRDS provides a clean, comprehensive volume signal.** The RPA 1.0
+   Global Macro Dow Jones Edition covers WSJ, Barron's, DJN, MarketWatch, PR Newswire,
+   and ~800 others with article-level metadata normalized for the WRDS environment.
+   This is a better dynamics layer than attempting to count Wayback-retrieved articles.
+5. **Anchor set scope creep.** FTX collapse and GameStop short squeeze are not
+   macro-financial narratives in the traditional sense; including them risked reward-
+   hacking the anchor recovery metric. Taper tantrum (2013) and China devaluation (2015)
+   are canonical macro events with clean timestamps in the 2010–present window.
+
+### Decision
+
+**Semantic corpus (text for embedding and clustering):**
+
+| Tier | Sources | Retrieval |
+|---|---|---|
+| 1 — Institutional policy | Federal Reserve (all: FOMC, speeches, MPR, Beige Book, regional Feds), IMF (WEO/GFSR/WPs/Blog), BIS (QR/WPs), CEA, CBO, Treasury/OFR/FSOC | Direct fetch / institutional RSS |
+| 2 — Academic analytical | NBER WPs (abstracts + intros, JEL E/F/G), SSRN macro/finance (abstracts), VoxEU/CEPR (full posts) | Direct fetch / RSS |
+| 3 — Policy-journalism bridge | Brookings Institution, PIIE | Direct fetch / RSS |
+| 4 — Wire journalism | AP News (full articles, 2010–present) | Wayback CDX (historical); AP RSS (Phase 6 live) |
+
+Cut from pipeline (do not reinstate without new ADR): Reuters, Bloomberg, WSJ, NYT,
+Economist, FT, CNBC, FT Alphaville, CFR, Axios, ProQuest TDM, Factiva, NewsAPI.
+
+**Dynamics layer:**
+
+RavenPack RPA 1.0 Global Macro, Dow Jones Edition via WRDS. Weekly article volume counts
+per narrative cluster, normalized by total corpus volume that week. Not used for embedding
+or clustering — counts only.
+
+**Anchor narratives (10 final, replacing prior 10):**
+
+Removed: FTX collapse (anchor_05), GameStop short squeeze (anchor_02) — out of macro scope.
+Added: 2013 taper tantrum (ref: 2013-05-22, Bernanke Senate testimony), 2015 China
+devaluation scare (ref: 2015-08-11, PBOC announcement). Renumbered 01–10.
+
+**Key processing decisions:**
+
+- Documents >2,000 words split into 600-token chunks with 100-token overlap before
+  embedding. Volume counting uses document count (not chunk count).
+- Weekly volume normalization: counts per cluster / total corpus articles that week.
+- Two-stage dynamics fitting: parametric models only above 3 articles/week avg over 4
+  weeks AND 50 cumulative articles; descriptive stats only below threshold.
+- Source-type contamination check: clusters >90% one source type flagged post-hoc.
+- FOMC minutes timestamp = release date (not meeting date); NBER papers = posting date.
+
+### Consequences
+
+**Positive:**
+- Fully automatable pipeline — no manual ProQuest export step.
+- Temporal coverage is uniform across the 2010–present window (institutional sources
+  publish continuously; AP News Wayback coverage is consistent).
+- Institutional discourse is a cleaner proxy for the causal narrative formation process.
+- RavenPack dynamics layer is higher quality and easier to normalize than Wayback counts.
+- Anchor set is tighter and more defensible for peer review.
+
+**Negative / risks:**
+- Semantic corpus skews toward formal institutional and academic register. If the
+  hypothesis is about *public* narrative formation (media → markets), this is a design
+  choice that must be disclosed. Mitigation: AP News (Tier 4) provides the popular press
+  signal; RavenPack dynamics reflects broader media volume.
+- AP News Wayback CDX coverage before ~2016 may be sparse. Monitor in corpus
+  composition QA; flag in pre-registration if pre-2016 AP coverage < 50% of later years.
+- WRDS access is institutional (UChicago RCC). Reproducibility requires WRDS credentials.
+  Mitigation: document WRDS query precisely so others can replicate with own access.
+
+---
+
+## ADR-009: Journalism corpus scope — MarketWatch reinstatement and stated limitations
+
+- **Status**: Accepted
+- **Date**: 2026-05-04
+
+### Context
+
+ADR-008 established AP News as the sole Tier 4 (journalism) source in the
+semantic corpus. After review, AP News alone was found insufficient: AP is
+wire-factual and does not produce the analytical/interpretive framing pieces
+where narrative construction happens in financial journalism. The macro-financial
+literature distinguishes between event reporting (AP) and narrative formation
+(interpretive commentary). The latter is where our clustering signal lives.
+
+Additionally, the prior design left no acknowledged statement about premium
+analytical press (WSJ opinion, Bloomberg Opinion, FT) being absent from the text
+corpus. This omission could be read as an oversight in peer review; it is better
+stated explicitly as a scope constraint with reasoning.
+
+### Decision
+
+**1. MarketWatch reinstated as Tier 4 journalism source.**
+
+MarketWatch fills the interpretive gap AP misses:
+- Publishes 15–20 analytical macro pieces per day.
+- Fully open access — no paywall, no institutional license required.
+- Dow Jones property — consistent editorial standards; also covered by RavenPack
+  dynamics layer (rpa_source_id = 'MKW'), enabling cross-validation between text
+  corpus and volume signal for the same outlet.
+- Historical coverage via Wayback CDX on `www.marketwatch.com/story/`.
+
+Pre-2015 Wayback CDX coverage is thinner. Decision: ingest what is available,
+flag records with `sparse_wayback_coverage=True` in raw_metadata, treat corpus
+as consistent from 2015-01-01 onward for cross-year comparisons. This asymmetry
+is documented explicitly in methodology and pre-registration.
+
+**2. Stated limitation recorded for premium analytical press.**
+
+WSJ opinion, Bloomberg Opinion, and FT are not included in the text corpus
+because: WSJ requires ProQuest (pipeline removed in ADR-008); Bloomberg text is
+paywalled; FT has Factiva license issues (license prohibits pipeline use).
+
+These outlets' volume signal is partially captured by the RavenPack dynamics
+layer (Dow Jones edition covers WSJ, DJN, Barron's, and MarketWatch). This is an
+acknowledged scope constraint, not an oversight. It is disclosed in:
+- The pre-registration (Appendix A, corpus scope section)
+- Methodology section of the technical report
+- Dashboard (tooltip on dynamics layer charts)
+
+**3. RavenPack lag and vintage documented.**
+
+RavenPack RPA 1.0 data has approximately a 5-week lag and is delivered as monthly
+vintages by design. This is a look-ahead bias protection feature, not a
+limitation. All dashboard panels that use RavenPack data are labeled prominently
+"as of [last delivered month]". Emergence detection uses own-corpus (Tier 4)
+volume counts, which are real-time.
+
+### Consequences
+
+**Positive:**
+- Tier 4 now covers both event-factual (AP) and interpretive-analytical
+  (MarketWatch) journalism registers, matching the theoretical framing.
+- The premium press gap is a stated, documented limitation with a clear rationale
+  rather than an implicit omission.
+- MarketWatch's dual presence (text corpus + RavenPack dynamics layer) enables a
+  cross-validation check: do MarketWatch RavenPack volume counts correlate with
+  MarketWatch text-corpus cluster assignments?
+
+**Negative / risks:**
+- Pre-2015 MarketWatch coverage asymmetry adds a nuisance covariate to temporal
+  analysis. Mitigation: flag in QA output; restrict cross-year comparisons of
+  MarketWatch-heavy clusters to 2015+.
+- Two Tier 4 sources increase ingestion volume and complexity. Mitigation: both
+  use the identical Wayback CDX + RSS architecture via the same module
+  (src/mnd/ingestion/apnews.py, class MarketWatchIngestor).
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

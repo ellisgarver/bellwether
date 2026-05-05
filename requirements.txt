@@ -41,9 +41,9 @@ arviz==0.19.0
 datasketch==1.6.5         # MinHash near-duplicate detection
 mmh3==5.0.1               # Fast hashing
 trafilatura==1.12.2       # Article text extraction from raw HTML
+tiktoken==0.7.0           # BPE tokenizer for 600-token document chunking
 
 # Data ingestion ------------------------------------------------------------
-gdeltdoc==1.7.0           # GDELT 2.0 article search
 fredapi==0.5.2
 yfinance==0.2.43
 requests==2.32.3

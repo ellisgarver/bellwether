@@ -1,358 +1,333 @@
 # =============================================================================
-# Outlet Whitelist
+# Outlet / Source Whitelist — Phase 2 Final Architecture
 # =============================================================================
-# ~30-40 outlets organized by tier. The whitelist is the *gate* on what enters
-# the corpus — GDELT URLs from outlets not on this list are discarded.
+# Finalized 2026-05-04. Supersedes all prior versions.
 #
-# Each entry includes:
-#   - domain: matched against GDELT source URL (case-insensitive, www-stripped)
-#   - aliases: alternate domains for the same outlet
-#   - tier: 1-3 (see below)
-#   - access: free | paywalled | mixed
-#   - retrieval: how full text is obtained (gdelt_url | fed_site | factiva | proquest | rss | none)
-#   - notes: outlet-specific quirks
+# The semantic corpus (text for embedding and clustering) has four tiers:
 #
-# Tiers:
-#   Tier 1 — Core analytical financial press. Highest priority. Required.
-#   Tier 2 — Adjacent analytical publications. Strong macro focus.
-#   Tier 3 — Institutional / official sources. Free, authoritative.
+#   Tier 1 — Institutional policy:  Fed (all), IMF, BIS, CEA, CBO, Treasury/OFR/FSOC
+#   Tier 2 — Academic analytical:   NBER, SSRN, VoxEU/CEPR
+#   Tier 3 — Policy-journalism bridge: Brookings, PIIE
+#   Tier 4 — Wire journalism:        AP News (2010–present)
 #
-# DO NOT add Tier 4 (general business news, blogs) without explicit
-# scope-change documentation. Adding noise here propagates to every
-# downstream stage.
+# The DYNAMICS LAYER (volume time series for SIR/logistic fitting) comes from
+# RavenPack RPA 1.0 Global Macro (Dow Jones Edition) via WRDS — NOT from this
+# whitelist. RavenPack is not ingested as text; it provides weekly article counts.
+#
+# Cut and do not reinstate as pipeline sources:
+#   Reuters, Bloomberg, WSJ, NYT, Economist, FT, CNBC, FT Alphaville,
+#   CFR, Axios, Barron's, MarketWatch, Common Crawl, NewsAPI, GDELT,
+#   ProQuest TDM Studio, Factiva.
+#
+# retrieval values:
+#   fed_direct     — federalreserve.gov structured endpoints (FOMC, speeches, etc.)
+#   institutional_rss — RSS/Atom feed from institution's site
+#   direct_fetch   — direct HTTP fetch of known URL patterns
+#   wayback_cdx    — Wayback CDX API for historical bulk; RSS for live (Phase 6)
 # =============================================================================
 
-schema_version: "1.0.0"
+schema_version: "2.0.0"
 
 # -----------------------------------------------------------------------------
-# Corpus design (Phase 2 decision, 2026-05-01):
-#
-# Tight corpus for temporal consistency:
-#   Tier 1 ProQuest (TDM Studio): WSJ, NYT (business), Economist
-#   Tier 2 Wayback/free:          Reuters, Bloomberg (not in ProQuest GN)
-#   Tier 3 Institutional:         Fed, IMF, BIS, NBER, etc. (unchanged)
-#
-# Dropped from primary analysis (moved to supplementary_outlets below):
-#   Barron's, MarketWatch, Foreign Affairs, Project Syndicate
-#   Reason: ProQuest GN temporal coverage gaps; would bias cross-year comparisons.
-#
-# FT retained but flagged: TDM Studio dataset does not include FT.
-# FT kept as factiva for now; revisit if UChi library access confirmed.
+# Tier 1 — Institutional policy
 # -----------------------------------------------------------------------------
+tier_1_institutional_policy:
 
-tier_1_core_financial_press:
-  - id: wsj
-    name: "Wall Street Journal"
-    domains: ["wsj.com"]
-    access: paywalled
-    retrieval: proquest
-    notes: "Anchor outlet. In TDM Studio 'macro narratives dataset' (2010-present)."
-
-  - id: ft
-    name: "Financial Times (US edition)"
-    domains: ["ft.com"]
-    access: paywalled
-    retrieval: factiva
-    notes: "Not in TDM Studio dataset; Factiva access pending confirmation. Kept in corpus; review in Phase 3."
-
-  - id: bloomberg
-    name: "Bloomberg News"
-    domains: ["bloomberg.com"]
-    access: mixed
-    retrieval: wayback
-    cdx_url_patterns:
-      - "www.bloomberg.com/news/articles/"
-      - "www.bloomberg.com/news/features/"
-      - "www.bloomberg.com/news/newsletters/"
-      - "www.bloomberg.com/markets/"
-    notes: "Not in ProQuest Global Newsstream; Tier 2 wire — use Wayback CDX for 2010-present historical bulk, NewsAPI for Phase 6 live updates."
-
-  - id: reuters
-    name: "Reuters"
-    domains: ["reuters.com"]
-    access: mixed
-    retrieval: wayback
-    cdx_url_patterns:
-      - "www.reuters.com/markets/"
-      - "www.reuters.com/business/"
-      - "www.reuters.com/world/us/"
-      - "www.reuters.com/breakingviews/"
-    notes: "Not in ProQuest Global Newsstream; Tier 2 wire — use Wayback CDX for historical, NewsAPI for Phase 6. Filter aggressively to analytical pieces."
-
-  - id: nyt_business
-    name: "New York Times Business / DealBook"
-    domains: ["nytimes.com"]
-    section_filter: ["business", "dealbook", "economy"]
-    access: paywalled
-    retrieval: proquest
-    notes: "In TDM Studio dataset. Section filter critical; full paper is too broad."
-
-  - id: economist
-    name: "The Economist"
-    domains: ["economist.com"]
-    access: paywalled
-    retrieval: proquest
-    notes: "In TDM Studio dataset. Finance & economics + briefings sections only."
-
-  - id: cnbc
-    name: "CNBC"
-    domains: ["cnbc.com"]
-    access: free
-    retrieval: wayback
-    cdx_url_patterns:
-      - "www.cnbc.com/2010/"
-      - "www.cnbc.com/2011/"
-      - "www.cnbc.com/2012/"
-      - "www.cnbc.com/2013/"
-      - "www.cnbc.com/2014/"
-      - "www.cnbc.com/2015/"
-      - "www.cnbc.com/2016/"
-      - "www.cnbc.com/2017/"
-      - "www.cnbc.com/2018/"
-      - "www.cnbc.com/2019/"
-      - "www.cnbc.com/2020/"
-      - "www.cnbc.com/2021/"
-      - "www.cnbc.com/2022/"
-      - "www.cnbc.com/2023/"
-      - "www.cnbc.com/2024/"
-      - "www.cnbc.com/2025/"
-    notes: "Free but noisy; require keyword match and length>500 words."
-
-tier_2_adjacent_analytical:
-  - id: bloomberg_opinion
-    name: "Bloomberg Opinion"
-    domains: ["bloomberg.com"]
-    access: mixed
-    retrieval: wayback
-    cdx_url_patterns:
-      - "www.bloomberg.com/opinion/"
-    notes: "Tagged separately from Bloomberg News for narrative-vs-news separation."
-
-  - id: voxeu
-    name: "VoxEU / CEPR"
-    domains: ["cepr.org", "voxeu.org"]
-    access: free
-    retrieval: wayback
-    cdx_url_patterns:
-      - "cepr.org/voxeu/columns/"
-      - "voxeu.org/article/"
-
-  - id: ft_alphaville
-    name: "FT Alphaville"
-    domains: ["ftalphaville.ft.com"]
-    access: free
-    retrieval: wayback
-    cdx_url_patterns:
-      - "ftalphaville.ft.com/2010/"
-      - "ftalphaville.ft.com/2011/"
-      - "ftalphaville.ft.com/2012/"
-      - "ftalphaville.ft.com/2013/"
-      - "ftalphaville.ft.com/2014/"
-      - "ftalphaville.ft.com/2015/"
-      - "ftalphaville.ft.com/2016/"
-      - "ftalphaville.ft.com/2017/"
-      - "ftalphaville.ft.com/2018/"
-      - "ftalphaville.ft.com/2019/"
-      - "ftalphaville.ft.com/2020/"
-      - "ftalphaville.ft.com/2021/"
-      - "ftalphaville.ft.com/2022/"
-      - "ftalphaville.ft.com/2023/"
-      - "ftalphaville.ft.com/2024/"
-      - "ftalphaville.ft.com/2025/"
-
-  - id: brookings_econ
-    name: "Brookings Economic Studies"
-    domains: ["brookings.edu"]
-    section_filter: ["economy", "research/economic-studies"]
-    access: free
-    retrieval: wayback
-    cdx_url_patterns:
-      - "www.brookings.edu/articles/"
-      - "www.brookings.edu/research/"
-      - "www.brookings.edu/blog/"
-
-  - id: peterson
-    name: "Peterson Institute for International Economics"
-    domains: ["piie.com"]
-    access: free
-    retrieval: wayback
-    cdx_url_patterns:
-      - "www.piie.com/blogs/"
-      - "www.piie.com/research/"
-      - "www.piie.com/publications/"
-
-  - id: cfr
-    name: "Council on Foreign Relations"
-    domains: ["cfr.org"]
-    section_filter: ["world", "geoeconomics"]
-    access: free
-    retrieval: wayback
-    cdx_url_patterns:
-      - "www.cfr.org/article/"
-      - "www.cfr.org/backgrounder/"
-      - "www.cfr.org/in-brief/"
-      - "www.cfr.org/report/"
-    notes: "Filter to economic/financial pieces; foreign policy generalist content out of scope."
-
-  - id: axios_macro
-    name: "Axios Macro"
-    domains: ["axios.com"]
-    section_filter: ["business", "economy"]
-    access: free
-    retrieval: wayback
-    cdx_url_patterns:
-      - "www.axios.com/2020/"
-      - "www.axios.com/2021/"
-      - "www.axios.com/2022/"
-      - "www.axios.com/2023/"
-      - "www.axios.com/2024/"
-      - "www.axios.com/2025/"
-
-tier_3_institutional:
-  - id: federalreserve
+  - id: fed_board
     name: "Federal Reserve Board"
     domains: ["federalreserve.gov"]
-    access: free
-    retrieval: fed_site
-    notes: "FOMC statements, minutes, Beige Book, speeches, MPRs."
+    retrieval: fed_direct
+    document_types:
+      - fomc_statements
+      - fomc_minutes
+      - fomc_transcripts
+      - governor_speeches
+      - monetary_policy_reports
+      - beige_book
+      - financial_stability_reports
+    notes: "All FOMC communications. Timestamp = release date (not meeting date)."
 
-  - id: frb_ny
-    name: "Federal Reserve Bank of New York"
+  - id: fed_ny
+    name: "Federal Reserve Bank of New York — Liberty Street Economics"
     domains: ["newyorkfed.org"]
-    access: free
-    retrieval: fed_site
+    retrieval: institutional_rss
+    rss_feeds:
+      - "https://libertystreeteconomics.newyorkfed.org/feed/"
     cdx_url_patterns:
-      - "www.newyorkfed.org/research/staff_reports/"
-      - "www.newyorkfed.org/research/epr/"
-      - "www.newyorkfed.org/medialibrary/media/research/"
+      - "libertystreeteconomics.newyorkfed.org/"
+    notes: "Research blog; full posts. Also fetch staff reports directly."
 
-  - id: frb_sf
-    name: "Federal Reserve Bank of San Francisco"
+  - id: fed_sf
+    name: "Federal Reserve Bank of San Francisco — Economic Letter"
     domains: ["frbsf.org"]
-    access: free
-    retrieval: fed_site
+    retrieval: institutional_rss
+    rss_feeds:
+      - "https://www.frbsf.org/economic-research/publications/economic-letter/feed/"
     cdx_url_patterns:
-      - "www.frbsf.org/research/publications/"
-      - "www.frbsf.org/economic-research/"
+      - "www.frbsf.org/economic-research/publications/economic-letter/"
+    notes: "FRBSF Economic Letter; full posts."
+
+  - id: fed_chicago
+    name: "Federal Reserve Bank of Chicago — Chicago Fed Letter"
+    domains: ["chicagofed.org"]
+    retrieval: institutional_rss
+    rss_feeds:
+      - "https://www.chicagofed.org/publications/chicago-fed-letter/rss"
+    cdx_url_patterns:
+      - "www.chicagofed.org/publications/chicago-fed-letter/"
+    notes: "Chicago Fed Letter; full posts."
+
+  - id: fed_atlanta
+    name: "Federal Reserve Bank of Atlanta — macroblog"
+    domains: ["atlantafed.org"]
+    retrieval: institutional_rss
+    rss_feeds:
+      - "https://www.atlantafed.org/blogs/macroblog/rss"
+    cdx_url_patterns:
+      - "www.atlantafed.org/blogs/macroblog/"
+    notes: "Atlanta Fed macroblog; full posts."
 
   - id: imf
     name: "International Monetary Fund"
     domains: ["imf.org"]
-    access: free
-    retrieval: institutional_site
-    cdx_url_patterns:
-      - "www.imf.org/en/News/Articles/"
-      - "www.imf.org/en/Publications/WP/"
-      - "www.imf.org/en/Blogs/"
-    notes: "WPs + Article IVs + WEO/GFSR; filter to publications, not press releases."
+    retrieval: institutional_rss
+    rss_feeds:
+      - "https://www.imf.org/en/News/rss?RSS=RSS&Cat=PB"
+      - "https://www.imf.org/en/Blogs/rss"
+      - "https://www.imf.org/en/Publications/WP/rss"
+    document_types:
+      - weo
+      - gfsr
+      - working_papers
+      - article_iv_summaries
+      - imf_blog
+    notes: "WEO/GFSR/WPs/Article IV summaries + IMF Blog. Filter to publications, not press releases."
 
   - id: bis
     name: "Bank for International Settlements"
     domains: ["bis.org"]
-    access: free
-    retrieval: institutional_site
+    retrieval: institutional_rss
+    rss_feeds:
+      - "https://www.bis.org/doclist/bis_rss.rss"
+    document_types:
+      - quarterly_review
+      - annual_report
+      - working_papers
     cdx_url_patterns:
       - "www.bis.org/speeches/"
       - "www.bis.org/review/"
       - "www.bis.org/publ/"
-    notes: "Working Papers + Quarterly Reviews."
 
-  - id: oecd
-    name: "OECD Economics"
-    domains: ["oecd.org"]
-    section_filter: ["economy", "finance"]
-    access: free
-    retrieval: institutional_site
+  - id: cea
+    name: "Council of Economic Advisers"
+    domains: ["whitehouse.gov"]
+    retrieval: direct_fetch
     cdx_url_patterns:
-      - "www.oecd.org/en/publications/"
-      - "www.oecd.org/economic-outlook/"
+      - "www.whitehouse.gov/cea/"
+    notes: "Economic Reports of the President, annual reports, issue briefs."
+
+  - id: cbo
+    name: "Congressional Budget Office"
+    domains: ["cbo.gov"]
+    retrieval: institutional_rss
+    rss_feeds:
+      - "https://www.cbo.gov/publication/rss"
+    document_types:
+      - budget_outlook
+      - economic_outlook
+      - working_papers
+    notes: "Budget and Economic Outlook; long-run projections; working papers."
+
+  - id: treasury_ofr
+    name: "Treasury / OFR / FSOC"
+    domains: ["home.treasury.gov", "financialresearch.gov", "home.treasury.gov/policy-issues/financial-markets"]
+    retrieval: direct_fetch
+    document_types:
+      - ofr_annual_reports
+      - ofr_working_papers
+      - fsoc_annual_reports
+      - treasury_reports
+    notes: "OFR Annual Reports + Working Papers; FSOC Annual Reports; Treasury economic reports."
+
+# -----------------------------------------------------------------------------
+# Tier 2 — Academic analytical
+# -----------------------------------------------------------------------------
+tier_2_academic_analytical:
 
   - id: nber
     name: "NBER Working Papers"
     domains: ["nber.org"]
-    access: free
-    retrieval: institutional_site
-    cdx_url_patterns:
-      - "www.nber.org/papers/"
-    notes: "Macro/finance categories only; filter to relevant JEL codes."
+    retrieval: institutional_rss
+    rss_feeds:
+      - "https://www.nber.org/rss/new_working_papers.xml"
+    jel_codes_include:
+      - "E"    # Macroeconomics and Monetary Economics
+      - "F"    # International Economics
+      - "G"    # Financial Economics
+    document_content: "abstract_plus_introduction"
+    notes: "Abstracts + introductions (not full PDFs). Filter to JEL E/F/G. Timestamp = posting date."
 
   - id: ssrn_finance
     name: "SSRN — Financial Economics Network"
     domains: ["ssrn.com"]
-    access: free
-    retrieval: institutional_site
-    notes: "Free abstracts always; many full PDFs free in finance. Excluded from Wayback — article URLs always contain query strings."
+    retrieval: institutional_rss
+    rss_feeds:
+      - "https://papers.ssrn.com/sol3/Jrnls/jrnl.cfm?link=2"  # Finance
+    networks_include:
+      - "Financial Economics Network"
+      - "Macroeconomics and Monetary Economics Network"
+    document_content: "abstract_only"
+    notes: "Abstracts only (full text access inconsistent). Excludes Wayback — SSRN URLs contain query strings."
 
-  - id: cea
-    name: "Council of Economic Advisers"
-    domains: ["whitehouse.gov/cea", "cea.gov"]
-    access: free
-    retrieval: gov_site
+  - id: voxeu
+    name: "VoxEU / CEPR"
+    domains: ["cepr.org", "voxeu.org"]
+    retrieval: institutional_rss
+    rss_feeds:
+      - "https://cepr.org/voxeu/rss.xml"
     cdx_url_patterns:
-      - "www.whitehouse.gov/cea/"
-
-  - id: bea
-    name: "Bureau of Economic Analysis"
-    domains: ["bea.gov"]
-    access: free
-    retrieval: gov_site
-    cdx_url_patterns:
-      - "www.bea.gov/news/"
-      - "www.bea.gov/research/"
+      - "cepr.org/voxeu/columns/"
+      - "voxeu.org/article/"
+    notes: "Full posts. Feed goes back to 2007; clean RSS. Accessible without paywall."
 
 # -----------------------------------------------------------------------------
-# Supplementary outlets — dropped from primary corpus (Phase 2 decision,
-# 2026-05-01) due to ProQuest GN temporal coverage gaps. May be re-added
-# as a sensitivity-analysis corpus in Phase 4. Do not ingest by default.
+# Tier 3 — Policy-journalism bridge
 # -----------------------------------------------------------------------------
-supplementary_outlets:
-  - id: barrons
-    name: "Barron's"
-    domains: ["barrons.com"]
-    access: paywalled
-    retrieval: proquest
-    excluded_reason: "ProQuest GN temporal coverage gaps; dropped for corpus consistency."
+tier_3_policy_journalism:
+
+  - id: brookings
+    name: "Brookings Institution"
+    domains: ["brookings.edu"]
+    retrieval: institutional_rss
+    rss_feeds:
+      - "https://www.brookings.edu/topic/economic-studies/feed/"
+      - "https://www.brookings.edu/topic/economy/feed/"
+    cdx_url_patterns:
+      - "www.brookings.edu/articles/"
+      - "www.brookings.edu/research/"
+    notes: "Economic Studies section only. Full posts."
+
+  - id: piie
+    name: "Peterson Institute for International Economics"
+    domains: ["piie.com"]
+    retrieval: institutional_rss
+    rss_feeds:
+      - "https://www.piie.com/rss/all"
+    cdx_url_patterns:
+      - "www.piie.com/blogs/"
+      - "www.piie.com/research/"
+      - "www.piie.com/publications/"
+    notes: "Full posts. Strong macro-financial coverage."
+
+# -----------------------------------------------------------------------------
+# Tier 4 — Open journalism
+#
+# Rationale for two-source Tier 4:
+#   AP News   — wire journalism: event detection, factual coverage, clean timestamps.
+#               Fully open, consistent Wayback CDX coverage 2010-present.
+#   MarketWatch — analytical financial journalism: interpretive/framing pieces at
+#               the wire-to-analysis intersection AP misses. 15-20 macro analytical
+#               pieces per day. Fully open, Dow Jones property.
+#
+# Stated limitation (document in methodology, not a gap to patch):
+#   Premium analytical press — WSJ opinion, Bloomberg Opinion, FT — is not
+#   represented in the semantic corpus in text form. Their volume signal is
+#   partially captured by the RavenPack dynamics layer (Dow Jones edition covers
+#   WSJ, DJN, Barron's, and MarketWatch). This is an acknowledged scope
+#   constraint, disclosed in pre-registration and methodology section.
+# -----------------------------------------------------------------------------
+tier_4_open_journalism:
+
+  - id: apnews
+    name: "AP News"
+    domains: ["apnews.com"]
+    retrieval: wayback_cdx
+    cdx_url_patterns:
+      - "apnews.com/article/"
+      - "apnews.com/business/"
+      - "apnews.com/economy/"
+    live_rss: "https://feeds.apnews.com/rss/business"
+    historical_start: "2010-01-01"
+    notes: "Wire journalism, event detection. Full articles. Historical via Wayback CDX (2010-present); live via RSS (Phase 6)."
 
   - id: marketwatch
     name: "MarketWatch"
     domains: ["marketwatch.com"]
-    access: free
-    retrieval: wayback
+    retrieval: wayback_cdx
     cdx_url_patterns:
       - "www.marketwatch.com/story/"
-    excluded_reason: "Dropped for corpus consistency with ProQuest tier. High volume, low analytical depth."
-
-  - id: foreign_affairs
-    name: "Foreign Affairs"
-    domains: ["foreignaffairs.com"]
-    access: paywalled
-    retrieval: proquest
-    excluded_reason: "Primarily geopolitical; macro-financial signal too sparse to justify inclusion."
-
-  - id: project_syndicate
-    name: "Project Syndicate"
-    domains: ["project-syndicate.org"]
-    access: free
-    retrieval: wayback
-    cdx_url_patterns:
-      - "www.project-syndicate.org/commentary/"
-      - "www.project-syndicate.org/onpoint/"
-      - "www.project-syndicate.org/bigpicture/"
-    excluded_reason: "Dropped for corpus consistency; op-ed rather than news-cycle discourse."
+    live_rss: "https://feeds.marketwatch.com/marketwatch/topstories/"
+    historical_start: "2010-01-01"
+    coverage_note: >
+      Pre-2015 Wayback CDX coverage is thinner than post-2015. Treat as
+      consistent from 2015-01-01 onward for cross-year comparison. Pre-2015
+      articles are ingested when available but flagged in corpus composition
+      QA. Document this asymmetry explicitly in methodology and pre-registration.
+    notes: >
+      Analytical financial journalism — interpretive and framing pieces AP does not
+      produce. Fully open (no paywall). Dow Jones property; also covered by RavenPack
+      dynamics layer (MKW source_id). Historical via Wayback CDX; live via RSS (Phase 6).
+      Reinstatement rationale: ADR-009.
 
 # -----------------------------------------------------------------------------
-# Explicit OUT-OF-SCOPE list — outlets we permanently exclude.
-# Documented to make the exclusion deliberate and auditable.
+# Dynamics layer — NOT ingested as text corpus
 # -----------------------------------------------------------------------------
-excluded_outlets:
-  - { domain: "seekingalpha.com",  reason: "User-generated; quality variance too high" }
-  - { domain: "zerohedge.com",     reason: "Editorial slant skews narrative formation" }
-  - { domain: "investopedia.com",  reason: "Reference material, not narrative discourse" }
-  - { domain: "fool.com",          reason: "Single-stock retail focus; out of macro scope" }
-  - { domain: "benzinga.com",      reason: "Real-time wire; reverse-causality concern" }
-  - { domain: "yahoo_finance",     reason: "Aggregator with heavy ticker noise; dropped in Phase 2 for corpus quality" }
-  - { domain: "forbes.com",        reason: "Mixed quality; contributor model inflates volume" }
-  - { domain: "businessinsider.com", reason: "Section filter insufficient to separate macro from general business" }
-  - { domain: "politico.com",      reason: "Political framing dominates; macro-financial signal weak" }
-  - { domain: "theatlantic.com",   reason: "Low volume in macro-financial section; coverage uneven pre-2018" }
-  - { domain: "foreignpolicy.com", reason: "Geopolitical focus; dropped with Foreign Affairs for scope consistency" }
+# RavenPack RPA 1.0 Global Macro, Dow Jones Edition (via WRDS).
+# Used ONLY for weekly article volume counts per narrative cluster.
+# Do not feed RavenPack records into embedding or clustering.
+dynamics_layer:
+  - id: ravenpack_rpa_global_macro
+    name: "RavenPack RPA 1.0 Global Macro, Dow Jones Edition"
+    access: wrds
+    wrds_dataset: "ravenpack.rpa_dj_pub"
+    use_for: "weekly_volume_counts"
+    covers: ["WSJ", "Barron's", "Dow Jones Newswires", "MarketWatch", "PR Newswire", "~800 other sources"]
+    notes: "Metadata and event records only — no full text. Use for volume normalization before SIR/logistic fitting."
+
+# -----------------------------------------------------------------------------
+# Validation supplements — not ingested as text corpus
+# -----------------------------------------------------------------------------
+validation_supplements:
+  - id: fred
+    name: "FRED (Federal Reserve Economic Data)"
+    use_for: "validation_correlation"
+    series: ["CPIAUCSL", "PCEPI", "UNRATE", "T10Y2Y", "VIXCLS", "BAMLH0A0HYM2"]
+    notes: "CPI, PCE, unemployment, yield curve, VIX, credit spreads. Via fredapi."
+
+  - id: nber_cycles
+    name: "NBER Business Cycle Dating"
+    use_for: "validation_correlation"
+    notes: "Recession dates. Hardcode from NBER website (rarely updated)."
+
+  - id: jln_uncertainty
+    name: "Jurado-Ludvigson-Ng Uncertainty Indices"
+    use_for: "validation_correlation"
+    access: wrds
+    wrds_dataset: "macro_finance_society"
+    notes: "Macro and Financial Uncertainty indices. Use as validation correlation series, not pipeline input."
+
+  - id: umich_inflation_exp
+    name: "University of Michigan Inflation Expectations"
+    use_for: "validation_correlation"
+    fred_series: "MICH"
+    notes: "Via FRED. 1-year inflation expectations."
+
+# -----------------------------------------------------------------------------
+# Archived / superseded sources (do not reinstate without new ADR)
+# -----------------------------------------------------------------------------
+# The following were considered and rejected or removed in prior phases:
+#
+# GDELT            — replaced by RavenPack for dynamics layer (ADR-005, superseded by ADR-007)
+# Common Crawl     — coverage inconsistency across years; removed Phase 2
+# ProQuest TDM     — paywalled text pipeline removed Phase 2 (corpus shift to open sources)
+# Factiva          — license prohibits pipeline use; FT access unconfirmed
+# NewsAPI          — live-only, insufficient historical depth
+# Reuters          — WRDS subscription does not include Reuters text; dynamics only via RavenPack
+# Bloomberg        — text paywalled and not in accessible dataset
+# WSJ              — ProQuest no longer used as pipeline source
+# NYT Business     — ProQuest no longer used as pipeline source
+# Economist        — ProQuest no longer used as pipeline source
+# FT / FT Alphaville — Factiva (prohibited) and paywall issues
+# CNBC             — dropped: noisy, low analytical depth
+# CFR              — dropped: geopolitical framing dominates
+# Axios            — dropped: insufficient coverage pre-2020
