@@ -1,35 +1,47 @@
 #!/bin/bash
 # SLURM job script: full-corpus historical ingestion on UChicago RCC (Midway3).
 #
-# Runs Wayback CDX ingestion for the full 2010-present window across all
-# free/mixed-access outlets in the whitelist. This is network I/O bound —
-# no GPU or large RAM needed. Runtime depends on Wayback response times;
-# estimate 6-12 h for a full historical run at 200 articles/pattern.
+# Phase 2 semantic corpus (ADR-008, ADR-009):
+#   --sources institutional   Fed, IMF, BIS, CEA, CBO, Treasury/OFR, NBER,
+#                             SSRN, VoxEU, Brookings, PIIE (RSS + direct fetch)
+#   --sources apnews          AP News via Wayback CDX (2010-present)
+#   --sources marketwatch     MarketWatch via Wayback CDX (2010-present;
+#                             consistent coverage from 2015)
 #
-# ProQuest ingestion runs separately (see docs/proquest_tdm_setup.md):
-#   The JSONL export must already exist in data/raw/articles/ before the
-#   filter step. Download from TDM Studio → data/raw/articles/.
+# Network I/O bound — no GPU or large RAM needed. Runtime depends on Wayback
+# CDX response latency; estimate 12-24 h for a full 2010-present historical run.
 #
-# Submit from the repo root on Midway3:
+# Resource spec (confirmed 2026-05-04):
+#   Account:   pi-dachxiu
+#   Partition: caslake
+#   CPUs:      4 (Wayback CDX is sequential per pattern; extra cores unused)
+#   RAM:       16 GB
+#   Time:      24 h
+#
+# Submit from Midway3:
 #   sbatch scripts/rcc/ingest_rcc.sh
 #
-# Or with a custom date range:
+# Custom date range:
 #   sbatch --export=START=2010-01-01,END=2024-12-31 scripts/rcc/ingest_rcc.sh
+#
+# All data output in /scratch/midway3/ehgarver/ — never in PI project folder.
 
 #SBATCH --job-name=mnd-ingest
-#SBATCH --account=pi-ehgarver
+#SBATCH --account=pi-dachxiu
 #SBATCH --partition=caslake
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=logs/ingest_rcc_%j.log
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ehgarver@uchicago.edu
 
 set -euo pipefail
 
-REPO_ROOT="$HOME/Projects/macro-narrative-dynamics"
+REPO_ROOT="/scratch/midway3/ehgarver/macro-narrative-dynamics"
 cd "$REPO_ROOT"
+
+mkdir -p logs data/raw/articles
 
 module load python/anaconda-2023.09
 conda activate mnd
@@ -37,7 +49,6 @@ conda activate mnd
 export USE_TF=0
 export KERAS_BACKEND=torch
 
-# Use env-var date range if provided, else default to full historical window
 START="${START:-2010-01-01}"
 END="${END:-$(date +%Y-%m-%d)}"
 
@@ -45,24 +56,25 @@ echo "Job $SLURM_JOB_ID started: $(date)"
 echo "Ingestion window: $START → $END"
 echo "Running on $(hostname)"
 
-# Wayback + Fed institutional sources
+# Tier 1-3: institutional policy, academic analytical, policy-journalism bridge
 python scripts/run_pipeline.py ingest \
     --start "$START" \
     --end "$END" \
-    --sources wayback,fed
+    --sources institutional
 
-# If ProQuest JSONL already downloaded, run paywalled ingestion too
-if [ -n "${PROQUEST_DATASET_ID:-}" ]; then
-    echo "PROQUEST_DATASET_ID set — running paywalled ingestion"
-    python scripts/run_pipeline.py ingest \
-        --start "$START" \
-        --end "$END" \
-        --sources paywalled
-else
-    echo "PROQUEST_DATASET_ID not set — skipping paywalled ingestion."
-    echo "See docs/proquest_tdm_setup.md to export the TDM Studio dataset."
-fi
+# Tier 4: AP News wire journalism (Wayback CDX)
+python scripts/run_pipeline.py ingest \
+    --start "$START" \
+    --end "$END" \
+    --sources apnews
+
+# Tier 4: MarketWatch analytical journalism (Wayback CDX; consistent from 2015)
+python scripts/run_pipeline.py ingest \
+    --start "$START" \
+    --end "$END" \
+    --sources marketwatch
 
 echo "Ingestion complete: $(date)"
-echo "Raw articles:"
-ls -lh data/raw/articles/*.jsonl 2>/dev/null || echo "(no JSONL files found)"
+echo "Raw article files:"
+ls -lh data/raw/articles/*.jsonl 2>/dev/null | tail -20 || echo "(no JSONL files found)"
+echo "Total files: $(ls data/raw/articles/*.jsonl 2>/dev/null | wc -l)"
