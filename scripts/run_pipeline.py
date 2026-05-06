@@ -93,23 +93,43 @@ def ingest(
     start_d = date_t.fromisoformat(start)
     end_d = date_t.fromisoformat(end)
 
-    ingestor_map = {
-        "institutional": InstitutionalIngestor,
-        "apnews": APNewsIngestor,
-        "marketwatch": MarketWatchIngestor,
-    }
+    # Checkpoint file extension by source: institutional uses JSON (sub-source map),
+    # AP News and MarketWatch use TXT (set of already-fetched URLs).
+    _checkpoint_ext = {"institutional": "json"}
+
+    def _make_ingestor(name: str, cp_path):
+        if name == "institutional":
+            return InstitutionalIngestor(checkpoint_path=cp_path)
+        if name == "apnews":
+            return APNewsIngestor(checkpoint_path=cp_path)
+        if name == "marketwatch":
+            return MarketWatchIngestor(checkpoint_path=cp_path)
+        raise ValueError(f"Unknown source: {name}")
+
+    valid_sources = {"institutional", "apnews", "marketwatch"}
 
     for name in [s.strip() for s in sources.split(",")]:
-        if name not in ingestor_map:
+        if name not in valid_sources:
             log.warning("Unknown source '%s' — skipping", name)
             continue
         out_path = raw_dir / f"{name}_{start}_{end}.jsonl"
-        log.info("Ingesting %s → %s", name, out_path)
+        ext = _checkpoint_ext.get(name, "txt")
+        checkpoint_path = raw_dir / f".{name}_checkpoint.{ext}"
+        resume = checkpoint_path.exists() and out_path.exists()
+        mode = "a" if resume else "w"
+        log.info(
+            "Ingesting %s → %s (%s)",
+            name, out_path, "appending (checkpoint resume)" if resume else "new file",
+        )
         try:
-            ingestor = ingestor_map[name]()
-            articles = list(ingestor.fetch(start_d, end_d))
-            ingestor.write_jsonl(iter(articles), out_path)
-            log.info("  Wrote %d articles", len(articles))
+            ingestor = _make_ingestor(name, checkpoint_path)
+            count = 0
+            with out_path.open(mode, encoding="utf-8") as fh:
+                for article in ingestor.fetch(start_d, end_d):
+                    fh.write(article.to_jsonl())
+                    fh.write("\n")
+                    count += 1
+            log.info("  Wrote %d articles to %s", count, out_path)
         except NotImplementedError as exc:
             log.warning("  %s: not yet implemented — %s", name, exc)
         except EnvironmentError as exc:

@@ -9,14 +9,17 @@
 #                             consistent coverage from 2015)
 #
 # Network I/O bound — no GPU or large RAM needed. Runtime depends on Wayback
-# CDX response latency; estimate 12-24 h for a full 2010-present historical run.
+# CDX response latency. AP News + MarketWatch use 8 parallel fetch workers;
+# institutional is sequential (RSS-bound). Estimate 36-48 h for a full
+# 2010-present historical run. Checkpoint/resume: re-submitting the same job
+# after a timeout will skip already-fetched URLs and append to existing JSONL.
 #
 # Resource spec (confirmed 2026-05-04):
 #   Account:   pi-dachxiu
 #   Partition: caslake
-#   CPUs:      4 (Wayback CDX is sequential per pattern; extra cores unused)
+#   CPUs:      8 (8 parallel Wayback fetch workers for AP News and MarketWatch)
 #   RAM:       16 GB
-#   Time:      24 h
+#   Time:      48 h
 #
 # Submit from Midway3:
 #   sbatch scripts/rcc/ingest_rcc.sh
@@ -29,9 +32,9 @@
 #SBATCH --job-name=mnd-ingest
 #SBATCH --account=pi-dachxiu
 #SBATCH --partition=caslake
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=logs/ingest_rcc_%j.log
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ehgarver@uchicago.edu

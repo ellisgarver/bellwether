@@ -13,9 +13,10 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Iterator
 
+import feedparser
 import requests
 from bs4 import BeautifulSoup
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_random_exponential
 
 from mnd.ingestion.base import Article, Ingestor, _now_utc_iso, _stable_article_id
 from mnd.utils.logging import get_logger
@@ -28,9 +29,10 @@ FOMC_HISTORICAL_BASE = "https://www.federalreserve.gov/monetarypolicy"
 FOMC_CALENDARS_URL = f"{FOMC_HISTORICAL_BASE}/fomccalendars.htm"
 SPEECHES_BASE = "https://www.federalreserve.gov/newsevents/speech"
 SPEECHES_INDEX = f"{SPEECHES_BASE}/{{year}}-speeches.htm"
+SPEECHES_RSS = "https://www.federalreserve.gov/feeds/speeches.xml"
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
+@retry(stop=stop_after_attempt(5), wait=wait_random_exponential(multiplier=1, max=30))
 def _get(url: str, *, timeout: float = 30.0) -> requests.Response:
     resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout)
     resp.raise_for_status()
@@ -208,13 +210,17 @@ class FederalReserveIngestor(Ingestor):
             )
 
     def _fetch_speeches(self, start: date, end: date) -> Iterator[Article]:
-        """Walk Board speech indexes year by year."""
+        """Walk Board speech indexes year by year; fall back to RSS on index failure."""
         for year in range(start.year, end.year + 1):
             index_url = SPEECHES_INDEX.format(year=year)
             try:
                 resp = _get(index_url)
-            except Exception as exc:  # pragma: no cover
-                log.warning("Failed to fetch speech index %s: %s", index_url, exc)
+            except Exception as exc:
+                log.warning(
+                    "Speech index %s failed after retries: %s — trying RSS fallback",
+                    index_url, exc,
+                )
+                yield from self._fetch_speeches_rss_year(year, start, end)
                 continue
             soup = BeautifulSoup(resp.text, "lxml")
             for entry in soup.select("div.row"):
@@ -234,7 +240,7 @@ class FederalReserveIngestor(Ingestor):
                 speaker = entry.get_text(" ", strip=True)
                 try:
                     page = _get(full_url)
-                except Exception as exc:  # pragma: no cover
+                except Exception as exc:
                     log.warning("Failed to fetch speech %s: %s", full_url, exc)
                     continue
                 body = _extract_text(page.text)
@@ -257,3 +263,55 @@ class FederalReserveIngestor(Ingestor):
                     word_count=len(body.split()),
                     raw_metadata={"document_type": "speech"},
                 )
+
+    def _fetch_speeches_rss_year(self, year: int, start: date, end: date) -> Iterator[Article]:
+        """RSS fallback for Fed speeches when annual index pages are unreachable."""
+        log.info("Fed speech RSS fallback: fetching %s for year %d", SPEECHES_RSS, year)
+        try:
+            feed = feedparser.parse(SPEECHES_RSS, request_headers={"User-Agent": USER_AGENT})
+        except Exception as exc:
+            log.error("Fed speech RSS fallback also failed for %d: %s", year, exc)
+            return
+        year_start = date(year, 1, 1)
+        year_end = date(year, 12, 31)
+        for entry in feed.entries:
+            pub_parsed = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
+            if not pub_parsed:
+                continue
+            try:
+                speech_date = date(*pub_parsed[:3])
+            except Exception:
+                continue
+            if not (year_start <= speech_date <= year_end):
+                continue
+            if speech_date < start or speech_date > end:
+                continue
+            url = entry.get("link", "")
+            if not url:
+                continue
+            title = entry.get("title", "Federal Reserve speech")
+            try:
+                page = _get(url)
+                body = _extract_text(page.text)
+            except Exception as exc:
+                log.debug("RSS fallback speech fetch failed %s: %s", url, exc)
+                body = BeautifulSoup(entry.get("summary", ""), "lxml").get_text(strip=True)
+            if not body or len(body.split()) < 50:
+                continue
+            yield Article(
+                article_id=_stable_article_id(self.source_id, url),
+                source_id="federalreserve",
+                url=url,
+                published_at=speech_date.isoformat() + "T15:00:00Z",
+                retrieved_at=_now_utc_iso(),
+                title=title,
+                body=body,
+                author=entry.get("author"),
+                section="speech",
+                language="en",
+                tier=3,
+                access="free",
+                retrieval="fed_rss_fallback",
+                word_count=len(body.split()),
+                raw_metadata={"document_type": "speech", "retrieval_fallback": True},
+            )
