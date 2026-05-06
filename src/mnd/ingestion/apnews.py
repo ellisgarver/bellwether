@@ -77,7 +77,7 @@ _MW_CONSISTENT_START = "2015-01-01"
 _MIN_BODY_WORDS = 100
 _PARALLEL_WORKERS = 8
 _WORKER_DELAY = 0.5       # seconds between requests per worker
-_CHECKPOINT_SAVE_EVERY = 500  # save checkpoint every N URLs processed
+_CHECKPOINT_SAVE_EVERY = 50   # save checkpoint every N URLs processed
 _PROGRESS_LOG_EVERY = 1000    # log progress every N URLs
 
 
@@ -228,32 +228,37 @@ def _fetch_parallel(
     done = 0
     since_checkpoint = 0
 
-    with ThreadPoolExecutor(max_workers=_PARALLEL_WORKERS) as executor:
-        futures = {executor.submit(_worker_fetch, url, ts): (url, ts) for url, ts in todo}
-        for future in as_completed(futures):
-            url, ts = futures[future]
-            done += 1
-            if done % _PROGRESS_LOG_EVERY == 0:
-                log.info(
-                    "%s progress: %d/%d URLs processed (%.1f%%)",
-                    progress_label, done, len(todo), 100.0 * done / len(todo),
-                )
-            try:
-                _, timestamp, body = future.result()
-            except Exception as exc:
-                log.debug("%s fetch error %s: %s", progress_label, url, exc)
-                body = None
-            if body:
-                fetched_urls.add(url)
-                since_checkpoint += 1
-                if since_checkpoint >= _CHECKPOINT_SAVE_EVERY:
-                    _save_url_checkpoint(fetched_urls, checkpoint_path)
-                    since_checkpoint = 0
-                yield url, ts, body
-
-    # Final checkpoint save after all futures complete
-    _save_url_checkpoint(fetched_urls, checkpoint_path)
-    log.info("%s: fetch complete (%d/%d yielded bodies)", progress_label, len(fetched_urls) - skipped, len(todo))
+    try:
+        with ThreadPoolExecutor(max_workers=_PARALLEL_WORKERS) as executor:
+            futures = {executor.submit(_worker_fetch, url, ts): (url, ts) for url, ts in todo}
+            for future in as_completed(futures):
+                url, ts = futures[future]
+                done += 1
+                if done % _PROGRESS_LOG_EVERY == 0:
+                    log.info(
+                        "%s progress: %d/%d URLs processed (%.1f%%)",
+                        progress_label, done, len(todo), 100.0 * done / len(todo),
+                    )
+                try:
+                    _, timestamp, body = future.result()
+                except Exception as exc:
+                    log.debug("%s fetch error %s: %s", progress_label, url, exc)
+                    body = None
+                if body:
+                    fetched_urls.add(url)
+                    since_checkpoint += 1
+                    if since_checkpoint >= _CHECKPOINT_SAVE_EVERY:
+                        _save_url_checkpoint(fetched_urls, checkpoint_path)
+                        since_checkpoint = 0
+                    yield url, ts, body
+    finally:
+        # Runs on normal completion, GeneratorExit (kill/close), or exception —
+        # ensures the checkpoint reflects whatever was processed before exit.
+        _save_url_checkpoint(fetched_urls, checkpoint_path)
+        log.info(
+            "%s: checkpoint saved (%d URLs total, %d processed this run)",
+            progress_label, len(fetched_urls), done,
+        )
 
 
 def _load_url_checkpoint(checkpoint_path: Path | None) -> set[str]:
@@ -285,8 +290,13 @@ class APNewsIngestor(Ingestor):
 
     source_id = "apnews"
 
-    def __init__(self, checkpoint_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        checkpoint_path: Path | None = None,
+        max_urls: int | None = None,
+    ) -> None:
         self._checkpoint_path = checkpoint_path
+        self._max_urls = max_urls  # debug: cap CDX results for testing
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         """Historical ingestion via Wayback CDX for apnews.com URL patterns."""
@@ -303,38 +313,47 @@ class APNewsIngestor(Ingestor):
                     seen.add(url)
                     all_pairs.append((url, ts))
 
-        for url, timestamp, body in _fetch_parallel(
-            all_pairs,
-            fetched_urls=fetched_urls,
-            checkpoint_path=self._checkpoint_path,
-            progress_label="AP News",
-        ):
-            if len(body.split()) < _MIN_BODY_WORDS:
-                continue
-            try:
-                pub_date = datetime.strptime(timestamp[:8], "%Y%m%d").date()
-            except Exception:
-                pub_date = start
-            yield Article(
-                article_id=_stable_article_id(self.source_id, url),
-                source_id=self.source_id,
-                url=url,
-                published_at=pub_date.isoformat() + "T00:00:00Z",
-                retrieved_at=_now_utc_iso(),
-                title=_extract_ap_title(body),
-                body=body,
-                author=None,
-                section="business",
-                language="en",
-                tier=4,
-                access="free",
-                retrieval="wayback_cdx",
-                word_count=len(body.split()),
-                raw_metadata={
-                    "document_type": "ap_news_article",
-                    "wayback_timestamp": timestamp,
-                },
-            )
+        if self._max_urls is not None:
+            all_pairs = all_pairs[: self._max_urls]
+            log.info("AP News: capped to %d URLs (max_urls debug param)", len(all_pairs))
+
+        try:
+            for url, timestamp, body in _fetch_parallel(
+                all_pairs,
+                fetched_urls=fetched_urls,
+                checkpoint_path=self._checkpoint_path,
+                progress_label="AP News",
+            ):
+                if len(body.split()) < _MIN_BODY_WORDS:
+                    continue
+                try:
+                    pub_date = datetime.strptime(timestamp[:8], "%Y%m%d").date()
+                except Exception:
+                    pub_date = start
+                yield Article(
+                    article_id=_stable_article_id(self.source_id, url),
+                    source_id=self.source_id,
+                    url=url,
+                    published_at=pub_date.isoformat() + "T00:00:00Z",
+                    retrieved_at=_now_utc_iso(),
+                    title=_extract_ap_title(body),
+                    body=body,
+                    author=None,
+                    section="business",
+                    language="en",
+                    tier=4,
+                    access="free",
+                    retrieval="wayback_cdx",
+                    word_count=len(body.split()),
+                    raw_metadata={
+                        "document_type": "ap_news_article",
+                        "wayback_timestamp": timestamp,
+                    },
+                )
+        finally:
+            # Belt-and-suspenders: save checkpoint if caller closes the generator
+            # early (e.g. SLURM kill, KeyboardInterrupt, or test gen.close()).
+            _save_url_checkpoint(fetched_urls, self._checkpoint_path)
 
     def fetch_live_rss(self, start: date, end: date) -> Iterator[Article]:
         """Phase 6: fetch recent AP News articles via business RSS feed."""
@@ -409,8 +428,13 @@ class MarketWatchIngestor(Ingestor):
 
     source_id = "marketwatch"
 
-    def __init__(self, checkpoint_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        checkpoint_path: Path | None = None,
+        max_urls: int | None = None,
+    ) -> None:
         self._checkpoint_path = checkpoint_path
+        self._max_urls = max_urls  # debug: cap CDX results for testing
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         """Historical ingestion via Wayback CDX for marketwatch.com/story/."""
@@ -427,30 +451,35 @@ class MarketWatchIngestor(Ingestor):
                     seen.add(url)
                     all_pairs.append((url, ts))
 
-        for url, timestamp, body in _fetch_parallel(
-            all_pairs,
-            fetched_urls=fetched_urls,
-            checkpoint_path=self._checkpoint_path,
-            progress_label="MarketWatch",
-        ):
-            if len(body.split()) < _MIN_BODY_WORDS:
-                continue
-            try:
-                pub_date = datetime.strptime(timestamp[:8], "%Y%m%d").date()
-            except Exception:
-                pub_date = start
-            sparse = pub_date.isoformat() < _MW_CONSISTENT_START
-            yield Article(
-                article_id=_stable_article_id(self.source_id, url),
-                source_id=self.source_id,
-                url=url,
-                published_at=pub_date.isoformat() + "T00:00:00Z",
-                retrieved_at=_now_utc_iso(),
-                title=_extract_title(body, fallback="MarketWatch article"),
-                body=body,
-                author=None,
-                section="markets",
-                language="en",
+        if self._max_urls is not None:
+            all_pairs = all_pairs[: self._max_urls]
+            log.info("MarketWatch: capped to %d URLs (max_urls debug param)", len(all_pairs))
+
+        try:
+            for url, timestamp, body in _fetch_parallel(
+                all_pairs,
+                fetched_urls=fetched_urls,
+                checkpoint_path=self._checkpoint_path,
+                progress_label="MarketWatch",
+            ):
+                if len(body.split()) < _MIN_BODY_WORDS:
+                    continue
+                try:
+                    pub_date = datetime.strptime(timestamp[:8], "%Y%m%d").date()
+                except Exception:
+                    pub_date = start
+                sparse = pub_date.isoformat() < _MW_CONSISTENT_START
+                yield Article(
+                    article_id=_stable_article_id(self.source_id, url),
+                    source_id=self.source_id,
+                    url=url,
+                    published_at=pub_date.isoformat() + "T00:00:00Z",
+                    retrieved_at=_now_utc_iso(),
+                    title=_extract_title(body, fallback="MarketWatch article"),
+                    body=body,
+                    author=None,
+                    section="markets",
+                    language="en",
                 tier=4,
                 access="free",
                 retrieval="wayback_cdx",
@@ -461,6 +490,8 @@ class MarketWatchIngestor(Ingestor):
                     "sparse_wayback_coverage": sparse,
                 },
             )
+        finally:
+            _save_url_checkpoint(fetched_urls, self._checkpoint_path)
 
     def fetch_live_rss(self, start: date, end: date) -> Iterator[Article]:
         """Phase 6: fetch recent MarketWatch articles via top-stories RSS."""
