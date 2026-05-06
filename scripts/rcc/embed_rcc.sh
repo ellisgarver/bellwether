@@ -14,12 +14,31 @@
 #
 # Both jobs run in parallel in Phase 3. Cluster job depends on primary only.
 #
-# Submit both simultaneously:
-#   EMBED_PRIMARY=$(sbatch --parsable --export=ROLE=primary scripts/rcc/embed_rcc.sh)
-#   EMBED_COMPARATOR=$(sbatch --parsable --export=ROLE=comparator scripts/rcc/embed_rcc.sh)
+# Full pipeline submission (run from Midway3 login node):
+#   INGEST_INST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
+#   INGEST_JOUR=$(sbatch --parsable --dependency=afterok:$INGEST_INST \
+#                    scripts/rcc/ingest_journalism_rcc.sh)
+#   EMBED_PRIMARY=$(sbatch --parsable \
+#                    --dependency=afterok:$INGEST_JOUR \
+#                    --export=ROLE=primary scripts/rcc/embed_rcc.sh)
+#   EMBED_COMPARATOR=$(sbatch --parsable \
+#                    --dependency=afterok:$INGEST_JOUR \
+#                    --export=ROLE=comparator scripts/rcc/embed_rcc.sh)
 #   sbatch --dependency=afterok:$EMBED_PRIMARY scripts/rcc/cluster_rcc.sh
-#   echo "Primary embed:    $EMBED_PRIMARY"
-#   echo "Comparator embed: $EMBED_COMPARATOR"
+#   echo "Ingest institutional: $INGEST_INST"
+#   echo "Ingest journalism:    $INGEST_JOUR"
+#   echo "Embed primary:        $EMBED_PRIMARY"
+#   echo "Embed comparator:     $EMBED_COMPARATOR"
+#
+# If journalism times out and must be resubmitted:
+#   INGEST_JOUR2=$(sbatch --parsable scripts/rcc/ingest_journalism_rcc.sh)
+#   EMBED_PRIMARY=$(sbatch --parsable \
+#                    --dependency=afterok:$INGEST_JOUR2 \
+#                    --export=ROLE=primary scripts/rcc/embed_rcc.sh)
+#   EMBED_COMPARATOR=$(sbatch --parsable \
+#                    --dependency=afterok:$INGEST_JOUR2 \
+#                    --export=ROLE=comparator scripts/rcc/embed_rcc.sh)
+#   sbatch --dependency=afterok:$EMBED_PRIMARY scripts/rcc/cluster_rcc.sh
 #
 # Resource spec (confirmed 2026-05-04):
 #   Account:   pi-dachxiu

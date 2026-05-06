@@ -1,4 +1,12 @@
 #!/bin/bash
+# DEPRECATED — superseded by ingest_institutional_rcc.sh + ingest_journalism_rcc.sh
+#
+# This monolithic script runs all three sources in a single job with a shared
+# time limit. The two-script split (institutional 2h → journalism 48h) gives
+# accurate time budgets and clean failure isolation. Use the split scripts.
+# See ingest_institutional_rcc.sh for the full pipeline submission block.
+#
+# ---------------------------------------------------------------------------
 # SLURM job script: full-corpus historical ingestion on UChicago RCC (Midway3).
 #
 # Phase 2 semantic corpus (ADR-008, ADR-009):
