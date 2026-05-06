@@ -28,8 +28,10 @@ FOMC minutes = release date. NBER papers = posting date.
 """
 from __future__ import annotations
 
+import json
 import time
 from datetime import date, datetime
+from pathlib import Path
 from typing import Iterator
 from urllib.parse import urljoin, urlparse
 
@@ -37,7 +39,7 @@ import feedparser
 import requests
 import trafilatura
 from bs4 import BeautifulSoup
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_random_exponential
 
 from mnd.ingestion.base import Article, Ingestor, _now_utc_iso, _stable_article_id
 from mnd.ingestion.fed import FederalReserveIngestor
@@ -52,7 +54,7 @@ _HEADERS = {"User-Agent": USER_AGENT}
 _NBER_JEL_PREFIXES = ("E", "F", "G")
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
+@retry(stop=stop_after_attempt(5), wait=wait_random_exponential(multiplier=1, max=30))
 def _get(url: str, *, timeout: float = 30.0) -> requests.Response:
     resp = requests.get(url, headers=_HEADERS, timeout=timeout)
     resp.raise_for_status()
@@ -764,11 +766,18 @@ class InstitutionalIngestor(Ingestor):
     Also delegates to FederalReserveIngestor for Board communications (FOMC,
     speeches, Beige Book). Use this as the single entry point for the full
     Phase 2 semantic corpus ingestion.
+
+    Checkpoint/resume: if checkpoint_path is given, a JSON file is written after
+    each sub-ingestor completes. On restart, completed sub-ingestors are skipped
+    and the JSONL output is opened in append mode by the caller (run_pipeline.py).
+    Partial sub-ingestor runs may produce duplicate records; the filter/dedup
+    stage handles them.
     """
 
     source_id = "institutional"
 
-    def __init__(self) -> None:
+    def __init__(self, checkpoint_path: Path | None = None) -> None:
+        self._checkpoint_path = checkpoint_path
         self._sub_ingestors: list[Ingestor] = [
             FederalReserveIngestor(),
             FedRegionalIngestor(),
@@ -783,13 +792,40 @@ class InstitutionalIngestor(Ingestor):
             PIIEIngestor(),
         ]
 
-    def fetch(self, start: date, end: date) -> Iterator[Article]:
-        for ingestor in self._sub_ingestors:
-            log.info("InstitutionalIngestor: running %s", ingestor.source_id)
+    def _load_checkpoint(self) -> dict:
+        if self._checkpoint_path and self._checkpoint_path.exists():
             try:
-                yield from ingestor.fetch(start, end)
+                return json.loads(self._checkpoint_path.read_text())
             except Exception as exc:
-                log.error("Sub-ingestor %s failed: %s", ingestor.source_id, exc)
+                log.warning("Could not load checkpoint %s: %s — starting fresh", self._checkpoint_path, exc)
+        return {}
+
+    def _save_checkpoint(self, data: dict) -> None:
+        if self._checkpoint_path:
+            self._checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            self._checkpoint_path.write_text(json.dumps(data, indent=2))
+
+    def fetch(self, start: date, end: date) -> Iterator[Article]:
+        checkpoint = self._load_checkpoint()
+        for ingestor in self._sub_ingestors:
+            sid = ingestor.source_id
+            if checkpoint.get(sid, {}).get("status") == "completed":
+                log.info("Checkpoint: skipping %s (already completed, %d articles)",
+                         sid, checkpoint[sid].get("count", 0))
+                continue
+            log.info("InstitutionalIngestor: running %s", sid)
+            count = 0
+            try:
+                for article in ingestor.fetch(start, end):
+                    yield article
+                    count += 1
+                checkpoint[sid] = {"status": "completed", "count": count}
+                self._save_checkpoint(checkpoint)
+                log.info("Checkpoint: %s completed (%d articles)", sid, count)
+            except Exception as exc:
+                log.error("Sub-ingestor %s failed: %s", sid, exc)
+                checkpoint[sid] = {"status": "failed", "error": str(exc)}
+                self._save_checkpoint(checkpoint)
 
 
 # ---------------------------------------------------------------------------
