@@ -1515,9 +1515,39 @@ class InstitutionalIngestor(Ingestor):
     def _load_checkpoint(self) -> dict:
         if self._checkpoint_path and self._checkpoint_path.exists():
             try:
-                return json.loads(self._checkpoint_path.read_text())
+                data = json.loads(self._checkpoint_path.read_text())
             except Exception as exc:
                 log.warning("Could not load checkpoint %s: %s — starting fresh", self._checkpoint_path, exc)
+                return {}
+            # Detect false-completed entries (status=completed, count=0) written by
+            # the pre-fix bug that treated 0-article fetches as successful completions.
+            false_completions = [
+                sid for sid, v in data.items()
+                if v.get("status") == "completed" and v.get("count", 0) == 0
+            ]
+            if false_completions:
+                genuine_completions = [
+                    sid for sid, v in data.items()
+                    if v.get("status") == "completed" and v.get("count", 0) > 0
+                ]
+                if not genuine_completions:
+                    # Entire checkpoint is zero-article completions — nothing was ever
+                    # successfully fetched. Delete and start completely fresh.
+                    log.warning(
+                        "Checkpoint %s has no successful fetches (all count=0); deleting and starting fresh",
+                        self._checkpoint_path,
+                    )
+                    self._checkpoint_path.unlink()
+                    return {}
+                # Some sources genuinely completed; only reset the false ones.
+                log.warning(
+                    "Checkpoint has %d false-completed sources (count=0): %s — marking failed for retry",
+                    len(false_completions), ", ".join(false_completions),
+                )
+                for sid in false_completions:
+                    data[sid] = {"status": "failed", "error": "0 articles on previous run (false completion)"}
+                self._save_checkpoint(data)
+            return data
         return {}
 
     def _save_checkpoint(self, data: dict) -> None:
@@ -1539,9 +1569,14 @@ class InstitutionalIngestor(Ingestor):
                 for article in ingestor.fetch(start, end):
                     yield article
                     count += 1
-                checkpoint[sid] = {"status": "completed", "count": count}
-                self._save_checkpoint(checkpoint)
-                log.info("Checkpoint: %s completed (%d articles)", sid, count)
+                if count > 0:
+                    checkpoint[sid] = {"status": "completed", "count": count}
+                    self._save_checkpoint(checkpoint)
+                    log.info("Checkpoint: %s completed (%d articles)", sid, count)
+                else:
+                    checkpoint[sid] = {"status": "failed", "error": "returned 0 articles"}
+                    self._save_checkpoint(checkpoint)
+                    log.warning("Checkpoint: %s returned 0 articles; marked failed for retry", sid)
             except Exception as exc:
                 log.error("Sub-ingestor %s failed: %s", sid, exc)
                 checkpoint[sid] = {"status": "failed", "error": str(exc)}
