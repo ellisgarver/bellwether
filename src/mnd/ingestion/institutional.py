@@ -1268,7 +1268,7 @@ class VoxEUIngestor(Ingestor):
                     tier=2,
                     document_type="voxeu_column",
                 )
-                time.sleep(1.0)
+                time.sleep(0.5)
 
             # Check if there are more pages
             last_link = soup.select_one("a[title='Go to last page'], .pager__item--last a")

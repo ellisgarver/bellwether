@@ -20,7 +20,7 @@
 #   Partition: caslake
 #   CPUs:      4  (sequential RSS/HTTP fetches; extra cores unused)
 #   RAM:       8 GB
-#   Time:      2 h
+#   Time:      24 h  (VoxEU ~6.5h + Brookings ~6.25h + other sources ~3h; checkpoint/resume if needed)
 #
 # Submit independently:
 #   sbatch scripts/rcc/ingest_institutional_rcc.sh
@@ -59,7 +59,7 @@
 #SBATCH --partition=caslake
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
-#SBATCH --time=02:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=logs/ingest_institutional_rcc_%j.log
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ehgarver@uchicago.edu
