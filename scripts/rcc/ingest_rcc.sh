@@ -1,10 +1,32 @@
 #!/bin/bash
-# DEPRECATED — superseded by ingest_institutional_rcc.sh + ingest_journalism_rcc.sh
+# DEPRECATED — superseded by four separate per-source scripts.
 #
-# This monolithic script runs all three sources in a single job with a shared
-# time limit. The two-script split (institutional 2h → journalism 48h) gives
-# accurate time budgets and clean failure isolation. Use the split scripts.
-# See ingest_institutional_rcc.sh for the full pipeline submission block.
+# This monolithic script combined all sources in a single job and used a 48h
+# time limit that exceeds the caslake QOS wall-time cap (36h).  It is kept
+# for reference only.  Do not submit this script.
+#
+# Use the per-source scripts instead:
+#   ingest_institutional_rcc.sh  — Tiers 1–3 (Fed, IMF, BIS, CBO, NBER, …)  2h
+#   ingest_apnews_rcc.sh         — AP News Wayback CDX                       36h
+#   ingest_marketwatch_rcc.sh    — MarketWatch Wayback CDX                   36h
+#   filter_rcc.sh                — topic filter + dedup (after all ingest)    1h
+#
+# Full pipeline submission block (from Midway3 login node):
+#   INGEST_INST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
+#   INGEST_AP=$(sbatch --parsable --dependency=afterok:$INGEST_INST \
+#                   scripts/rcc/ingest_apnews_rcc.sh)
+#   INGEST_MW=$(sbatch --parsable --dependency=afterok:$INGEST_AP \
+#                   scripts/rcc/ingest_marketwatch_rcc.sh)
+#   FILTER=$(sbatch --parsable --dependency=afterok:$INGEST_MW \
+#                scripts/rcc/filter_rcc.sh)
+#   EMBED_PRIMARY=$(sbatch --parsable --dependency=afterok:$FILTER \
+#                    --export=ROLE=primary scripts/rcc/embed_rcc.sh)
+#   EMBED_COMPARATOR=$(sbatch --parsable --dependency=afterok:$FILTER \
+#                    --export=ROLE=comparator scripts/rcc/embed_rcc.sh)
+#   sbatch --dependency=afterok:$EMBED_PRIMARY scripts/rcc/cluster_rcc.sh
+#
+# See ingest_apnews_rcc.sh for the canonical submission block.
+# ---------------------------------------------------------------------------
 #
 # ---------------------------------------------------------------------------
 # SLURM job script: full-corpus historical ingestion on UChicago RCC (Midway3).

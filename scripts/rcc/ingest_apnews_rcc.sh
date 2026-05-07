@@ -1,31 +1,21 @@
 #!/bin/bash
-# SLURM job script: institutional corpus ingestion on UChicago RCC (Midway3).
+# SLURM job script: AP News corpus ingestion on UChicago RCC (Midway3).
 #
-# Covers Tiers 1–3 (ADR-008):
-#   Tier 1 — Federal Reserve (FOMC, speeches, Beige Book), IMF, BIS, CEA,
-#             CBO, Treasury/OFR
-#   Tier 2 — NBER (JEL E/F/G abstracts + intros), SSRN (abstracts),
-#             VoxEU full posts
-#   Tier 3 — Brookings, PIIE
+# Tier 4 open journalism: AP News wire coverage via Wayback CDX (2010–present).
+# ~50 K article URLs for full 2010–present window; 8 parallel Wayback fetch
+# workers with 0.5 s per-worker delay.
 #
-# All via direct fetch / institutional RSS — sequential, network I/O bound.
-# No GPU or large RAM needed.
-#
-# Checkpoint/resume: if the job times out, re-submitting resumes automatically.
-# Completed sub-sources are recorded in .institutional_checkpoint.json and
-# skipped on restart.
+# Checkpoint/resume: re-submitting after a timeout resumes from the last
+# checkpoint (.apnews_checkpoint.txt) and appends to the existing JSONL.
 #
 # Resource spec:
 #   Account:   pi-dachxiu
-#   Partition: caslake
-#   CPUs:      4  (sequential RSS/HTTP fetches; extra cores unused)
-#   RAM:       8 GB
-#   Time:      2 h
+#   Partition: caslake (36-hour QOS limit — max wall time for this partition)
+#   CPUs:      8   (8 parallel Wayback fetch workers)
+#   RAM:       16 GB
+#   Time:      36 h  (caslake QOS maximum; resume via resubmit if needed)
 #
-# Submit independently:
-#   sbatch scripts/rcc/ingest_institutional_rcc.sh
-#
-# Submit as part of full pipeline (institutional → journalism → embed → cluster):
+# Full pipeline submission block (run from Midway3 login node):
 #   INGEST_INST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
 #   INGEST_AP=$(sbatch --parsable --dependency=afterok:$INGEST_INST \
 #                   scripts/rcc/ingest_apnews_rcc.sh)
@@ -48,19 +38,21 @@
 #   echo "Embed primary:        $EMBED_PRIMARY"
 #   echo "Embed comparator:     $EMBED_COMPARATOR"
 #
+# If AP News times out, resubmit this script (checkpoint preserved):
+#   sbatch --export=START=${START},END=${END} scripts/rcc/ingest_apnews_rcc.sh
+#
 # Custom date range:
-#   sbatch --export=START=2010-01-01,END=2024-12-31 \
-#       scripts/rcc/ingest_institutional_rcc.sh
+#   sbatch --export=START=2010-01-01,END=2024-12-31 scripts/rcc/ingest_apnews_rcc.sh
 #
 # All data output in /scratch/midway3/ehgarver/ — never in PI project folder.
 
-#SBATCH --job-name=mnd-ingest-inst
+#SBATCH --job-name=mnd-ingest-ap
 #SBATCH --account=pi-dachxiu
 #SBATCH --partition=caslake
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
-#SBATCH --time=02:00:00
-#SBATCH --output=logs/ingest_institutional_rcc_%j.log
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=16G
+#SBATCH --time=36:00:00
+#SBATCH --output=logs/ingest_apnews_rcc_%j.log
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ehgarver@uchicago.edu
 
@@ -81,25 +73,25 @@ export KERAS_BACKEND=torch
 START="${START:-2010-01-01}"
 END="${END:-$(date +%Y-%m-%d)}"
 
-echo "===== mnd-ingest-inst ====="
+echo "===== mnd-ingest-ap ====="
 echo "Job ID:  $SLURM_JOB_ID"
 echo "Node:    $(hostname)"
 echo "Window:  $START → $END"
 echo "Started: $(date)"
-echo "==========================="
+echo "=========================="
 
 python scripts/run_pipeline.py ingest \
     --start "$START" \
     --end "$END" \
-    --sources institutional
+    --sources apnews
 
 echo "===== Complete: $(date) ====="
-INST_JSONL="data/raw/articles/institutional_${START}_${END}.jsonl"
-if [[ -f "$INST_JSONL" ]]; then
-    COUNT=$(wc -l < "$INST_JSONL")
-    SIZE=$(du -sh "$INST_JSONL" | cut -f1)
-    echo "Output: $INST_JSONL ($COUNT articles, $SIZE)"
+AP_JSONL="data/raw/articles/apnews_${START}_${END}.jsonl"
+if [[ -f "$AP_JSONL" ]]; then
+    COUNT=$(wc -l < "$AP_JSONL")
+    SIZE=$(du -sh "$AP_JSONL" | cut -f1)
+    echo "Output: $AP_JSONL ($COUNT articles, $SIZE)"
 else
-    echo "ERROR: expected output not found at $INST_JSONL" >&2
+    echo "ERROR: expected output not found at $AP_JSONL" >&2
     exit 1
 fi

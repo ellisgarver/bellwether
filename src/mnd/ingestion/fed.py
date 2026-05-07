@@ -107,7 +107,7 @@ class FederalReserveIngestor(Ingestor):
                 author="FOMC",
                 section="fomc_statement",
                 language="en",
-                tier=3,
+                tier=1,
                 access="free",
                 retrieval="fed_site",
                 word_count=len(body.split()),
@@ -154,7 +154,7 @@ class FederalReserveIngestor(Ingestor):
                 author="FOMC",
                 section="fomc_minutes",
                 language="en",
-                tier=3,
+                tier=1,
                 access="free",
                 retrieval="fed_site",
                 word_count=len(body.split()),
@@ -202,7 +202,7 @@ class FederalReserveIngestor(Ingestor):
                 author="Federal Reserve",
                 section="beige_book",
                 language="en",
-                tier=3,
+                tier=1,
                 access="free",
                 retrieval="fed_site",
                 word_count=len(body.split()),
@@ -210,7 +210,11 @@ class FederalReserveIngestor(Ingestor):
             )
 
     def _fetch_speeches(self, start: date, end: date) -> Iterator[Article]:
-        """Walk Board speech indexes year by year; fall back to RSS on index failure."""
+        """Walk Board speech indexes year by year; fall back to RSS on index failure.
+
+        Page structure: div.eventlist > div.row > (div.eventlist__time > time,
+        div.eventlist__event > p > a).  Date text is MM/DD/YYYY (no datetime attr).
+        """
         for year in range(start.year, end.year + 1):
             index_url = SPEECHES_INDEX.format(year=year)
             try:
@@ -223,13 +227,20 @@ class FederalReserveIngestor(Ingestor):
                 yield from self._fetch_speeches_rss_year(year, start, end)
                 continue
             soup = BeautifulSoup(resp.text, "lxml")
-            for entry in soup.select("div.row"):
+            eventlist = soup.select_one(".eventlist")
+            if not eventlist:
+                log.warning("Speech index %s: .eventlist container not found — trying RSS fallback", index_url)
+                yield from self._fetch_speeches_rss_year(year, start, end)
+                continue
+            for entry in eventlist.select("div.row"):
                 date_node = entry.select_one("time")
-                link_node = entry.select_one("a[href]")
+                # Speech link is inside div.eventlist__event; skip watch-live / other links
+                link_node = entry.select_one("div.eventlist__event a[href]")
                 if not date_node or not link_node:
                     continue
                 try:
-                    speech_date = datetime.fromisoformat(date_node.get("datetime", "")[:10]).date()
+                    # Date text is M/D/YYYY (e.g. "1/10/2023"), no datetime attribute
+                    speech_date = datetime.strptime(date_node.get_text(strip=True), "%m/%d/%Y").date()
                 except Exception:
                     continue
                 if speech_date < start or speech_date > end:
@@ -237,7 +248,8 @@ class FederalReserveIngestor(Ingestor):
                 href = link_node["href"]
                 full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
                 title = link_node.get_text(strip=True)
-                speaker = entry.get_text(" ", strip=True)
+                speaker_el = entry.select_one("p.news__speaker")
+                speaker = speaker_el.get_text(strip=True) if speaker_el else ""
                 try:
                     page = _get(full_url)
                 except Exception as exc:
@@ -257,7 +269,7 @@ class FederalReserveIngestor(Ingestor):
                     author=speaker,
                     section="speech",
                     language="en",
-                    tier=3,
+                    tier=1,
                     access="free",
                     retrieval="fed_site",
                     word_count=len(body.split()),
@@ -309,7 +321,7 @@ class FederalReserveIngestor(Ingestor):
                 author=entry.get("author"),
                 section="speech",
                 language="en",
-                tier=3,
+                tier=1,
                 access="free",
                 retrieval="fed_rss_fallback",
                 word_count=len(body.split()),
