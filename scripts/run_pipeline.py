@@ -72,9 +72,10 @@ def cli(ctx: click.Context) -> None:
         "via Wayback CDX (ADR-008, ADR-009)."
     ),
 )
+@click.option("--output-dir", default=None, help="Output directory for raw JSONL files (overrides config default)")
 @click.pass_context
 def ingest(
-    ctx: click.Context, start: str, end: str, sources: str,
+    ctx: click.Context, start: str, end: str, sources: str, output_dir: str | None,
 ) -> None:
     """Fetch raw articles from configured ingestion sources (ADR-008)."""
     from datetime import date as date_t
@@ -87,7 +88,7 @@ def ingest(
 
     cfg = ctx.obj["cfg"]
     root = project_root()
-    raw_dir = root / cfg["paths"]["raw_articles"]
+    raw_dir = Path(output_dir) if output_dir else root / cfg["paths"]["raw_articles"]
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     start_d = date_t.fromisoformat(start)
@@ -537,6 +538,213 @@ def corpus_composition(
         out_path.parent.mkdir(parents=True, exist_ok=True)
         pivot.to_csv(out_path)
         log.info("Wrote corpus composition CSV → %s", out_path)
+
+
+# ---------------------------------------------------------------------------
+# sample-check
+# ---------------------------------------------------------------------------
+
+# Minimum article count per institutional sub-source when sampling up to
+# --max-per-source articles from a full calendar year.  These are conservative
+# floors; hitting zero for any source with min > 0 indicates a fetch failure.
+_INST_MIN_COUNTS: dict[str, int] = {
+    "fed_board":     5,
+    "fed_regional":  3,
+    "imf":           3,
+    "bis":           3,
+    "cbo":           1,
+    "treasury_ofr":  0,   # sparse; best-effort
+    "nber":          5,
+    "ssrn_finance":  3,
+    "voxeu":         5,
+    "brookings":     2,
+    "piie":          2,
+}
+
+
+@cli.command("sample-check")
+@click.option(
+    "--source", required=True,
+    type=click.Choice(["institutional", "apnews", "marketwatch"]),
+    help="Which source to probe",
+)
+@click.option("--start", default=None, help="Override start date (YYYY-MM-DD)")
+@click.option("--end", default=None, help="Override end date (YYYY-MM-DD)")
+@click.option(
+    "--max-per-source", default=20, show_default=True,
+    help="Max articles fetched per institutional sub-source (limits runtime)",
+)
+@click.option(
+    "--max-urls", default=50, show_default=True,
+    help="Max Wayback URLs to actually fetch for journalism check",
+)
+@click.pass_context
+def sample_check(
+    ctx: click.Context,
+    source: str,
+    start: str | None,
+    end: str | None,
+    max_per_source: int,
+    max_urls: int,
+) -> None:
+    """Connectivity and content-quality probe — run before any RCC submission.
+
+    Institutional: fetches up to --max-per-source articles per sub-source for
+    the given year (default 2024) and reports counts against minimum thresholds.
+
+    Journalism: queries Wayback CDX for URL counts, then fetches up to
+    --max-urls articles in parallel and reports extraction success rate and
+    sample titles.
+    """
+    from datetime import date as date_t
+
+    if source == "institutional":
+        start_d = date_t.fromisoformat(start) if start else date_t(2024, 1, 1)
+        end_d = date_t.fromisoformat(end) if end else date_t(2024, 12, 31)
+        _sample_check_institutional(start_d, end_d, max_per_source)
+    else:
+        start_d = date_t.fromisoformat(start) if start else date_t(2023, 1, 1)
+        end_d = date_t.fromisoformat(end) if end else date_t(2023, 1, 31)
+        _sample_check_journalism(source, start_d, end_d, max_urls)
+
+
+def _sample_check_institutional(
+    start, end, max_per_source: int
+) -> None:
+    from mnd.ingestion.institutional import (
+        BISIngestor, BrookingsIngestor, CBOIngestor,
+        FedRegionalIngestor, IMFIngestor, NBERIngestor,
+        PIIEIngestor, SSRNIngestor, TreasuryOFRIngestor, VoxEUIngestor,
+    )
+    from mnd.ingestion.fed import FederalReserveIngestor
+
+    sub_ingestors = [
+        FederalReserveIngestor(),
+        FedRegionalIngestor(),
+        IMFIngestor(),
+        BISIngestor(),
+        CBOIngestor(),
+        TreasuryOFRIngestor(),
+        NBERIngestor(),
+        SSRNIngestor(),
+        VoxEUIngestor(),
+        BrookingsIngestor(),
+        PIIEIngestor(),
+    ]
+
+    click.echo(f"\n=== Institutional sample-check ({start} → {end}, cap {max_per_source}/source) ===\n")
+    failures = []
+    for ingestor in sub_ingestors:
+        sid = ingestor.source_id
+        min_expected = _INST_MIN_COUNTS.get(sid, 0)
+        articles = []
+        try:
+            for art in ingestor.fetch(start, end):
+                articles.append(art)
+                if len(articles) >= max_per_source:
+                    break
+        except Exception as exc:
+            click.echo(f"  {sid:20s}  ERROR: {exc}", err=True)
+            failures.append(sid)
+            continue
+
+        count = len(articles)
+        status = "OK" if count >= min_expected else ("WARN (0 articles)" if count == 0 else "WARN (below min)")
+        mark = "✓" if count >= min_expected else "✗"
+        click.echo(f"  {mark} {sid:20s}  {count:3d} articles (min expected: {min_expected}) [{status}]")
+
+        if articles:
+            for art in articles[:3]:
+                snippet = (art.body or "")[:120].replace("\n", " ")
+                click.echo(f"      title: {art.title}")
+                click.echo(f"      body:  {snippet}…")
+        click.echo()
+
+        if count < min_expected:
+            failures.append(sid)
+
+    click.echo("─" * 60)
+    if failures:
+        click.echo(f"FAIL — {len(failures)} source(s) below threshold: {', '.join(failures)}", err=True)
+        sys.exit(1)
+    else:
+        click.echo("PASS — all sources at or above minimum expected counts")
+
+
+def _sample_check_journalism(
+    source: str, start, end, max_urls: int
+) -> None:
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from mnd.ingestion.apnews import (
+        _cdx_query, _worker_fetch, _AP_CDX_PATTERNS, _MW_CDX_PATTERNS,
+    )
+
+    patterns = _AP_CDX_PATTERNS if source == "apnews" else _MW_CDX_PATTERNS
+    domain = "apnews" if source == "apnews" else "marketwatch"
+
+    click.echo(f"\n=== {source} sample-check ({start} → {end}) ===\n")
+
+    # Step 1: CDX discovery
+    all_pairs: list[tuple[str, str]] = []
+    for pat in patterns:
+        pairs = _cdx_query(pat, start, end, domain=domain)
+        click.echo(f"  CDX {pat}: {len(pairs)} URLs")
+        all_pairs.extend(pairs)
+
+    # Deduplicate by URL
+    seen: set[str] = set()
+    unique_pairs = []
+    for url, ts in all_pairs:
+        if url not in seen:
+            seen.add(url)
+            unique_pairs.append((url, ts))
+
+    click.echo(f"\n  Total unique CDX URLs: {len(unique_pairs)}")
+    if not unique_pairs:
+        click.echo("  FAIL — no CDX URLs found", err=True)
+        sys.exit(1)
+
+    # Step 2: fetch up to max_urls in parallel
+    to_fetch = unique_pairs[:max_urls]
+    click.echo(f"  Fetching {len(to_fetch)} URLs (8 parallel workers) …\n")
+
+    success, fail = 0, 0
+    samples: list[str] = []
+    t0 = time.monotonic()
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_worker_fetch, url, ts): url for url, ts in to_fetch}
+        for future in as_completed(futures):
+            try:
+                url, _ts, body = future.result()
+            except Exception:
+                body = None
+            if body and len(body.split()) >= 50:
+                success += 1
+                if len(samples) < 3:
+                    first_line = body.split("\n")[0][:120]
+                    samples.append(f"    [{success}] {futures[future]}\n        {first_line}…")
+            else:
+                fail += 1
+    elapsed = time.monotonic() - t0
+
+    rate = 100.0 * success / len(to_fetch) if to_fetch else 0
+    click.echo(f"  Success: {success}/{len(to_fetch)}  ({rate:.0f}%)  |  Failed/empty: {fail}")
+    click.echo(f"  Elapsed: {elapsed:.1f}s")
+    click.echo("\n  Sample articles:")
+    for s in samples:
+        click.echo(s)
+    click.echo()
+
+    if source == "marketwatch" and start.year < 2015:
+        click.echo(f"  Note: pre-2015 Wayback CDX coverage is sparse for MarketWatch — low counts expected")
+
+    click.echo("─" * 60)
+    if rate < 20:
+        click.echo(f"  FAIL — extraction rate {rate:.0f}% is below 20% threshold", err=True)
+        sys.exit(1)
+    else:
+        click.echo(f"  PASS — extraction rate {rate:.0f}%")
 
 
 # ---------------------------------------------------------------------------

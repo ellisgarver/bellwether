@@ -16,27 +16,39 @@
 #
 # Full pipeline submission (run from Midway3 login node):
 #   INGEST_INST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
-#   INGEST_JOUR=$(sbatch --parsable --dependency=afterok:$INGEST_INST \
-#                    scripts/rcc/ingest_journalism_rcc.sh)
+#   INGEST_AP=$(sbatch --parsable --dependency=afterok:$INGEST_INST \
+#                   scripts/rcc/ingest_apnews_rcc.sh)
+#   INGEST_MW=$(sbatch --parsable --dependency=afterok:$INGEST_AP \
+#                   scripts/rcc/ingest_marketwatch_rcc.sh)
+#   FILTER=$(sbatch --parsable \
+#                --dependency=afterok:$INGEST_MW \
+#                scripts/rcc/filter_rcc.sh)
 #   EMBED_PRIMARY=$(sbatch --parsable \
-#                    --dependency=afterok:$INGEST_JOUR \
+#                    --dependency=afterok:$FILTER \
 #                    --export=ROLE=primary scripts/rcc/embed_rcc.sh)
 #   EMBED_COMPARATOR=$(sbatch --parsable \
-#                    --dependency=afterok:$INGEST_JOUR \
+#                    --dependency=afterok:$FILTER \
 #                    --export=ROLE=comparator scripts/rcc/embed_rcc.sh)
 #   sbatch --dependency=afterok:$EMBED_PRIMARY scripts/rcc/cluster_rcc.sh
 #   echo "Ingest institutional: $INGEST_INST"
-#   echo "Ingest journalism:    $INGEST_JOUR"
+#   echo "Ingest AP News:       $INGEST_AP"
+#   echo "Ingest MarketWatch:   $INGEST_MW"
+#   echo "Filter:               $FILTER"
 #   echo "Embed primary:        $EMBED_PRIMARY"
 #   echo "Embed comparator:     $EMBED_COMPARATOR"
 #
-# If journalism times out and must be resubmitted:
-#   INGEST_JOUR2=$(sbatch --parsable scripts/rcc/ingest_journalism_rcc.sh)
+# If a journalism job times out, resubmit just that job (checkpoint preserved):
+#   INGEST_AP2=$(sbatch --parsable scripts/rcc/ingest_apnews_rcc.sh)
+#   INGEST_MW2=$(sbatch --parsable --dependency=afterok:$INGEST_AP2 \
+#                   scripts/rcc/ingest_marketwatch_rcc.sh)
+#   FILTER2=$(sbatch --parsable \
+#                --dependency=afterok:$INGEST_MW2 \
+#                scripts/rcc/filter_rcc.sh)
 #   EMBED_PRIMARY=$(sbatch --parsable \
-#                    --dependency=afterok:$INGEST_JOUR2 \
+#                    --dependency=afterok:$FILTER2 \
 #                    --export=ROLE=primary scripts/rcc/embed_rcc.sh)
 #   EMBED_COMPARATOR=$(sbatch --parsable \
-#                    --dependency=afterok:$INGEST_JOUR2 \
+#                    --dependency=afterok:$FILTER2 \
 #                    --export=ROLE=comparator scripts/rcc/embed_rcc.sh)
 #   sbatch --dependency=afterok:$EMBED_PRIMARY scripts/rcc/cluster_rcc.sh
 #
@@ -79,6 +91,7 @@ cd "$REPO_ROOT"
 mkdir -p logs data/processed
 
 module load python/anaconda-2023.09
+source /software/python-anaconda-2023.09-el8-x86_64/etc/profile.d/conda.sh
 conda activate mnd
 
 export USE_TF=0

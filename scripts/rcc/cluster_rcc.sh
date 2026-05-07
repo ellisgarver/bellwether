@@ -46,6 +46,7 @@ cd "$REPO_ROOT"
 mkdir -p logs data/processed
 
 module load python/anaconda-2023.09
+source /software/python-anaconda-2023.09-el8-x86_64/etc/profile.d/conda.sh
 conda activate mnd
 
 export USE_TF=0
