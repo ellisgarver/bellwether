@@ -319,90 +319,130 @@ def _wp_post_to_article(
 
 
 class IMFIngestor(Ingestor):
-    """IMF: working papers (RSS), IMF Blog (RSS), WEO/GFSR narrative summaries.
+    """IMF WEO and GFSR flagship overview pages (2010-present).
 
-    WEO and GFSR full texts are large PDFs — we fetch only the HTML landing
-    page text (Overview / Chapter 1 excerpts) which captures the narrative
-    framing without pulling a 200-page PDF.
+    The IMF website is fully JS-rendered and blocks custom user-agent strings.
+    RSS feeds are defunct post-2024 redesign. WP/Blog coverage requires
+    university-IP access (RCC); WEO/GFSR are fetched via a hardcoded URL
+    table (verified 2026-05-07) since index pages yield no parseable links.
+
+    Each WEO/GFSR page yields ~200-300 words of summary text via trafilatura
+    (the full PDF is not fetched).
     """
 
     source_id = "imf"
 
-    _FEEDS = [
-        ("https://www.imf.org/en/Publications/WP/rss", "working_paper"),
-        ("https://www.imf.org/en/Blogs/rss", "imf_blog"),
+    # IMF blocks "MacroNarrativeDynamics/..." UA; plain requests UA returns 200.
+    _IMF_HEADERS: dict = {}
+
+    # Verified WEO issue URLs (2010-2024). Older editions use 2016-12-31 as
+    # URL date; actual pub date is parsed from the slug title.
+    _WEO_PATHS = [
+        ("/en/Publications/WEO/Issues/2024/10/22/world-economic-outlook-october-2024-policy-pivot-rising-threats-55033", "2024-10-22"),
+        ("/en/Publications/WEO/Issues/2024/04/16/world-economic-outlook-april-2024-steady-but-slow-resilience-amid-divergence-54030", "2024-04-16"),
+        ("/en/Publications/WEO/Issues/2023/10/10/world-economic-outlook-october-2023-navigating-global-divergences-53197", "2023-10-10"),
+        ("/en/Publications/WEO/Issues/2023/04/11/world-economic-outlook-april-2023-a-rocky-recovery-52317", "2023-04-11"),
+        ("/en/Publications/WEO/Issues/2022/10/11/world-economic-outlook-october-2022-countering-the-cost-of-living-crisis-50372", "2022-10-11"),
+        ("/en/Publications/WEO/Issues/2022/04/19/world-economic-outlook-april-2022-war-sets-back-the-global-recovery-50501", "2022-04-19"),
+        ("/en/Publications/WEO/Issues/2021/10/12/world-economic-outlook-october-2021-recovery-during-a-pandemic-50570", "2021-10-12"),
+        ("/en/Publications/WEO/Issues/2021/04/06/world-economic-outlook-april-2021-managing-divergent-recoveries-50219", "2021-04-06"),
+        ("/en/Publications/WEO/Issues/2020/10/13/world-economic-outlook-october-2020-a-long-and-difficult-ascent-49722", "2020-10-13"),
+        ("/en/Publications/WEO/Issues/2020/04/14/world-economic-outlook-april-2020-the-great-lockdown-49306", "2020-04-14"),
+        ("/en/Publications/WEO/Issues/2019/10/15/world-economic-outlook-october-2019-global-manufacturing-downturn-rising-trade-barriers-48306", "2019-10-15"),
+        ("/en/Publications/WEO/Issues/2019/04/02/world-economic-outlook-april-2019-growth-slowdown-precarious-recovery-46809", "2019-04-02"),
+        ("/en/Publications/WEO/Issues/2018/09/24/world-economic-outlook-october-2018-challenges-to-steady-growth-45540", "2018-09-24"),
+        ("/en/Publications/WEO/Issues/2018/04/02/world-economic-outlook-april-2018-cyclical-upswing-structural-change-45119", "2018-04-02"),
+        ("/en/Publications/WEO/Issues/2017/09/19/world-economic-outlook-october-2017-seeking-sustainable-growth-short-term-recovery-44594", "2017-09-19"),
+        ("/en/Publications/WEO/Issues/2017/04/07/world-economic-outlook-april-2017-gaining-momentum-44464", "2017-04-07"),
+        ("/en/Publications/WEO/Issues/2016/10/04/world-economic-outlook-october-2016-subdued-demand-symptoms-and-remedies-44084", "2016-10-04"),
+        ("/en/Publications/WEO/Issues/2016/04/06/world-economic-outlook-april-2016-too-slow-for-too-long-43693", "2016-04-06"),
+        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-October-2015-Adjusting-to-Lower-Commodity-Prices-43234", "2015-10-01"),
+        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-April-2015-Uneven-Growth-Short-and-Long-Term-Factors-43011", "2015-04-01"),
+        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-October-2014-Legacies-Clouds-Uncertainties-42082", "2014-10-01"),
+        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-April-2014-Recovery-Strengthens-Remains-Uneven-41631", "2014-04-01"),
+        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-October-2013-Transitions-and-Tensions-41218", "2013-10-01"),
+        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-April-2013-Hopes-Realities-Risks-40834", "2013-04-01"),
+        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-October-2012-Coping-with-High-Debt-and-Sluggish-Growth-40557", "2012-10-01"),
+        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-April-2012-Growth-Resuming-Dangers-Remain-40210", "2012-04-01"),
+        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-September-2011-Slowing-Growth-Rising-Risks-39839", "2011-09-01"),
+        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-April-2011-Tensions-from-the-Two-Speed-Recovery-39562", "2011-04-01"),
+        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-October-2010-Recovery-Risk-and-Rebalancing-39113", "2010-10-01"),
+        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-April-2010-Rebalancing-Growth-40086", "2010-04-01"),
     ]
 
-    # WEO and GFSR index pages — extract chapter links dynamically
-    _WEO_INDEX = "https://www.imf.org/en/Publications/WEO"
-    _GFSR_INDEX = "https://www.imf.org/en/Publications/GFSR"
+    # Verified GFSR issue URLs (2010-2024).
+    _GFSR_PATHS = [
+        ("/en/Publications/GFSR/Issues/2024/10/22/global-financial-stability-report-october-2024-the-great-funding-transformation-55092", "2024-10-22"),
+        ("/en/Publications/GFSR/Issues/2024/04/17/global-financial-stability-report-april-2024-the-last-mile-financial-vulnerabilities-54174", "2024-04-17"),
+        ("/en/Publications/GFSR/Issues/2023/10/11/global-financial-stability-report-october-2023-financial-and-climate-policies-for-a-high-53510", "2023-10-11"),
+        ("/en/Publications/GFSR/Issues/2023/04/05/global-financial-stability-report-april-2023-vulnerabilities-in-a-higher-for-longer-52502", "2023-04-05"),
+        ("/en/Publications/GFSR/Issues/2022/10/11/global-financial-stability-report-october-2022-navigating-the-high-inflation-environment-51318", "2022-10-11"),
+        ("/en/Publications/GFSR/Issues/2022/04/19/global-financial-stability-report-april-2022-shockwaves-from-the-war-in-ukraine-test-the-50786", "2022-04-19"),
+        ("/en/Publications/GFSR/Issues/2021/10/13/global-financial-stability-report-october-2021-covid-19-crypto-and-climate-navigating-50823", "2021-10-13"),
+        ("/en/Publications/GFSR/Issues/2021/04/06/global-financial-stability-report-april-2021-preempting-a-legacy-of-vulnerabilities-50057", "2021-04-06"),
+        ("/en/Publications/GFSR/Issues/2020/10/13/global-financial-stability-report-october-2020-bridge-to-recovery-49753", "2020-10-13"),
+        ("/en/Publications/GFSR/Issues/2020/04/14/global-financial-stability-report-april-2020-markets-in-the-time-of-covid-19-49020", "2020-04-14"),
+        ("/en/Publications/GFSR/Issues/2019/10/16/global-financial-stability-report-october-2019-lower-for-longer-48763", "2019-10-16"),
+        ("/en/Publications/GFSR/Issues/2019/04/01/global-financial-stability-report-april-2019-vulnerabilities-in-a-maturing-credit-cycle-46843", "2019-04-01"),
+        ("/en/Publications/GFSR/Issues/2018/09/26/global-financial-stability-report-october-2018-a-decade-after-the-global-financial-crisis-45710", "2018-09-26"),
+        ("/en/Publications/GFSR/Issues/2018/04/02/global-financial-stability-report-april-2018-a-bumpy-road-ahead-45843", "2018-04-02"),
+        ("/en/Publications/GFSR/Issues/2017/09/27/global-financial-stability-report-october-2017-is-growth-at-risk-44419", "2017-09-27"),
+        ("/en/Publications/GFSR/Issues/2017/04/07/global-financial-stability-report-april-2017-getting-the-policy-mix-right-44501", "2017-04-07"),
+        ("/en/Publications/GFSR/Issues/2016/10/05/global-financial-stability-report-october-2016-fostering-stability-in-a-low-growth-low-44018", "2016-10-05"),
+        ("/en/Publications/GFSR/Issues/2016/04/11/global-financial-stability-report-april-2016-potent-policies-for-a-successful-43839", "2016-04-11"),
+        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-October-2015-Vulnerabilities-Legacies-and-Policy-43350", "2015-10-01"),
+        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-April-2015-Navigating-Monetary-Policy-Challenges-42120", "2015-04-01"),
+        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-October-2014-Risk-Taking-Liquidity-and-Shadow-Banking-Curbing-Excess-While-Promoting-Growth-41718", "2014-10-01"),
+        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-April-2014-Moving-from-Liquidity-to-Growth-Driven-Markets-41244", "2014-04-01"),
+        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-October-2013-Transitions-Challenges-to-Growth-41167", "2013-10-01"),
+        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-April-2013-Old-Risks-New-Challenges-40768", "2013-04-01"),
+        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-October-2012-Restoring-Confidence-and-Progressing-on-Reforms-40567", "2012-10-01"),
+        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-April-2012-The-Quest-for-Lasting-Stability-40583", "2012-04-01"),
+        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-September-2011-Grappling-with-Crisis-Legacies-39857", "2011-09-01"),
+        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-April-2011-Durable-Financial-Stability-39567", "2011-04-01"),
+        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-October-2010-Sovereigns-Funding-and-Systemic-Liquidity-39107", "2010-10-01"),
+        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-April-2010-Meeting-New-Challenges-to-Stability-and-Building-a-Safer-System-40082", "2010-04-01"),
+    ]
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
-        yield from self._fetch_feeds(start, end)
-        yield from self._fetch_flagship_overviews(start, end, self._WEO_INDEX, "weo")
-        yield from self._fetch_flagship_overviews(start, end, self._GFSR_INDEX, "gfsr")
+        yield from self._fetch_flagships(start, end, self._WEO_PATHS, "weo")
+        yield from self._fetch_flagships(start, end, self._GFSR_PATHS, "gfsr")
 
-    def _fetch_feeds(self, start: date, end: date) -> Iterator[Article]:
-        for feed_url, doc_type in self._FEEDS:
-            for entry in _parse_rss(feed_url):
-                pub_date = _entry_date(entry)
-                if not pub_date or pub_date < start or pub_date > end:
-                    continue
-                url = entry.get("link", "")
-                if not url:
-                    continue
-                title = entry.get("title", "IMF publication")
-                # Use summary as body if full text unavailable; otherwise fetch
-                summary = entry.get("summary", "")
-                body = _extract_body(url) or summary
-                if not body or len(body.split()) < 30:
-                    continue
-                yield _make_article(
-                    source_id=self.source_id,
-                    url=url,
-                    published_at=pub_date.isoformat() + "T00:00:00Z",
-                    title=title,
-                    body=body,
-                    author=entry.get("author"),
-                    section=doc_type,
-                    tier=1,
-                    document_type=doc_type,
-                )
-                time.sleep(0.5)
-
-    def _fetch_flagship_overviews(
-        self, start: date, end: date, index_url: str, doc_type: str
+    def _fetch_flagships(
+        self, start: date, end: date, path_table: list, doc_type: str
     ) -> Iterator[Article]:
-        """Scrape IMF flagship publication index and fetch HTML overview pages."""
-        try:
-            resp = _get(index_url)
-        except Exception as exc:
-            log.warning("IMF %s index fetch failed: %s", doc_type.upper(), exc)
-            return
-        soup = BeautifulSoup(resp.text, "lxml")
-        for link in soup.find_all("a", href=True):
-            href = link["href"]
-            # Overview/executive-summary links contain year and edition indicators
-            if not any(kw in href.lower() for kw in ["overview", "executive-summary", "chapter-1"]):
-                continue
-            full_url = urljoin("https://www.imf.org", href)
-            # Try to parse year from URL
+        base = "https://www.imf.org"
+        seen: set[str] = set()
+        for path, pub_date_str in path_table:
             try:
-                year_str = next(
-                    p for p in urlparse(full_url).path.split("/") if len(p) == 4 and p.isdigit()
-                )
-                pub_date = date(int(year_str), 1, 1)
-            except StopIteration:
+                pub_date = date.fromisoformat(pub_date_str)
+            except ValueError:
                 continue
-            if pub_date.year < start.year or pub_date.year > end.year:
+            if pub_date < start or pub_date > end:
                 continue
-            body = _extract_body(full_url, min_words=100)
-            if not body:
+            url = base + path
+            if url in seen:
                 continue
-            title = link.get_text(strip=True) or f"IMF {doc_type.upper()} {year_str} Overview"
+            seen.add(url)
+            try:
+                resp = requests.get(url, headers=self._IMF_HEADERS, timeout=20.0)
+                resp.raise_for_status()
+            except Exception as exc:
+                log.debug("IMF %s fetch failed %s: %s", doc_type.upper(), url, exc)
+                continue
+            body = trafilatura.extract(resp.text, include_comments=False, include_tables=False)
+            meta = trafilatura.extract_metadata(resp.text)
+            title = (meta.title or "") if meta else ""
+            # IMF returns 200+404 HTML for rate-limited or non-existent pages
+            if title == "404" or not title:
+                log.debug("IMF %s skipping 404 response: %s", doc_type.upper(), url)
+                continue
+            if not body or len(body.split()) < 50:
+                log.debug("IMF %s body too short (%d words): %s", doc_type, len(body.split()) if body else 0, url)
+                continue
             yield _make_article(
                 source_id=self.source_id,
-                url=full_url,
+                url=url,
                 published_at=pub_date.isoformat() + "T00:00:00Z",
                 title=title,
                 body=body,
@@ -841,6 +881,9 @@ class TreasuryOFRIngestor(Ingestor):
         yield from self._scrape_ofr_index(self._OFR_BRIEFS, "ofr_brief", start, end)
         yield from self._scrape_fsoc(start, end)
 
+    # OFR publication URL pattern: /working-papers/YYYY/MM/DD/slug or /briefs/YYYY/MM/DD/slug
+    _OFR_DATE_RE = re.compile(r"/(?:working-papers|briefs)/(\d{4})/(\d{2})/(\d{2})/")
+
     def _scrape_ofr_index(
         self, index_url: str, doc_type: str, start: date, end: date
     ) -> Iterator[Article]:
@@ -850,18 +893,23 @@ class TreasuryOFRIngestor(Ingestor):
             log.warning("OFR index fetch failed %s: %s", index_url, exc)
             return
         soup = BeautifulSoup(resp.text, "lxml")
-        for entry in soup.select("li, article, .publication-entry, .views-row"):
-            link = entry.find("a", href=True)
-            if not link:
-                continue
+        seen: set[str] = set()
+        for link in soup.find_all("a", href=True):
             href = link["href"]
-            full_url = urljoin("https://www.financialresearch.gov", href)
-            title = link.get_text(strip=True)
-            # Try to extract year from title or nearby text
-            text_context = entry.get_text(" ", strip=True)
-            pub_date = _parse_year_from_text(text_context, start, end)
-            if not pub_date:
+            m = self._OFR_DATE_RE.search(href)
+            if not m:
                 continue
+            try:
+                pub_date = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except ValueError:
+                continue
+            if pub_date < start or pub_date > end:
+                continue
+            full_url = urljoin("https://www.financialresearch.gov", href)
+            if full_url in seen:
+                continue
+            seen.add(full_url)
+            title = link.get_text(strip=True)
             body = _extract_body(full_url, min_words=50)
             if not body:
                 continue
@@ -879,36 +927,11 @@ class TreasuryOFRIngestor(Ingestor):
             time.sleep(1.0)
 
     def _scrape_fsoc(self, start: date, end: date) -> Iterator[Article]:
-        try:
-            resp = _get(self._FSOC_REPORTS)
-        except Exception as exc:
-            log.warning("FSOC reports fetch failed: %s", exc)
-            return
-        soup = BeautifulSoup(resp.text, "lxml")
-        for link in soup.find_all("a", href=True):
-            href = link["href"]
-            if "annual" not in href.lower() and "annual" not in link.get_text().lower():
-                continue
-            full_url = urljoin("https://home.treasury.gov", href)
-            title = link.get_text(strip=True)
-            pub_date = _parse_year_from_text(title + " " + href, start, end)
-            if not pub_date:
-                continue
-            body = _extract_body(full_url, min_words=50)
-            if not body:
-                continue
-            yield _make_article(
-                source_id=self.source_id,
-                url=full_url,
-                published_at=pub_date.isoformat() + "T00:00:00Z",
-                title=title or "FSOC Annual Report",
-                body=body,
-                author="FSOC",
-                section="fsoc_annual_report",
-                tier=1,
-                document_type="fsoc_annual_report",
-            )
-            time.sleep(1.0)
+        # FSOC Annual Reports are PDF-only — no extractable HTML body.
+        # Skip silently; they are documented as a corpus limitation.
+        log.debug("FSOC Annual Reports are PDF-only; skipping for text corpus")
+        return
+        yield  # make this a generator
 
 
 # ---------------------------------------------------------------------------
