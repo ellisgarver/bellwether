@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterator
 from urllib.parse import urlparse
@@ -141,72 +141,61 @@ def _is_article_url(url: str, *, domain: str = "apnews") -> bool:
     return False
 
 
-_CDX_PAGE_SIZE = 5000  # rows per CDX page; >5000 triggers 503 on high-volume domains
+_CDX_PAGE_SIZE = 5000  # rows per CDX request; showResumeKey triggers 503 on IA servers
 
 
 def _cdx_query(pattern: str, start: date, end: date, *, domain: str = "apnews") -> list[tuple[str, str]]:
     """Return deduplicated (url, timestamp) pairs from Wayback CDX for a URL prefix.
 
-    Uses paginated requests (showResumeKey) to avoid 503 on high-volume URL prefixes
-    like apnews.com/article/ or www.marketwatch.com/story/.
+    Chunks the date range into 7-day windows to keep each CDX request small.
+    showResumeKey triggers 503 on Internet Archive servers even when regular
+    CDX queries succeed, so we avoid it and use date-range chunking instead.
     """
-    base_params = {
-        "url": pattern,
-        "matchType": "prefix",
-        "output": "json",
-        "fl": "original,timestamp,statuscode",
-        "filter": "statuscode:200",
-        "from": start.strftime("%Y%m%d"),
-        "to": end.strftime("%Y%m%d"),
-        "collapse": "urlkey",
-        "limit": _CDX_PAGE_SIZE,
-        "showResumeKey": "true",
-    }
-
     seen: set[str] = set()
     result: list[tuple[str, str]] = []
-    resume_key: str | None = None
-    page = 0
 
-    while True:
-        params = dict(base_params)
-        if resume_key:
-            params["resumeKey"] = resume_key
-
+    chunk_start = start
+    while chunk_start < end:
+        chunk_end = min(chunk_start + timedelta(days=7), end)
+        params = {
+            "url": pattern,
+            "matchType": "prefix",
+            "output": "json",
+            "fl": "original,timestamp,statuscode",
+            "filter": "statuscode:200",
+            "from": chunk_start.strftime("%Y%m%d"),
+            "to": chunk_end.strftime("%Y%m%d"),
+            "collapse": "urlkey",
+            "limit": _CDX_PAGE_SIZE,
+        }
         try:
             resp = _cdx_get(params)
             resp.raise_for_status()
             rows = resp.json()
         except Exception as exc:
-            log.warning("CDX query failed for %s: %s", pattern, exc)
-            break
+            log.warning("CDX query failed for %s [%s → %s]: %s", pattern, chunk_start, chunk_end, exc)
+            chunk_start = chunk_end
+            continue
 
-        if not rows:
-            break
+        if rows:
+            data_rows = rows[1:] if isinstance(rows[0], list) and rows[0][0] == "original" else rows
+            chunk_count = 0
+            for row in data_rows:
+                if len(row) < 3:
+                    continue
+                url, ts, sc = row[0], row[1], row[2]
+                if sc == "200" and _is_article_url(url, domain=domain) and url not in seen:
+                    seen.add(url)
+                    result.append((url, ts))
+                    chunk_count += 1
+            if chunk_count >= _CDX_PAGE_SIZE:
+                log.warning(
+                    "CDX chunk %s [%s → %s] hit limit=%d; some URLs may be missed",
+                    pattern, chunk_start, chunk_end, _CDX_PAGE_SIZE,
+                )
 
-        # Strip header row on first page
-        data_rows = rows[1:] if page == 0 and rows and rows[0][0] == "original" else rows
-
-        # The CDX appends the resume key as the last row when showResumeKey=true.
-        # It is a 1-element list whose value starts with a space character.
-        resume_key = None
-        if data_rows and isinstance(data_rows[-1], list) and len(data_rows[-1]) == 1:
-            resume_key = data_rows[-1][0].strip()
-            data_rows = data_rows[:-1]
-
-        for row in data_rows:
-            if len(row) < 3:
-                continue
-            url, ts, sc = row[0], row[1], row[2]
-            if sc == "200" and _is_article_url(url, domain=domain) and url not in seen:
-                seen.add(url)
-                result.append((url, ts))
-
-        page += 1
-        if not resume_key or len(data_rows) < _CDX_PAGE_SIZE:
-            break
-
-        time.sleep(1.0)  # polite pause between CDX pages
+        chunk_start = chunk_end
+        time.sleep(0.5)
 
     return result
 
