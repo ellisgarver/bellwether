@@ -141,9 +141,16 @@ def _is_article_url(url: str, *, domain: str = "apnews") -> bool:
     return False
 
 
+_CDX_PAGE_SIZE = 5000  # rows per CDX page; >5000 triggers 503 on high-volume domains
+
+
 def _cdx_query(pattern: str, start: date, end: date, *, domain: str = "apnews") -> list[tuple[str, str]]:
-    """Return deduplicated (url, timestamp) pairs from Wayback CDX for a URL prefix."""
-    params = {
+    """Return deduplicated (url, timestamp) pairs from Wayback CDX for a URL prefix.
+
+    Uses paginated requests (showResumeKey) to avoid 503 on high-volume URL prefixes
+    like apnews.com/article/ or www.marketwatch.com/story/.
+    """
+    base_params = {
         "url": pattern,
         "matchType": "prefix",
         "output": "json",
@@ -152,31 +159,56 @@ def _cdx_query(pattern: str, start: date, end: date, *, domain: str = "apnews") 
         "from": start.strftime("%Y%m%d"),
         "to": end.strftime("%Y%m%d"),
         "collapse": "urlkey",
-        "limit": 50000,
+        "limit": _CDX_PAGE_SIZE,
+        "showResumeKey": "true",
     }
-    try:
-        resp = _cdx_get(params)
-        resp.raise_for_status()
-        rows = resp.json()
-        if not rows or len(rows) < 2:
-            return []
-        # First row is header ["original","timestamp","statuscode"]
-        pairs = []
-        for row in rows[1:]:
+
+    seen: set[str] = set()
+    result: list[tuple[str, str]] = []
+    resume_key: str | None = None
+    page = 0
+
+    while True:
+        params = dict(base_params)
+        if resume_key:
+            params["resumeKey"] = resume_key
+
+        try:
+            resp = _cdx_get(params)
+            resp.raise_for_status()
+            rows = resp.json()
+        except Exception as exc:
+            log.warning("CDX query failed for %s: %s", pattern, exc)
+            break
+
+        if not rows:
+            break
+
+        # Strip header row on first page
+        data_rows = rows[1:] if page == 0 and rows and rows[0][0] == "original" else rows
+
+        # The CDX appends the resume key as the last row when showResumeKey=true.
+        # It is a 1-element list whose value starts with a space character.
+        resume_key = None
+        if data_rows and isinstance(data_rows[-1], list) and len(data_rows[-1]) == 1:
+            resume_key = data_rows[-1][0].strip()
+            data_rows = data_rows[:-1]
+
+        for row in data_rows:
+            if len(row) < 3:
+                continue
             url, ts, sc = row[0], row[1], row[2]
-            if sc == "200" and _is_article_url(url, domain=domain):
-                pairs.append((url, ts))
-        # Deduplicate by URL, keeping first (earliest) timestamp
-        seen: set[str] = set()
-        result = []
-        for url, ts in pairs:
-            if url not in seen:
+            if sc == "200" and _is_article_url(url, domain=domain) and url not in seen:
                 seen.add(url)
                 result.append((url, ts))
-        return result
-    except Exception as exc:
-        log.warning("CDX query failed for %s: %s", pattern, exc)
-        return []
+
+        page += 1
+        if not resume_key or len(data_rows) < _CDX_PAGE_SIZE:
+            break
+
+        time.sleep(1.0)  # polite pause between CDX pages
+
+    return result
 
 
 def _fetch_archived(url: str, timestamp: str) -> str | None:
