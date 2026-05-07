@@ -214,7 +214,7 @@ def _wp_rest_fetch(
     start: date,
     end: date,
     *,
-    extra_fields: str = "link,date,title,excerpt",
+    extra_fields: str = "link,date,title,excerpt,content",
 ) -> Iterator[dict]:
     """Yield raw post dicts from a WordPress REST API for the given date range."""
     page = 1
@@ -252,6 +252,15 @@ def _wp_rest_fetch(
         time.sleep(0.5)
 
 
+def _wp_html_to_text(rendered: str) -> str:
+    """Strip HTML tags from a WP REST rendered field. Avoids BS4 filename warning on plain text."""
+    if not rendered:
+        return ""
+    if "<" not in rendered:
+        return rendered.strip()
+    return BeautifulSoup(rendered, "lxml").get_text(strip=True)
+
+
 def _wp_post_to_article(
     post: dict,
     *,
@@ -277,25 +286,32 @@ def _wp_post_to_article(
         return None
 
     title_raw = post.get("title", {})
-    title = BeautifulSoup(
-        title_raw.get("rendered", "") if isinstance(title_raw, dict) else str(title_raw),
-        "lxml",
-    ).get_text(strip=True)
+    title = _wp_html_to_text(
+        title_raw.get("rendered", "") if isinstance(title_raw, dict) else str(title_raw)
+    )
 
     excerpt_raw = post.get("excerpt", {})
-    excerpt = BeautifulSoup(
-        excerpt_raw.get("rendered", "") if isinstance(excerpt_raw, dict) else "",
-        "lxml",
-    ).get_text(strip=True)
+    excerpt = _wp_html_to_text(
+        excerpt_raw.get("rendered", "") if isinstance(excerpt_raw, dict) else ""
+    )
 
-    if fetch_full_body:
+    # Use content.rendered from API if present (avoids per-article page fetch)
+    content_raw = post.get("content", {})
+    api_content = _wp_html_to_text(
+        content_raw.get("rendered", "") if isinstance(content_raw, dict) else ""
+    )
+
+    author: str | None = None
+    if api_content and len(api_content.split()) >= 50:
+        body = api_content
+    elif fetch_full_body:
         body, fetched_title, author, _ = _fetch_page_full(url, min_words=50)
         if not body or len(body.split()) < 50:
             body = excerpt
         if fetched_title and not title:
             title = fetched_title
     else:
-        body, author = excerpt, None
+        body = excerpt
 
     if not body or len(body.split()) < 30:
         return None
