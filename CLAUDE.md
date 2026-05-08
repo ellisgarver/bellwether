@@ -15,7 +15,7 @@ architectural decisions are in `docs/handoff_to_claude_code.md` and
 - Do not hand-tune any parameter to improve anchor recovery.
 - Do not load held-out (2020+) data into clustering or hyperparameter search before Phase 4.
 - Do not add closed-source or paid-API dependencies to the core pipeline (ADR-001).
-- ProQuest, Factiva, Reuters, Bloomberg are NOT pipeline sources — do not reinstate.
+- ProQuest, Factiva, Bloomberg are NOT pipeline sources — do not reinstate. (Reuters IS a pipeline source as of 2026-05-07.)
 - Any deviation from the above requires a new ADR in `docs/architecture_decisions.md` first.
 
 ## Communication style
@@ -62,20 +62,20 @@ modify pilot code. Resume instructions below are retained for reference only.
 - FRED key: `FRED_API_KEY` in `.env` (validation only)
 - WRDS: `WRDS_USERNAME` and `WRDS_PASSWORD` in `.env` for RavenPack dynamics layer queries
 
-## Phase 2 corpus architecture (FINAL — finalized 2026-05-04)
+## Phase 2 corpus architecture (updated 2026-05-07)
 
 ### Semantic corpus (text for embedding and clustering)
 
 | Tier | Sources | Retrieval |
 |---|---|---|
-| 1 — Institutional policy | Federal Reserve (all: FOMC, speeches, regional Feds), IMF (WEO/GFSR/WPs/Blog), BIS (QR/WPs), CEA, CBO, Treasury/OFR/FSOC | Direct fetch / institutional RSS |
-| 2 — Academic analytical | NBER WPs (abstracts + intros), SSRN macro/finance (abstracts), VoxEU/CEPR (full posts) | Direct fetch / RSS |
+| 1 — Institutional policy | Federal Reserve (all: FOMC, speeches, regional Feds), IMF (WEO/GFSR/F&D/WPs), BIS (WPs), Treasury/OFR/FSOC, Jackson Hole symposium, Congressional testimony (Treasury Sec) | Direct fetch / institutional RSS |
+| 2 — Academic analytical | NBER WPs (abstracts + intros), arXiv econ/q-fin (abstracts), VoxEU/CEPR (full posts) | Direct fetch / RSS |
 | 3 — Policy-journalism bridge | Brookings Institution, PIIE (Peterson Institute) | Direct fetch / RSS |
-| 4 — Open journalism | AP News (wire, event detection, 2010–present); MarketWatch (analytical/interpretive, 2010–present; consistent from 2015 onward) | Wayback CDX (historical); RSS (Phase 6 live) |
+| 4 — Open journalism | AP News (wire, event detection, 2010–present); Reuters (wire + analytical, 2010–present) | Wayback CDX (historical); RSS (Phase 6 live) |
+
+**Removed sources (2026-05-07):** CBO (HTTP 403 from all IPs), SSRN (no historical archive, live-RSS only), MarketWatch (replaced by Reuters).
 
 **Stated limitation:** Premium analytical press — WSJ opinion, Bloomberg Opinion, FT — is not represented in text form. Their volume signal is partially captured by the RavenPack dynamics layer (Dow Jones edition covers WSJ, DJN, Barron's, MarketWatch). Disclosed in pre-registration and methodology. Not a gap to patch.
-
-**MarketWatch pre-2015 coverage note:** Wayback CDX coverage of MarketWatch thins before 2015. Corpus composition QA flags pre-2015 MarketWatch records (`sparse_wayback_coverage=True` in raw_metadata). Treat as consistent from 2015-01-01 onward for cross-year comparison.
 
 ### Dynamics layer (volume time series for SIR/logistic fitting)
 
@@ -127,15 +127,17 @@ Removed from prior version: FTX collapse, GameStop short squeeze (out of macro s
 ### Phase 2 pipeline (run on RCC)
 
 ```bash
-# Full historical ingestion (2010-present)
-sbatch scripts/rcc/ingest_rcc.sh          # institutional + AP News (Wayback CDX)
+# Full historical ingestion (2010-present) — SLURM dependency chain
+INGEST_INST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
+INGEST_AP=$(sbatch --parsable --dependency=afterok:$INGEST_INST scripts/rcc/ingest_apnews_rcc.sh)
+INGEST_RT=$(sbatch --parsable --dependency=afterok:$INGEST_AP scripts/rcc/ingest_reuters_rcc.sh)
+FILTER=$(sbatch --parsable --dependency=afterok:$INGEST_RT scripts/rcc/filter_rcc.sh)
+EMBED_PRIMARY=$(sbatch --parsable --dependency=afterok:$FILTER --export=ROLE=primary scripts/rcc/embed_rcc.sh)
+EMBED_COMPARATOR=$(sbatch --parsable --dependency=afterok:$FILTER --export=ROLE=comparator scripts/rcc/embed_rcc.sh)
+sbatch --dependency=afterok:$EMBED_PRIMARY scripts/rcc/cluster_rcc.sh
 
-# Filter, chunk, embed, cluster
-python scripts/run_pipeline.py filter
-python scripts/run_pipeline.py chunk
+# Corpus composition QA (run after filter)
 python scripts/run_pipeline.py corpus-composition --by-tier --output data/processed/corpus_composition.csv
-sbatch scripts/rcc/embed_rcc.sh
-sbatch scripts/rcc/cluster_rcc.sh
 
 # Dynamics layer (RavenPack via WRDS — separate from semantic corpus)
 python scripts/run_pipeline.py ingest-dynamics --start 2010-01-01 --end auto
