@@ -1,23 +1,32 @@
 # =============================================================================
 # Outlet / Source Whitelist — Phase 2 Final Architecture
 # =============================================================================
-# Finalized 2026-05-04. Supersedes all prior versions.
+# Finalized 2026-05-04. Updated 2026-05-07: added Reuters (replaces MarketWatch),
+# added arXiv, Jackson Hole, Congressional testimony; cut CBO and SSRN.
 #
 # The semantic corpus (text for embedding and clustering) has four tiers:
 #
-#   Tier 1 — Institutional policy:  Fed (all), IMF, BIS, CEA, CBO, Treasury/OFR/FSOC
-#   Tier 2 — Academic analytical:   NBER, SSRN, VoxEU/CEPR
+#   Tier 1 — Institutional policy:
+#     Fed (all), IMF, BIS, Treasury/OFR/FSOC,
+#     Kansas City Fed Jackson Hole proceedings,
+#     Congressional testimony (Treasury Sec; Fed Chair via fed.py)
+#
+#   Tier 2 — Academic analytical:
+#     NBER, arXiv (econ/q-fin), VoxEU/CEPR
+#
 #   Tier 3 — Policy-journalism bridge: Brookings, PIIE
-#   Tier 4 — Wire journalism:        AP News (2010–present)
+#
+#   Tier 4 — Wire journalism:
+#     AP News (2010–present), Reuters (2010–present)
+#
+# Removed sources (2026-05-07):
+#   CBO      — cbo.gov returns HTTP 403 from all tested IPs (JS/bot challenge); cut
+#   SSRN     — exposes only 30–90 day RSS window; no historical archive accessible
+#   MarketWatch — replaced by Reuters for better coverage and cleaner CDX patterns
 #
 # The DYNAMICS LAYER (volume time series for SIR/logistic fitting) comes from
 # RavenPack RPA 1.0 Global Macro (Dow Jones Edition) via WRDS — NOT from this
 # whitelist. RavenPack is not ingested as text; it provides weekly article counts.
-#
-# Cut and do not reinstate as pipeline sources:
-#   Reuters, Bloomberg, WSJ, NYT, Economist, FT, CNBC, FT Alphaville,
-#   CFR, Axios, Barron's, MarketWatch, Common Crawl, NewsAPI, GDELT,
-#   ProQuest TDM Studio, Factiva.
 #
 # retrieval values:
 #   fed_direct     — federalreserve.gov structured endpoints (FOMC, speeches, etc.)
@@ -138,6 +147,24 @@ tier_1_institutional_policy:
       - working_papers
     notes: "Budget and Economic Outlook; long-run projections; working papers."
 
+  - id: jackson_hole
+    name: "Kansas City Fed Jackson Hole Economic Policy Symposium"
+    domains: ["kansascityfed.org"]
+    retrieval: direct_fetch
+    document_types:
+      - jackson_hole_paper
+    historical_start: "2010-01-01"
+    notes: "Annual symposium proceedings (late August). ~8–15 papers per year; ~100–150 total historically."
+
+  - id: congressional
+    name: "Congressional Testimony — Treasury Secretary"
+    domains: ["home.treasury.gov"]
+    retrieval: direct_fetch
+    document_types:
+      - congressional_testimony
+    scope: "Treasury Secretary only. Fed Chair testimony is ingested via fed.py."
+    notes: "Senate Banking Committee and House Financial Services Committee testimony only."
+
   - id: treasury_ofr
     name: "Treasury / OFR / FSOC"
     domains: ["home.treasury.gov", "financialresearch.gov", "home.treasury.gov/policy-issues/financial-markets"]
@@ -167,17 +194,23 @@ tier_2_academic_analytical:
     document_content: "abstract_plus_introduction"
     notes: "Abstracts + introductions (not full PDFs). Filter to JEL E/F/G. Timestamp = posting date."
 
-  - id: ssrn_finance
-    name: "SSRN — Financial Economics Network"
-    domains: ["ssrn.com"]
-    retrieval: institutional_rss
-    rss_feeds:
-      - "https://papers.ssrn.com/sol3/Jrnls/jrnl.cfm?link=2"  # Finance
-    networks_include:
-      - "Financial Economics Network"
-      - "Macroeconomics and Monetary Economics Network"
+  - id: arxiv
+    name: "arXiv — Economics and Quantitative Finance"
+    domains: ["arxiv.org"]
+    retrieval: direct_fetch
+    categories_include:
+      - "econ.GN"    # General Economics
+      - "econ.EM"    # Econometrics
+      - "q-fin.EC"   # Economics
+      - "q-fin.GN"   # General Finance
+      - "q-fin.RM"   # Risk Management
+    categories_exclude:
+      - "econ.TH"    # Theory (micro/mechanism design)
+      - "econ.ST"    # Statistics
+      - "q-fin.CP"   # Computational Finance
+      - "q-fin.TR"   # Trading and Market Microstructure
     document_content: "abstract_only"
-    notes: "Abstracts only (full text access inconsistent). Excludes Wayback — SSRN URLs contain query strings."
+    notes: "Preprint abstracts. Date filter via submittedDate field. 3s sleep between requests per arXiv policy."
 
   - id: voxeu
     name: "VoxEU / CEPR"
@@ -223,11 +256,10 @@ tier_3_policy_journalism:
 # Tier 4 — Open journalism
 #
 # Rationale for two-source Tier 4:
-#   AP News   — wire journalism: event detection, factual coverage, clean timestamps.
-#               Fully open, consistent Wayback CDX coverage 2010-present.
-#   MarketWatch — analytical financial journalism: interpretive/framing pieces at
-#               the wire-to-analysis intersection AP misses. 15-20 macro analytical
-#               pieces per day. Fully open, Dow Jones property.
+#   AP News  — wire journalism: event detection, factual coverage, clean timestamps.
+#              Fully open, consistent Wayback CDX coverage 2010-present.
+#   Reuters  — wire journalism with more analytical depth than AP. Fully open access
+#              until ~2023; strong Wayback CDX coverage 2010–2022. RSS for 2023+.
 #
 # Stated limitation (document in methodology, not a gap to patch):
 #   Premium analytical press — WSJ opinion, Bloomberg Opinion, FT — is not
@@ -250,24 +282,25 @@ tier_4_open_journalism:
     historical_start: "2010-01-01"
     notes: "Wire journalism, event detection. Full articles. Historical via Wayback CDX (2010-present); live via RSS (Phase 6)."
 
-  - id: marketwatch
-    name: "MarketWatch"
-    domains: ["marketwatch.com"]
+  - id: reuters
+    name: "Reuters"
+    domains: ["reuters.com"]
     retrieval: wayback_cdx
     cdx_url_patterns:
-      - "www.marketwatch.com/story/"
-    live_rss: "https://feeds.marketwatch.com/marketwatch/topstories/"
+      - "reuters.com/article/"
+      - "reuters.com/markets/"
+      - "reuters.com/business/"
+    live_rss:
+      - "https://feeds.reuters.com/reuters/businessNews"
+      - "https://feeds.reuters.com/reuters/topNews"
     historical_start: "2010-01-01"
     coverage_note: >
-      Pre-2015 Wayback CDX coverage is thinner than post-2015. Treat as
-      consistent from 2015-01-01 onward for cross-year comparison. Pre-2015
-      articles are ingested when available but flagged in corpus composition
-      QA. Document this asymmetry explicitly in methodology and pre-registration.
+      Reuters was fully open access until ~2023. Wayback CDX coverage is
+      strong for 2010–2022. Post-2023 content sourced via RSS feeds.
     notes: >
-      Analytical financial journalism — interpretive and framing pieces AP does not
-      produce. Fully open (no paywall). Dow Jones property; also covered by RavenPack
-      dynamics layer (MKW source_id). Historical via Wayback CDX; live via RSS (Phase 6).
-      Reinstatement rationale: ADR-009.
+      Wire journalism with analytical depth. Replaced MarketWatch (2026-05-07)
+      for better CDX coverage and consistency. Historical via Wayback CDX;
+      live via RSS (Phase 6).
 
 # -----------------------------------------------------------------------------
 # Dynamics layer — NOT ingested as text corpus
@@ -315,19 +348,26 @@ validation_supplements:
 # -----------------------------------------------------------------------------
 # Archived / superseded sources (do not reinstate without new ADR)
 # -----------------------------------------------------------------------------
-# The following were considered and rejected or removed in prior phases:
+# The following were considered and rejected or removed:
 #
-# GDELT            — replaced by RavenPack for dynamics layer (ADR-005, superseded by ADR-007)
-# Common Crawl     — coverage inconsistency across years; removed Phase 2
-# ProQuest TDM     — paywalled text pipeline removed Phase 2 (corpus shift to open sources)
-# Factiva          — license prohibits pipeline use; FT access unconfirmed
-# NewsAPI          — live-only, insufficient historical depth
-# Reuters          — WRDS subscription does not include Reuters text; dynamics only via RavenPack
-# Bloomberg        — text paywalled and not in accessible dataset
-# WSJ              — ProQuest no longer used as pipeline source
-# NYT Business     — ProQuest no longer used as pipeline source
-# Economist        — ProQuest no longer used as pipeline source
+# CBO          — cbo.gov returns HTTP 403 from all tested IPs (JS/Cloudflare
+#                challenge); both JSON API and HTML listing inaccessible.
+#                Cut 2026-05-07.
+# SSRN         — Exposes only 30–90 day RSS window; no public bulk API for
+#                historical archive. Phase 6 live-update pipeline only.
+#                Cut from historical corpus 2026-05-07.
+# MarketWatch  — Replaced by Reuters (2026-05-07). Reuters has better CDX
+#                coverage patterns and more consistent URL structure.
+# GDELT        — replaced by RavenPack for dynamics layer (ADR-005, superseded by ADR-007)
+# Common Crawl — coverage inconsistency across years; removed Phase 2
+# ProQuest TDM — paywalled text pipeline removed Phase 2 (corpus shift to open sources)
+# Factiva      — license prohibits pipeline use; FT access unconfirmed
+# NewsAPI      — live-only, insufficient historical depth
+# Bloomberg    — text paywalled and not in accessible dataset
+# WSJ          — ProQuest no longer used as pipeline source
+# NYT Business — ProQuest no longer used as pipeline source
+# Economist    — ProQuest no longer used as pipeline source
 # FT / FT Alphaville — Factiva (prohibited) and paywall issues
-# CNBC             — dropped: noisy, low analytical depth
-# CFR              — dropped: geopolitical framing dominates
-# Axios            — dropped: insufficient coverage pre-2020
+# CNBC         — dropped: noisy, low analytical depth
+# CFR          — dropped: geopolitical framing dominates
+# Axios        — dropped: insufficient coverage pre-2020

@@ -3,25 +3,28 @@
 Covers the semantic corpus tiers defined in ADR-008 and config/whitelist.yaml:
 
   Tier 1 — Institutional policy
-    IMFIngestor           imf.org — WPs, WEO/GFSR summaries, IMF Blog
-    BISIngestor           bis.org — Quarterly Review, WPs
-    FedRegionalIngestor   Regional Fed blogs and Economic Letters (RSS)
-    CBOIngestor           cbo.gov publications (RSS)
-    TreasuryOFRIngestor   OFR Annual Reports + WPs, FSOC Annual Reports
+    FederalReserveIngestor  fed.py — FOMC, speeches, Beige Book
+    FedRegionalIngestor     Regional Fed blogs and Economic Letters
+    JacksonHoleIngestor     Kansas City Fed Jackson Hole proceedings (2010–present)
+    CongressionalIngestor   Treasury Secretary testimony (Senate Banking, HFSC)
+    IMFIngestor             imf.org — WEO/GFSR/F&D, Working Papers (RCC only)
+    BISIngestor             bis.org — Working Papers via sitemap
+    TreasuryOFRIngestor     OFR Working Papers and Briefs, FSOC Annual Reports
 
   Tier 2 — Academic analytical
-    NBERIngestor          nber.org — WP abstracts + introductions (JEL E/F/G)
-    SSRNIngestor          ssrn.com — Financial Economics Network abstracts
-    VoxEUIngestor         cepr.org/voxeu — full posts (RSS)
+    NBERIngestor            nber.org — WP abstracts + introductions (JEL E/F/G)
+    ArxivIngestor           arxiv.org — econ.GN/EM, q-fin.EC/GN/RM preprints
+    VoxEUIngestor           cepr.org/voxeu — full posts
 
   Tier 3 — Policy-journalism bridge
-    BrookingsIngestor     brookings.edu — Economic Studies full posts (RSS)
-    PIIEIngestor          piie.com — full posts (RSS)
+    BrookingsIngestor       brookings.edu — macro-filtered articles
+    PIIEIngestor            piie.com — policy briefs, working papers, blog posts
 
   InstitutionalIngestor   Composite: runs all of the above and merges output.
 
-Note: FederalReserveIngestor (FOMC statements, minutes, speeches, Beige Book)
-lives in fed.py and is not repeated here. InstitutionalIngestor calls it too.
+Removed sources:
+  CBOIngestor   — cbo.gov returns 403 from all tested IPs (JS challenge); cut
+  SSRNIngestor  — SSRN exposes only 30–90 day RSS window, not historical archive
 
 All timestamps follow the ADR-008 rule: publication/release date only.
 FOMC minutes = release date. NBER papers = posting date.
@@ -43,6 +46,7 @@ import trafilatura
 from bs4 import BeautifulSoup
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
+from mnd.ingestion.arxiv import ArxivIngestor
 from mnd.ingestion.base import Article, Ingestor, _now_utc_iso, _stable_article_id
 from mnd.ingestion.fed import FederalReserveIngestor
 from mnd.utils.logging import get_logger
@@ -420,9 +424,167 @@ class IMFIngestor(Ingestor):
         ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-April-2010-Meeting-New-Challenges-to-Stability-and-Building-a-Safer-System-40082", "2010-04-01"),
     ]
 
+    # Finance & Development quarterly magazine (2010–2024).
+    # Published March, June, September, December. Paths verified 2026-05-08.
+    _FANDD_PATHS = [
+        ("/en/Publications/fandd/Issues/2024/12/TABLE-OF-CONTENTS-E1224", "2024-12-01"),
+        ("/en/Publications/fandd/Issues/2024/09/TABLE-OF-CONTENTS-E924", "2024-09-01"),
+        ("/en/Publications/fandd/Issues/2024/06/TABLE-OF-CONTENTS-E624", "2024-06-01"),
+        ("/en/Publications/fandd/Issues/2024/03/TABLE-OF-CONTENTS-E324", "2024-03-01"),
+        ("/en/Publications/fandd/Issues/2023/12/TABLE-OF-CONTENTS-E1223", "2023-12-01"),
+        ("/en/Publications/fandd/Issues/2023/09/TABLE-OF-CONTENTS-E923", "2023-09-01"),
+        ("/en/Publications/fandd/Issues/2023/06/TABLE-OF-CONTENTS-E623", "2023-06-01"),
+        ("/en/Publications/fandd/Issues/2023/03/TABLE-OF-CONTENTS-E323", "2023-03-01"),
+        ("/en/Publications/fandd/Issues/2022/12/TABLE-OF-CONTENTS-E1222", "2022-12-01"),
+        ("/en/Publications/fandd/Issues/2022/09/TABLE-OF-CONTENTS-E922", "2022-09-01"),
+        ("/en/Publications/fandd/Issues/2022/06/TABLE-OF-CONTENTS-E622", "2022-06-01"),
+        ("/en/Publications/fandd/Issues/2022/03/TABLE-OF-CONTENTS-E322", "2022-03-01"),
+        ("/en/Publications/fandd/Issues/2021/12/TABLE-OF-CONTENTS-E1221", "2021-12-01"),
+        ("/en/Publications/fandd/Issues/2021/09/TABLE-OF-CONTENTS-E921", "2021-09-01"),
+        ("/en/Publications/fandd/Issues/2021/06/TABLE-OF-CONTENTS-E621", "2021-06-01"),
+        ("/en/Publications/fandd/Issues/2021/03/TABLE-OF-CONTENTS-E321", "2021-03-01"),
+        ("/en/Publications/fandd/Issues/2020/12/TABLE-OF-CONTENTS-E1220", "2020-12-01"),
+        ("/en/Publications/fandd/Issues/2020/09/TABLE-OF-CONTENTS-E920", "2020-09-01"),
+        ("/en/Publications/fandd/Issues/2020/06/TABLE-OF-CONTENTS-E620", "2020-06-01"),
+        ("/en/Publications/fandd/Issues/2020/03/TABLE-OF-CONTENTS-E320", "2020-03-01"),
+        ("/en/Publications/fandd/Issues/2019/12/TABLE-OF-CONTENTS-E1219", "2019-12-01"),
+        ("/en/Publications/fandd/Issues/2019/09/TABLE-OF-CONTENTS-E919", "2019-09-01"),
+        ("/en/Publications/fandd/Issues/2019/06/TABLE-OF-CONTENTS-E619", "2019-06-01"),
+        ("/en/Publications/fandd/Issues/2019/03/TABLE-OF-CONTENTS-E319", "2019-03-01"),
+        ("/en/Publications/fandd/Issues/2018/12/TABLE-OF-CONTENTS-E1218", "2018-12-01"),
+        ("/en/Publications/fandd/Issues/2018/09/TABLE-OF-CONTENTS-E918", "2018-09-01"),
+        ("/en/Publications/fandd/Issues/2018/06/TABLE-OF-CONTENTS-E618", "2018-06-01"),
+        ("/en/Publications/fandd/Issues/2018/03/TABLE-OF-CONTENTS-E318", "2018-03-01"),
+        ("/en/Publications/fandd/Issues/2017/12/TABLE-OF-CONTENTS-E1217", "2017-12-01"),
+        ("/en/Publications/fandd/Issues/2017/09/TABLE-OF-CONTENTS-E917", "2017-09-01"),
+        ("/en/Publications/fandd/Issues/2017/06/TABLE-OF-CONTENTS-E617", "2017-06-01"),
+        ("/en/Publications/fandd/Issues/2017/03/TABLE-OF-CONTENTS-E317", "2017-03-01"),
+        ("/en/Publications/fandd/Issues/2016/12/TABLE-OF-CONTENTS-E1216", "2016-12-01"),
+        ("/en/Publications/fandd/Issues/2016/09/TABLE-OF-CONTENTS-E916", "2016-09-01"),
+        ("/en/Publications/fandd/Issues/2016/06/TABLE-OF-CONTENTS-E616", "2016-06-01"),
+        ("/en/Publications/fandd/Issues/2016/03/TABLE-OF-CONTENTS-E316", "2016-03-01"),
+        ("/en/Publications/fandd/Issues/2015/12/TABLE-OF-CONTENTS-E1215", "2015-12-01"),
+        ("/en/Publications/fandd/Issues/2015/09/TABLE-OF-CONTENTS-E915", "2015-09-01"),
+        ("/en/Publications/fandd/Issues/2015/06/TABLE-OF-CONTENTS-E615", "2015-06-01"),
+        ("/en/Publications/fandd/Issues/2015/03/TABLE-OF-CONTENTS-E315", "2015-03-01"),
+        ("/en/Publications/fandd/Issues/2014/12/TABLE-OF-CONTENTS-E1214", "2014-12-01"),
+        ("/en/Publications/fandd/Issues/2014/09/TABLE-OF-CONTENTS-E914", "2014-09-01"),
+        ("/en/Publications/fandd/Issues/2014/06/TABLE-OF-CONTENTS-E614", "2014-06-01"),
+        ("/en/Publications/fandd/Issues/2014/03/TABLE-OF-CONTENTS-E314", "2014-03-01"),
+        ("/en/Publications/fandd/Issues/2013/12/TABLE-OF-CONTENTS-E1213", "2013-12-01"),
+        ("/en/Publications/fandd/Issues/2013/09/TABLE-OF-CONTENTS-E913", "2013-09-01"),
+        ("/en/Publications/fandd/Issues/2013/06/TABLE-OF-CONTENTS-E613", "2013-06-01"),
+        ("/en/Publications/fandd/Issues/2013/03/TABLE-OF-CONTENTS-E313", "2013-03-01"),
+        ("/en/Publications/fandd/Issues/2012/12/TABLE-OF-CONTENTS-E1212", "2012-12-01"),
+        ("/en/Publications/fandd/Issues/2012/09/TABLE-OF-CONTENTS-E912", "2012-09-01"),
+        ("/en/Publications/fandd/Issues/2012/06/TABLE-OF-CONTENTS-E612", "2012-06-01"),
+        ("/en/Publications/fandd/Issues/2012/03/TABLE-OF-CONTENTS-E312", "2012-03-01"),
+        ("/en/Publications/fandd/Issues/2011/12/TABLE-OF-CONTENTS-E1211", "2011-12-01"),
+        ("/en/Publications/fandd/Issues/2011/09/TABLE-OF-CONTENTS-E911", "2011-09-01"),
+        ("/en/Publications/fandd/Issues/2011/06/TABLE-OF-CONTENTS-E611", "2011-06-01"),
+        ("/en/Publications/fandd/Issues/2011/03/TABLE-OF-CONTENTS-E311", "2011-03-01"),
+        ("/en/Publications/fandd/Issues/2010/12/TABLE-OF-CONTENTS-E1210", "2010-12-01"),
+        ("/en/Publications/fandd/Issues/2010/09/TABLE-OF-CONTENTS-E910", "2010-09-01"),
+        ("/en/Publications/fandd/Issues/2010/06/TABLE-OF-CONTENTS-E610", "2010-06-01"),
+        ("/en/Publications/fandd/Issues/2010/03/TABLE-OF-CONTENTS-E310", "2010-03-01"),
+    ]
+
+    # IMF Working Papers API endpoint (requires university IP — blocked from residential).
+    # Pagination: offset-based, 25 per page, sorted by date descending.
+    _WP_API = "https://www.imf.org/api/v1/en/publications"
+
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         yield from self._fetch_flagships(start, end, self._WEO_PATHS, "weo")
         yield from self._fetch_flagships(start, end, self._GFSR_PATHS, "gfsr")
+        yield from self._fetch_flagships(start, end, self._FANDD_PATHS, "fandd")
+        yield from self._fetch_working_papers(start, end)
+
+    def _fetch_working_papers(self, start: date, end: date) -> Iterator[Article]:
+        """Fetch IMF Working Papers via the publications JSON API.
+
+        Requires university IP (RCC Midway3). Blocked from residential IPs with 403.
+        API returns paginated JSON with title, url, date, abstract fields.
+        """
+        base = "https://www.imf.org"
+        offset = 0
+        page_size = 25
+        seen: set[str] = set()
+
+        while True:
+            try:
+                resp = requests.get(
+                    self._WP_API,
+                    params={
+                        "type": "WP",
+                        "from": start.isoformat(),
+                        "to": end.isoformat(),
+                        "offset": offset,
+                        "limit": page_size,
+                        "sort": "date",
+                    },
+                    headers=self._IMF_HEADERS,
+                    timeout=30.0,
+                )
+                if resp.status_code == 403:
+                    log.info(
+                        "IMF WP API blocked (HTTP 403) — requires university IP. "
+                        "Skipping working papers (will succeed on RCC)."
+                    )
+                    return
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as exc:
+                log.warning("IMF WP API offset=%d: %s", offset, exc)
+                return
+
+            items = data.get("items", data.get("results", data if isinstance(data, list) else []))
+            if not items:
+                break
+
+            for item in items:
+                url_path = item.get("url", "") or item.get("link", "")
+                if not url_path:
+                    continue
+                url = base + url_path if url_path.startswith("/") else url_path
+                if url in seen:
+                    continue
+                seen.add(url)
+
+                title = item.get("title", "IMF Working Paper")
+                pub_date_str = item.get("date", item.get("publishedDate", ""))
+                try:
+                    pub_date = _parse_date_flexible(pub_date_str) or start
+                except Exception:
+                    pub_date = start
+                if pub_date < start or pub_date > end:
+                    continue
+
+                # Use abstract from API if present; otherwise fetch page body
+                abstract = item.get("abstract", item.get("summary", ""))
+                if abstract and len(abstract.split()) >= 50:
+                    body = abstract
+                else:
+                    body = _extract_body(url, min_words=50) or abstract
+                if not body or len(body.split()) < 30:
+                    continue
+
+                yield _make_article(
+                    source_id=self.source_id,
+                    url=url,
+                    published_at=pub_date.isoformat() + "T00:00:00Z",
+                    title=title,
+                    body=body,
+                    author="IMF",
+                    section="working_paper",
+                    tier=1,
+                    document_type="imf_working_paper",
+                )
+                time.sleep(0.5)
+
+            offset += page_size
+            if len(items) < page_size:
+                break
+            time.sleep(1.0)
 
     def _fetch_flagships(
         self, start: date, end: date, path_table: list, doc_type: str
@@ -986,19 +1148,41 @@ class NBERIngestor(Ingestor):
 
         page = start_page
         passed_window = False  # True once we've seen a record with year < start_year
+        consecutive_failures = 0
 
         while True:
-            try:
-                resp = requests.get(
-                    self._API_URL,
-                    params={"page": page, "perPage": self._PER_PAGE},
-                    headers=_HEADERS,
-                    timeout=30.0,
-                )
-                resp.raise_for_status()
-            except Exception as exc:
-                log.warning("NBER API page %d failed: %s", page, exc)
-                break
+            # On timeout, retry up to 3 times then skip the page (do not abort pagination).
+            # Non-transient errors (4xx, connection errors beyond retries) abort pagination.
+            skip_page = False
+            for _attempt in range(3):
+                try:
+                    resp = requests.get(
+                        self._API_URL,
+                        params={"page": page, "perPage": self._PER_PAGE},
+                        headers=_HEADERS,
+                        timeout=60.0,
+                    )
+                    resp.raise_for_status()
+                    consecutive_failures = 0
+                    break
+                except requests.exceptions.Timeout:
+                    log.warning("NBER API page %d timeout (attempt %d/3)", page, _attempt + 1)
+                    if _attempt < 2:
+                        time.sleep(2 ** _attempt)
+                    else:
+                        log.warning("NBER API page %d: timed out 3 times, skipping", page)
+                        skip_page = True
+                except Exception as exc:
+                    log.warning("NBER API page %d failed: %s", page, exc)
+                    consecutive_failures += 1
+                    if consecutive_failures >= 3:
+                        log.error("NBER: %d consecutive failures, stopping pagination", consecutive_failures)
+                        return
+                    break
+            if skip_page:
+                page += 1
+                time.sleep(0.5)
+                continue
 
             data = resp.json()
             results = data.get("results", [])
@@ -1075,7 +1259,7 @@ class NBERIngestor(Ingestor):
         """Return (exact_date, abstract_text, jel_codes, authors) from an NBER paper page."""
         import re
 
-        resp = requests.get(url, headers=_HEADERS, timeout=30.0)
+        resp = requests.get(url, headers=_HEADERS, timeout=60.0)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
 
@@ -1299,20 +1483,38 @@ class BrookingsIngestor(Ingestor):
     articles accessible via date-range filter. Individual article pages are
     fetched for full body text.
 
-    Macro-relevance pre-filter avoids fetching pages for health, education,
-    and governance content that is out of scope.
+    Macro-relevance pre-filter uses compound phrases and high-confidence single
+    terms. Single words (policy, market, growth, bond, crisis) are excluded
+    because they match Brookings content on education, health, and governance.
     """
 
     source_id = "brookings"
 
     _API_BASE = "https://www.brookings.edu"
 
+    # Compound phrases and high-signal single terms only.
+    # Single words like "policy", "market", "growth", "bond", "crisis",
+    # "investment", "trade", "covid", "pandemic" are excluded — too broad for
+    # Brookings which covers education, health, governance, and foreign policy.
     _MACRO_TERMS = {
-        "inflation", "monetary", "interest rate", "federal reserve", "central bank",
-        "exchange rate", "gdp", "recession", "unemployment", "credit", "fiscal",
-        "financial", "bank", "debt", "trade", "currency", "bond", "yield",
-        "growth", "economy", "economics", "market", "policy", "budget", "tax",
-        "covid", "pandemic", "crisis", "labor market", "housing", "investment",
+        # High-signal single words
+        "inflation", "monetary", "gdp", "recession", "unemployment", "stagflation",
+        "macroeconomic", "macrofinancial", "deficit", "surplus",
+        # Compound phrases (require exact substring)
+        "central bank", "interest rate", "federal reserve", "exchange rate",
+        "bond yield", "yield curve", "credit risk", "financial stability",
+        "monetary policy", "fiscal policy", "fiscal stimulus", "fiscal cliff",
+        "trade deficit", "trade surplus", "current account", "balance of payments",
+        "quantitative easing", "forward guidance", "tapering", "taper tantrum",
+        "treasury market", "treasury yield", "sovereign debt", "public debt",
+        "credit spread", "systemic risk", "financial regulation", "bank capital",
+        "stress test", "economic growth", "economic outlook", "economic forecast",
+        "labor market", "wage growth", "productivity growth",
+        "housing market", "mortgage rate",
+        "stock market crash", "equity market", "bond market",
+        "global economy", "world economy", "emerging market",
+        "financial crisis", "banking crisis", "debt crisis",
+        "hutchins center", "hamilton project",
     }
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
@@ -1323,10 +1525,9 @@ class BrookingsIngestor(Ingestor):
                 continue
 
             title_raw = post.get("title", {})
-            title = BeautifulSoup(
-                title_raw.get("rendered", "") if isinstance(title_raw, dict) else str(title_raw),
-                "lxml",
-            ).get_text(strip=True)
+            title = _wp_html_to_text(
+                title_raw.get("rendered", "") if isinstance(title_raw, dict) else str(title_raw)
+            )
 
             if not self._is_macro_relevant(title):
                 continue
@@ -1476,6 +1677,231 @@ class PIIEIngestor(Ingestor):
 
 
 # ---------------------------------------------------------------------------
+# Tier 1 — Jackson Hole / Kansas City Fed
+# ---------------------------------------------------------------------------
+
+
+class JacksonHoleIngestor(Ingestor):
+    """Kansas City Fed Jackson Hole Economic Policy Symposium proceedings.
+
+    One symposium per year (late August). Papers are PDF-only; we ingest the
+    HTML symposium overview page for each year within the date window.
+    Expected yield: 1 document per in-window year (~16 documents for 2010–2025).
+
+    Approach: fetch the proceedings index page, discover all symposium theme URLs,
+    follow each, extract year from the page title/content, and yield the overview
+    text as a single document per symposium.
+    """
+
+    source_id = "jackson_hole"
+
+    _BASE = "https://www.kansascityfed.org"
+    _PROCEEDINGS_URL = (
+        "https://www.kansascityfed.org"
+        "/research/jackson-hole-economic-symposium/economic-symposium-conference-proceedings/"
+    )
+
+    def fetch(self, start: date, end: date) -> Iterator[Article]:
+        # Symposium is late August; skip entirely if window doesn't overlap August–September
+        sym_start = date(start.year, 1, 1)
+        sym_end = date(end.year, 12, 31)
+        if sym_end < start or sym_start > end:
+            return
+
+        try:
+            resp = requests.get(self._PROCEEDINGS_URL, headers=_HEADERS, timeout=30.0)
+            resp.raise_for_status()
+        except Exception as exc:
+            log.warning("JacksonHole proceedings index failed: %s", exc)
+            return
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        seen: set[str] = set()
+
+        # Collect symposium theme URLs (all /research/jackson-hole-economic-symposium/<slug>/ links)
+        candidate_urls: list[str] = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if not re.match(r"^/research/jackson-hole-economic-symposium/[^/]+/?$", href):
+                continue
+            skip_slugs = {"about-jackson-hole-economic-symposium", "economic-symposium-conference-proceedings",
+                          "jackson-hole-faqs", "jackson-hole-media-resources",
+                          "jackson-hole-economic-policy-symposium-through-years"}
+            slug = href.strip("/").split("/")[-1]
+            if slug in skip_slugs:
+                continue
+            url = self._BASE + href
+            if url not in seen:
+                seen.add(url)
+                candidate_urls.append(url)
+
+        # Also try year-numeric URLs for 2025+
+        for year in range(max(start.year, 2025), end.year + 1):
+            url = f"{self._BASE}/research/jackson-hole-economic-symposium/{year}/"
+            if url not in seen:
+                seen.add(url)
+                candidate_urls.append(url)
+
+        for sym_url in candidate_urls:
+            body, title, _, page_date = _fetch_page_full(sym_url, min_words=50)
+            if not body or len(body.split()) < 50:
+                time.sleep(0.5)
+                continue
+
+            # Extract year from title (e.g. "2023 Jackson Hole") or page content
+            year_match = re.search(r"\b(20[12]\d)\b", title + " " + body[:500])
+            if not year_match:
+                time.sleep(0.5)
+                continue
+            sym_year = int(year_match.group(1))
+
+            # Symposium is held in late August
+            pub_date = page_date or date(sym_year, 8, 24)
+            if pub_date < start or pub_date > end:
+                time.sleep(0.5)
+                continue
+
+            yield _make_article(
+                source_id=self.source_id,
+                url=sym_url,
+                published_at=pub_date.isoformat() + "T00:00:00Z",
+                title=title or f"Jackson Hole Economic Policy Symposium {sym_year}",
+                body=body,
+                author="Kansas City Fed",
+                section="jackson_hole_proceedings",
+                tier=1,
+                document_type="jackson_hole_symposium",
+                extra_meta={"symposium_year": sym_year},
+            )
+            time.sleep(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Tier 1 — Congressional testimony
+# ---------------------------------------------------------------------------
+
+
+class CongressionalIngestor(Ingestor):
+    """Fed Chair and Treasury Secretary testimony before Congress.
+
+    Scope: Senate Banking Committee and House Financial Services Committee only.
+    Approximately 6–10 hearings per year. Fed Chair testimony is available via
+    the Federal Reserve's own website (supplementing fed.py which covers FOMC).
+    Treasury Secretary testimony is retrieved from the Treasury press release page.
+
+    Note: fed.py's FederalReserveIngestor already ingests Fed Chair testimony
+    from federalreserve.gov/testimony. This ingestor fetches Treasury Secretary
+    testimony from Treasury.gov, which is not covered elsewhere.
+
+    To avoid duplicating Fed Chair testimony, this ingestor only fetches
+    Treasury Secretary testimony. Fed Chair testimony from fed.py's ingestor
+    is sufficient for that source.
+    """
+
+    source_id = "congressional"
+
+    # Secretary Statements & Remarks listing (Drupal, date-range filterable).
+    # Treasury.gov links follow /news/press-releases/sb#### pattern.
+    _LISTING_URL = "https://home.treasury.gov/news/press-releases"
+    _TREASURY_BASE = "https://home.treasury.gov"
+
+    def fetch(self, start: date, end: date) -> Iterator[Article]:
+        seen: set[str] = set()
+        yield from self._fetch_treasury_testimony(start, end, seen)
+
+    def _fetch_treasury_testimony(
+        self, start: date, end: date, seen: set[str]
+    ) -> Iterator[Article]:
+        """Scrape Treasury Secretary Statements & Remarks for testimony items."""
+        page = 0
+
+        while True:
+            params: dict = {
+                "category": "Secretary Statements & Remarks",
+                "date_filter[min]": start.isoformat(),
+                "date_filter[max]": end.isoformat(),
+            }
+            if page > 0:
+                params["page"] = page
+            try:
+                resp = requests.get(
+                    self._LISTING_URL,
+                    params=params,
+                    headers=_HEADERS,
+                    timeout=30.0,
+                )
+                if resp.status_code in (403, 404):
+                    log.debug("Treasury listing page %d: HTTP %d", page, resp.status_code)
+                    return
+                resp.raise_for_status()
+            except Exception as exc:
+                log.warning("Treasury listing page %d: %s", page, exc)
+                return
+
+            soup = BeautifulSoup(resp.text, "lxml")
+            # Links follow /news/press-releases/sb#### pattern
+            release_links = [
+                a for a in soup.find_all("a", href=True)
+                if re.match(r"^/news/press-releases/[a-zA-Z]{2}\d+", a["href"])
+                and len(a.get_text(strip=True)) > 15
+            ]
+
+            if not release_links:
+                break
+
+            found_new = False
+            for link in release_links:
+                href = link["href"]
+                url = self._TREASURY_BASE + href
+                if url in seen:
+                    continue
+                title = link.get_text(strip=True)
+                if not self._is_relevant(title):
+                    continue
+
+                seen.add(url)
+                found_new = True
+                body, fetched_title, author, page_date = _fetch_page_full(url, min_words=30)
+                if not body or len(body.split()) < 20:
+                    continue
+                if not page_date or page_date < start or page_date > end:
+                    continue
+
+                yield _make_article(
+                    source_id=self.source_id,
+                    url=url,
+                    published_at=page_date.isoformat() + "T00:00:00Z",
+                    title=fetched_title or title or "Treasury Secretary Testimony",
+                    body=body,
+                    author=author,
+                    section="treasury_testimony",
+                    tier=1,
+                    document_type="congressional_testimony",
+                )
+                time.sleep(1.0)
+
+            # Check for next page link
+            next_link = soup.select_one("a[title='Next page'], .pager__item--next a")
+            if not next_link or not found_new:
+                break
+            page += 1
+            time.sleep(0.5)
+
+    def _is_relevant(self, title: str) -> bool:
+        """Keep Secretary-level testimony and Congressional statements."""
+        tl = title.lower()
+        testimony_terms = (
+            "testimony", "before the", "subcommittee", "senate banking",
+            "house financial services", "appropriations", "ways and means",
+            "joint economic committee", "committee on finance",
+        )
+        # Exclude lower-level officials
+        if re.search(r"\bunder ?secretary\b|\bassistant secretary\b|\bdeputy\b", tl):
+            return False
+        return any(term in tl for term in testimony_terms)
+
+
+# ---------------------------------------------------------------------------
 # Composite ingestor
 # ---------------------------------------------------------------------------
 
@@ -1501,12 +1927,13 @@ class InstitutionalIngestor(Ingestor):
         self._sub_ingestors: list[Ingestor] = [
             FederalReserveIngestor(),
             FedRegionalIngestor(),
+            JacksonHoleIngestor(),
+            CongressionalIngestor(),
             IMFIngestor(),
             BISIngestor(),
-            CBOIngestor(),
             TreasuryOFRIngestor(),
             NBERIngestor(),
-            SSRNIngestor(),
+            ArxivIngestor(),
             VoxEUIngestor(),
             BrookingsIngestor(),
             PIIEIngestor(),
