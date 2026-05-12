@@ -1,30 +1,24 @@
 #!/bin/bash
 # SLURM job script: topic filter + near-duplicate removal on the full ingested corpus.
 #
-# Reads all JSONL files from data/raw/articles/ (output of BOTH institutional
-# and journalism ingestion jobs) and writes data/processed/articles.parquet.
-# embed_rcc.sh depends on this job — articles.parquet must exist before embedding.
+# Reads all JSONL files from data/raw/articles/ and writes
+# data/processed/articles.parquet. embed_rcc.sh depends on this output.
+#
+# NOTE: Run filter-pre-embed (python run_pipeline.py filter-pre-embed) BEFORE
+# this job if any archived journalism sources (AP News, MarketWatch, Reuters)
+# are present in data/raw/articles/ from the prior Phase 2 ingestion run.
+# filter-pre-embed writes corpus_for_embedding.jsonl excluding those sources.
 #
 # Resource spec:
 #   Account:   pi-dachxiu
 #   Partition: caslake
-#   CPUs:      4  (pandas + scikit-learn; single-threaded dedup)
-#   RAM:       16 GB  (full corpus JSON → parquet fits comfortably)
+#   CPUs:      4
+#   RAM:       16 GB
 #   Time:      1 h
 #
-# Typical chain (submit after ingest_marketwatch_rcc.sh with afterok):
-#   FILTER=$(sbatch --parsable \
-#                --dependency=afterok:$INGEST_MW \
-#                scripts/rcc/filter_rcc.sh)
-#
-# Full pipeline submission block (run from Midway3 login node):
-#   INGEST_INST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
-#   INGEST_AP=$(sbatch --parsable --dependency=afterok:$INGEST_INST \
-#                   scripts/rcc/ingest_apnews_rcc.sh)
-#   INGEST_MW=$(sbatch --parsable --dependency=afterok:$INGEST_AP \
-#                   scripts/rcc/ingest_marketwatch_rcc.sh)
-#   FILTER=$(sbatch --parsable \
-#                --dependency=afterok:$INGEST_MW \
+# Full pipeline submission block (ADR-010; run from Midway3 login node):
+#   INGEST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
+#   FILTER=$(sbatch --parsable --dependency=afterok:$INGEST \
 #                scripts/rcc/filter_rcc.sh)
 #   EMBED_PRIMARY=$(sbatch --parsable \
 #                    --dependency=afterok:$FILTER \
@@ -33,14 +27,6 @@
 #                    --dependency=afterok:$FILTER \
 #                    --export=ROLE=comparator scripts/rcc/embed_rcc.sh)
 #   sbatch --dependency=afterok:$EMBED_PRIMARY scripts/rcc/cluster_rcc.sh
-#   echo "Ingest institutional: $INGEST_INST"
-#   echo "Ingest AP News:       $INGEST_AP"
-#   echo "Ingest MarketWatch:   $INGEST_MW"
-#   echo "Filter:               $FILTER"
-#   echo "Embed primary:        $EMBED_PRIMARY"
-#   echo "Embed comparator:     $EMBED_COMPARATOR"
-#
-# See ingest_apnews_rcc.sh for the canonical submission block.
 #
 # All data output in /scratch/midway3/ehgarver/ — never in PI project folder.
 
