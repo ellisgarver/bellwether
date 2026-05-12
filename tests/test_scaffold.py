@@ -28,14 +28,14 @@ def test_master_config_loads():
     assert cfg["temporal"]["train_test_split"] == "2020-01-01"
 
 
-def test_embedding_two_model_strategy():
-    """ADR-001: primary + comparator both specified."""
+def test_embedding_single_model_strategy():
+    """ADR-010: single model (all-mpnet-base-v2) — two-model strategy superseded."""
     from mnd.utils.config import load_config
     cfg = load_config()
     assert "primary" in cfg["embedding"]
-    assert "comparator" in cfg["embedding"]
-    assert cfg["embedding"]["primary"]["model"].startswith("Qwen/Qwen3-Embedding")
-    assert "mpnet" in cfg["embedding"]["comparator"]["model"]
+    assert "comparator" not in cfg["embedding"], "comparator slot removed in ADR-010"
+    assert "mpnet" in cfg["embedding"]["primary"]["model"]
+    assert cfg["embedding"]["primary"]["dimensions"] == 768
 
 
 def test_kill_criteria_thresholds_present():
@@ -61,18 +61,22 @@ def test_random_seed_pinned():
 def test_whitelist_loads_and_has_required_outlets():
     from mnd.utils.config import load_yaml
     wl = load_yaml("config/whitelist.yaml")
-    # Phase 2 schema (ADR-008): four tiers, open institutional+academic corpus
+    # ADR-010: journalism tier removed; three-tier institutional+academic corpus
     assert "tier_1_institutional_policy" in wl, "missing tier_1_institutional_policy"
-    assert "tier_4_open_journalism" in wl, "missing tier_4_open_journalism"
+    assert "tier_4_open_journalism" not in wl, "tier_4_open_journalism should not exist (ADR-010)"
     tier_1_ids = {e["id"] for e in wl["tier_1_institutional_policy"]}
     tier_2_ids = {e["id"] for e in wl["tier_2_academic_analytical"]}
-    tier_4_ids = {e["id"] for e in wl["tier_4_open_journalism"]}
+    tier_2_policy_ids = {e["id"] for e in wl["tier_2_policy_analytical"]}
     for required in ("fed_board", "imf", "bis"):
-        assert required in tier_1_ids, f"missing required tier-1 institutional source: {required}"
-    for required in ("nber", "voxeu"):
+        assert required in tier_1_ids, f"missing required tier-1 source: {required}"
+    for required in ("voxeu", "arxiv"):
         assert required in tier_2_ids, f"missing required tier-2 academic source: {required}"
-    for required in ("apnews", "marketwatch"):
-        assert required in tier_4_ids, f"missing required tier-4 journalism source: {required}"
+    for required in ("brookings", "piie", "cfr"):
+        assert required in tier_2_policy_ids, f"missing required tier-2 policy source: {required}"
+    # Journalism sources must be absent from all active semantic corpus tiers
+    all_active_ids = tier_1_ids | tier_2_ids | tier_2_policy_ids
+    for removed in ("apnews", "reuters", "marketwatch"):
+        assert removed not in all_active_ids, f"{removed} should not be in semantic corpus (ADR-010)"
 
 
 def test_keyword_seed_has_minimum_coverage():
@@ -117,20 +121,16 @@ def test_fizzled_seed_marked_as_draft():
 # ---------------------------------------------------------------------------
 
 def test_ingestors_importable():
-    # Phase 2 ingestors (ADR-008): institutional + open journalism
+    # ADR-010: institutional+academic corpus only; journalism ingestors archived
     from mnd.ingestion import (
-        APNewsIngestor,
         Article,
         FederalReserveIngestor,
         FredFetcher,
         InstitutionalIngestor,
         Ingestor,
-        MarketWatchIngestor,
     )
     assert issubclass(InstitutionalIngestor, Ingestor)
     assert issubclass(FederalReserveIngestor, Ingestor)
-    assert issubclass(APNewsIngestor, Ingestor)
-    assert issubclass(MarketWatchIngestor, Ingestor)
     # Article is a dataclass with the canonical fields
     a = Article(
         article_id="x", source_id="fed_board", url="https://federalreserve.gov/x",
@@ -140,15 +140,29 @@ def test_ingestors_importable():
     assert a.tier == 1
 
 
+def test_cfr_ingestor_importable():
+    """ADR-010: CFR reinstated as Tier 2 source."""
+    from mnd.ingestion.institutional import CFRIngestor
+    from mnd.ingestion.base import Ingestor
+    assert issubclass(CFRIngestor, Ingestor)
+    assert CFRIngestor.source_id == "cfr"
+
+
+def test_mediacloud_detector_importable():
+    """ADR-010: Media Cloud detection layer added."""
+    from mnd.detection.mediacloud import MediaCloudDetector
+    assert hasattr(MediaCloudDetector, "fetch_story_counts")
+    assert hasattr(MediaCloudDetector, "detect_anomalies")
+
+
 # ---------------------------------------------------------------------------
 # Embedding module shape (no model load)
 # ---------------------------------------------------------------------------
 
 def test_embedder_factory_produces_correct_config():
+    """ADR-010: single model all-mpnet-base-v2."""
     from mnd.embedding import Embedder
     primary = Embedder.from_config("primary")
-    comparator = Embedder.from_config("comparator")
-    assert "Qwen3" in primary.model_name
-    assert "mpnet" in comparator.model_name
-    assert primary.instruction_aware is True
-    assert comparator.instruction_aware is False
+    assert "mpnet" in primary.model_name
+    assert primary.instruction_aware is False
+    assert primary.max_seq_len == 384

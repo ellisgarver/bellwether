@@ -1,12 +1,15 @@
 #!/bin/bash
-# SLURM job script: institutional corpus ingestion on UChicago RCC (Midway3).
+# SLURM job script: institutional+academic corpus ingestion on UChicago RCC (Midway3).
 #
-# Covers Tiers 1–3 (ADR-008):
-#   Tier 1 — Federal Reserve (FOMC, speeches, Beige Book), IMF, BIS, CEA,
-#             CBO, Treasury/OFR
-#   Tier 2 — NBER (JEL E/F/G abstracts + intros), SSRN (abstracts),
-#             VoxEU full posts
-#   Tier 3 — Brookings, PIIE
+# Covers Tiers 1–2 (ADR-010 / MND_PROJECT_SPEC.md):
+#   Tier 1 — Federal Reserve (FOMC, speeches, Beige Book, FEDS Notes, MPR),
+#             Regional Feds (NY, SF, Chicago, Atlanta), IMF (Blog/WEO/GFSR/WPs),
+#             BIS (QR/WPs), CEA, CBO, Treasury/OFR, Jackson Hole, Congressional
+#   Tier 2 — arXiv (econ/q-fin), VoxEU, Brookings, PIIE, CFR
+#             (NBER and SSRN excluded from historical corpus — Phase 6 only)
+#
+# JOURNALISM TIER REMOVED (ADR-010): AP News, Reuters, MarketWatch are no longer
+# in the semantic corpus. Do not add them back without a new ADR.
 #
 # All via direct fetch / institutional RSS — sequential, network I/O bound.
 # No GPU or large RAM needed.
@@ -20,33 +23,18 @@
 #   Partition: caslake
 #   CPUs:      4  (sequential RSS/HTTP fetches; extra cores unused)
 #   RAM:       8 GB
-#   Time:      24 h  (VoxEU ~6.5h + Brookings ~6.25h + other sources ~3h; checkpoint/resume if needed)
+#   Time:      24 h  (VoxEU ~6.5h + Brookings ~6.25h + other sources ~3h)
 #
-# Submit independently:
-#   sbatch scripts/rcc/ingest_institutional_rcc.sh
-#
-# Submit as part of full pipeline (institutional → journalism → embed → cluster):
-#   INGEST_INST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
-#   INGEST_AP=$(sbatch --parsable --dependency=afterok:$INGEST_INST \
-#                   scripts/rcc/ingest_apnews_rcc.sh)
-#   INGEST_MW=$(sbatch --parsable --dependency=afterok:$INGEST_AP \
-#                   scripts/rcc/ingest_marketwatch_rcc.sh)
-#   FILTER=$(sbatch --parsable \
-#                --dependency=afterok:$INGEST_MW \
+# Full pipeline submission (run from Midway3 login node):
+#   INGEST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
+#   FILTER=$(sbatch --parsable --dependency=afterok:$INGEST \
 #                scripts/rcc/filter_rcc.sh)
-#   EMBED_PRIMARY=$(sbatch --parsable \
-#                    --dependency=afterok:$FILTER \
-#                    --export=ROLE=primary scripts/rcc/embed_rcc.sh)
-#   EMBED_COMPARATOR=$(sbatch --parsable \
-#                    --dependency=afterok:$FILTER \
-#                    --export=ROLE=comparator scripts/rcc/embed_rcc.sh)
-#   sbatch --dependency=afterok:$EMBED_PRIMARY scripts/rcc/cluster_rcc.sh
-#   echo "Ingest institutional: $INGEST_INST"
-#   echo "Ingest AP News:       $INGEST_AP"
-#   echo "Ingest MarketWatch:   $INGEST_MW"
+#   EMBED=$(sbatch --parsable --dependency=afterok:$FILTER \
+#                scripts/rcc/embed_rcc.sh)
+#   sbatch --dependency=afterok:$EMBED scripts/rcc/cluster_rcc.sh
+#   echo "Ingest institutional: $INGEST"
 #   echo "Filter:               $FILTER"
-#   echo "Embed primary:        $EMBED_PRIMARY"
-#   echo "Embed comparator:     $EMBED_COMPARATOR"
+#   echo "Embed:                $EMBED"
 #
 # Custom date range:
 #   sbatch --export=START=2010-01-01,END=2024-12-31 \
@@ -85,6 +73,7 @@ echo "===== mnd-ingest-inst ====="
 echo "Job ID:  $SLURM_JOB_ID"
 echo "Node:    $(hostname)"
 echo "Window:  $START → $END"
+echo "Sources: institutional (Tiers 1–2; ADR-010)"
 echo "Started: $(date)"
 echo "==========================="
 

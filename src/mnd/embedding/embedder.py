@@ -1,12 +1,10 @@
 """Article embedding.
 
-Two-model setup, locked in config:
-  - PRIMARY: Qwen3-Embedding-0.6B (1024-d, instruction-aware, modern)
-  - COMPARATOR: all-mpnet-base-v2 (768-d, older cutoff, look-ahead clean)
+Single-model strategy per ADR-010: all-mpnet-base-v2 (768-d, training cutoff ~2020-2021).
+The two-model Qwen3/mpnet strategy from ADR-001 has been superseded.
 
-Production work uses ``primary``. The look-ahead sensitivity check
-(plan §7.2) re-runs validation on early anchor narratives with
-``comparator`` and compares results.
+Look-ahead sensitivity check: compare NMI across pre-2021 and post-2021 sub-periods
+using this single model — no second model needed.
 
 The interface returns numpy arrays for downstream BERTopic compatibility.
 """
@@ -21,14 +19,13 @@ from mnd.utils.logging import get_logger
 
 log = get_logger(__name__)
 
-ModelRole = Literal["primary", "comparator"]
+ModelRole = Literal["primary"]
 
 
 class Embedder:
-    """Unified embedder that loads either the primary or comparator model.
+    """Embedder for all-mpnet-base-v2 (single model per ADR-010).
 
-    Use ``Embedder.from_config("primary")`` for normal pipeline runs and
-    ``Embedder.from_config("comparator")`` for the look-ahead sensitivity check.
+    Use ``Embedder.from_config("primary")`` for all pipeline runs.
     """
 
     def __init__(

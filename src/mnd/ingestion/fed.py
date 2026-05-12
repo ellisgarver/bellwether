@@ -61,6 +61,7 @@ class FederalReserveIngestor(Ingestor):
         yield from self._fetch_fomc_minutes(start, end)
         yield from self._fetch_speeches(start, end)
         yield from self._fetch_beige_books(start, end)
+        yield from self._fetch_feds_notes(start, end)
 
     def _fetch_fomc_statements(self, start: date, end: date) -> Iterator[Article]:
         """Walk the FOMC calendars page; emit one Article per statement."""
@@ -275,6 +276,76 @@ class FederalReserveIngestor(Ingestor):
                     word_count=len(body.split()),
                     raw_metadata={"document_type": "speech"},
                 )
+
+    def _fetch_feds_notes(self, start: date, end: date) -> Iterator[Article]:
+        """Fetch FEDS Notes from the Fed's econres/notes listing page.
+
+        FEDS Notes are short analytical pieces (1,000–3,000 words, ~70/year) written
+        by Board economists. Faster than working papers; authoritative within days of
+        events. URL pattern: /econres/notes/feds-notes/YYYY/slug.htm
+        """
+        import re as _re
+        index_url = "https://www.federalreserve.gov/econres/notes/feds-notes/"
+        try:
+            resp = _get(index_url)
+        except Exception as exc:
+            log.warning("FEDS Notes index fetch failed: %s", exc)
+            return
+        soup = BeautifulSoup(resp.text, "lxml")
+        seen: set[str] = set()
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            m = _re.search(r"/econres/notes/feds-notes/(\d{4})/", href)
+            if not m:
+                continue
+            try:
+                note_year = int(m.group(1))
+            except ValueError:
+                continue
+            if note_year < start.year or note_year > end.year:
+                continue
+            full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
+            if full_url in seen:
+                continue
+            seen.add(full_url)
+            try:
+                page = _get(full_url)
+            except Exception as exc:
+                log.debug("FEDS Notes fetch failed %s: %s", full_url, exc)
+                continue
+            body = _extract_text(page.text)
+            if not body or len(body.split()) < 100:
+                continue
+            title = link.get_text(strip=True) or f"FEDS Note {note_year}"
+            pub_date = date(note_year, 1, 1)
+            # Try to parse exact date from the note's page or URL
+            date_m = _re.search(r"/(\d{4})/(\d{2})/(\d{2})/", href)
+            if date_m:
+                try:
+                    pub_date = date(int(date_m.group(1)), int(date_m.group(2)), int(date_m.group(3)))
+                except ValueError:
+                    pass
+            if pub_date < start or pub_date > end:
+                continue
+            yield Article(
+                article_id=_stable_article_id(self.source_id, full_url),
+                source_id="federalreserve",
+                url=full_url,
+                published_at=pub_date.isoformat() + "T12:00:00Z",
+                retrieved_at=_now_utc_iso(),
+                title=title,
+                body=body,
+                author="Federal Reserve Board",
+                section="feds_notes",
+                language="en",
+                tier=1,
+                access="free",
+                retrieval="fed_site",
+                word_count=len(body.split()),
+                raw_metadata={"document_type": "feds_notes"},
+            )
+            import time as _time
+            _time.sleep(0.5)
 
     def _fetch_speeches_rss_year(self, year: int, start: date, end: date) -> Iterator[Article]:
         """RSS fallback for Fed speeches when annual index pages are unreachable."""
