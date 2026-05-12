@@ -47,7 +47,7 @@ modify pilot code. Resume instructions below are retained for reference only.
 - [x] Phase 0 — scaffold, configs, anchor set, ingestors, embedding module
 - [x] Phase 1 — filtering, dedup, clustering, dynamics, stages, validation, CLI
 - [ ] Phase 2 — full ingestion 2010–present (institutional Tiers 1–2 + CFR + RavenPack dynamics layer; journalism tier removed per ADR-010)
-- [ ] Phase 3 — full corpus embedding (all-mpnet-base-v2), look-ahead sensitivity (sub-period NMI), dynamics fitting
+- [ ] Phase 3 — full corpus embedding (Qwen3 primary + mpnet comparator look-ahead check, ADR-011), dynamics fitting
 - [ ] Phase 4 — pre-registration finalized, full anchor + fizzled validation
 - [ ] Phase 5 — Streamlit dashboard, Hugging Face Spaces deploy
 - [ ] Phase 6 — weekly cron update pipeline (AP News RSS + RavenPack live)
@@ -56,7 +56,7 @@ modify pilot code. Resume instructions below are retained for reference only.
 ## Environment
 
 - Local compute: Apple Silicon MPS (MacBook Air M-series) — `embedding_device: auto` detects it
-  - `all-mpnet-base-v2` max_seq_len is 384; no OOM risk on MPS (ADR-010 removed Qwen3)
+  - Set `MND_MAX_SEQ_LEN=512` in `.env` to avoid OOM on Qwen3-Embedding-0.6B (ADR-006)
 - Full corpus runs: UChicago RCC (CUDA) — `MND_EMBEDDING_DEVICE=cuda` or set in `.env`; use SLURM scripts in `scripts/rcc/`
 - FRED key: `FRED_API_KEY` in `.env` (validation only)
 - WRDS: `WRDS_USERNAME` and `WRDS_PASSWORD` in `.env` for RavenPack dynamics layer queries

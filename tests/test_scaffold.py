@@ -28,14 +28,17 @@ def test_master_config_loads():
     assert cfg["temporal"]["train_test_split"] == "2020-01-01"
 
 
-def test_embedding_single_model_strategy():
-    """ADR-010: single model (all-mpnet-base-v2) — two-model strategy superseded."""
+def test_embedding_two_model_strategy():
+    """ADR-001 restored by ADR-011: Qwen3 primary + mpnet comparator for look-ahead check."""
     from mnd.utils.config import load_config
     cfg = load_config()
     assert "primary" in cfg["embedding"]
-    assert "comparator" not in cfg["embedding"], "comparator slot removed in ADR-010"
-    assert "mpnet" in cfg["embedding"]["primary"]["model"]
-    assert cfg["embedding"]["primary"]["dimensions"] == 768
+    assert "comparator" in cfg["embedding"]
+    assert cfg["embedding"]["primary"]["model"].startswith("Qwen/Qwen3-Embedding")
+    assert cfg["embedding"]["primary"]["dimensions"] == 1024
+    assert cfg["embedding"]["primary"]["max_seq_len"] == 32768
+    assert "mpnet" in cfg["embedding"]["comparator"]["model"]
+    assert cfg["embedding"]["comparator"]["max_seq_len"] == 384
 
 
 def test_kill_criteria_thresholds_present():
@@ -160,9 +163,13 @@ def test_mediacloud_detector_importable():
 # ---------------------------------------------------------------------------
 
 def test_embedder_factory_produces_correct_config():
-    """ADR-010: single model all-mpnet-base-v2."""
+    """ADR-011: Qwen3 primary (long context), mpnet comparator (look-ahead check)."""
     from mnd.embedding import Embedder
     primary = Embedder.from_config("primary")
-    assert "mpnet" in primary.model_name
-    assert primary.instruction_aware is False
-    assert primary.max_seq_len == 384
+    comparator = Embedder.from_config("comparator")
+    assert "Qwen3" in primary.model_name
+    assert primary.instruction_aware is True
+    assert primary.max_seq_len == 32768
+    assert "mpnet" in comparator.model_name
+    assert comparator.instruction_aware is False
+    assert comparator.max_seq_len == 384

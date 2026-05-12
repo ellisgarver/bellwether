@@ -1,10 +1,13 @@
 """Article embedding.
 
-Single-model strategy per ADR-010: all-mpnet-base-v2 (768-d, training cutoff ~2020-2021).
-The two-model Qwen3/mpnet strategy from ADR-001 has been superseded.
-
-Look-ahead sensitivity check: compare NMI across pre-2021 and post-2021 sub-periods
-using this single model — no second model needed.
+Two-model strategy per ADR-001 (restored by ADR-011):
+  PRIMARY   — Qwen3-Embedding-0.6B (1024-d, 32,768-token context, instruction-aware)
+              Production model. Long context is essential for FOMC minutes, BIS reports,
+              Jackson Hole papers.
+  COMPARATOR — all-mpnet-base-v2 (768-d, 384-token context)
+              Used ONLY for the look-ahead sensitivity check (ADR-011): compare Qwen3
+              vs mpnet Δ_NMI(post-2021 − pre-2021) on anchor narrative sub-corpora.
+              If Qwen3 Δ_NMI > 0.15 and mpnet Δ_NMI ≤ 0.15 → flag look-ahead.
 
 The interface returns numpy arrays for downstream BERTopic compatibility.
 """
@@ -19,13 +22,14 @@ from mnd.utils.logging import get_logger
 
 log = get_logger(__name__)
 
-ModelRole = Literal["primary"]
+ModelRole = Literal["primary", "comparator"]
 
 
 class Embedder:
-    """Embedder for all-mpnet-base-v2 (single model per ADR-010).
+    """Unified embedder for primary (Qwen3) or comparator (mpnet) model.
 
-    Use ``Embedder.from_config("primary")`` for all pipeline runs.
+    Use ``Embedder.from_config("primary")`` for all production pipeline runs.
+    Use ``Embedder.from_config("comparator")`` only for the look-ahead sensitivity check.
     """
 
     def __init__(
