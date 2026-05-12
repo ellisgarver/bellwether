@@ -14,8 +14,8 @@ architectural decisions are in `docs/handoff_to_claude_code.md` and
 - Every random seed flows from `config.reproducibility.global_random_seed` (42).
 - Do not hand-tune any parameter to improve anchor recovery.
 - Do not load held-out (2020+) data into clustering or hyperparameter search before Phase 4.
-- Do not add closed-source or paid-API dependencies to the core pipeline (ADR-001).
-- ProQuest, Factiva, Bloomberg are NOT pipeline sources — do not reinstate. (Reuters IS a pipeline source as of 2026-05-07.)
+- Do not add closed-source or paid-API dependencies to the core pipeline.
+- ProQuest, Factiva, Bloomberg, AP News, Reuters, MarketWatch are NOT semantic corpus sources — do not reinstate without a new ADR. (AP News and Reuters were removed in ADR-010, 2026-05-11.)
 - Any deviation from the above requires a new ADR in `docs/architecture_decisions.md` first.
 
 ## Communication style
@@ -46,8 +46,8 @@ modify pilot code. Resume instructions below are retained for reference only.
 
 - [x] Phase 0 — scaffold, configs, anchor set, ingestors, embedding module
 - [x] Phase 1 — filtering, dedup, clustering, dynamics, stages, validation, CLI
-- [ ] Phase 2 — full ingestion 2010–present (institutional + AP News + RavenPack dynamics layer)
-- [ ] Phase 3 — full corpus embedding, look-ahead sensitivity, multi-model dynamics
+- [ ] Phase 2 — full ingestion 2010–present (institutional Tiers 1–2 + CFR + RavenPack dynamics layer; journalism tier removed per ADR-010)
+- [ ] Phase 3 — full corpus embedding (all-mpnet-base-v2), look-ahead sensitivity (sub-period NMI), dynamics fitting
 - [ ] Phase 4 — pre-registration finalized, full anchor + fizzled validation
 - [ ] Phase 5 — Streamlit dashboard, Hugging Face Spaces deploy
 - [ ] Phase 6 — weekly cron update pipeline (AP News RSS + RavenPack live)
@@ -56,11 +56,11 @@ modify pilot code. Resume instructions below are retained for reference only.
 ## Environment
 
 - Local compute: Apple Silicon MPS (MacBook Air M-series) — `embedding_device: auto` detects it
-  - Set `MND_MAX_SEQ_LEN=512` in `.env` to avoid OOM on Qwen3-Embedding-0.6B (see ADR-006)
-  - `config.yaml` now defaults to 32768; the env var overrides for local runs without touching the file
+  - `all-mpnet-base-v2` max_seq_len is 384; no OOM risk on MPS (ADR-010 removed Qwen3)
 - Full corpus runs: UChicago RCC (CUDA) — `MND_EMBEDDING_DEVICE=cuda` or set in `.env`; use SLURM scripts in `scripts/rcc/`
 - FRED key: `FRED_API_KEY` in `.env` (validation only)
 - WRDS: `WRDS_USERNAME` and `WRDS_PASSWORD` in `.env` for RavenPack dynamics layer queries
+- Media Cloud: `MEDIACLOUD_API_KEY` in `.env` for Layer 2 detection
 
 ## Phase 2 corpus architecture (updated 2026-05-07)
 
@@ -68,23 +68,26 @@ modify pilot code. Resume instructions below are retained for reference only.
 
 | Tier | Sources | Retrieval |
 |---|---|---|
-| 1 — Institutional policy | Federal Reserve (all: FOMC, speeches, regional Feds), IMF (WEO/GFSR/F&D/WPs), BIS (WPs), Treasury/OFR/FSOC, Jackson Hole symposium, Congressional testimony (Treasury Sec) | Direct fetch / institutional RSS |
-| 2 — Academic analytical | NBER WPs (abstracts + intros), arXiv econ/q-fin (abstracts), VoxEU/CEPR (full posts) | Direct fetch / RSS |
-| 3 — Policy-journalism bridge | Brookings Institution, PIIE (Peterson Institute) | Direct fetch / RSS |
-| 4 — Open journalism | AP News (wire, event detection, 2010–present); Reuters (wire + analytical, 2010–present) | Wayback CDX (historical); RSS (Phase 6 live) |
+| 1 — Institutional policy | Federal Reserve (all: FOMC, speeches, Beige Book, FEDS Notes, MPR, FSR), Regional Feds (NY/SF/Chicago/Atlanta/Dallas/StLouis/Cleveland), IMF (Blog/WEO/GFSR/WPs), BIS (QR/WPs), CEA, CBO, Treasury/OFR/FSOC, Jackson Hole symposium, Congressional testimony (Treasury Sec) | Direct fetch / institutional RSS |
+| 2 — Academic analytical + policy | arXiv econ/q-fin (abstracts), VoxEU/CEPR (full posts), Brookings, PIIE, CFR | Direct fetch / RSS |
 
-**Removed sources (2026-05-07):** CBO (HTTP 403 from all IPs), SSRN (no historical archive, live-RSS only), MarketWatch (replaced by Reuters).
+**Removed from semantic corpus (ADR-010, 2026-05-11):** AP News, Reuters, MarketWatch. Their journalism propagation signal is captured by RavenPack (Layer 1B, dynamics only). Raw ingested JSONL retained in `data/raw/articles/`; excluded from embedding by `run_pipeline.py filter-pre-embed`.
 
-**Stated limitation:** Premium analytical press — WSJ opinion, Bloomberg Opinion, FT — is not represented in text form. Their volume signal is partially captured by the RavenPack dynamics layer (Dow Jones edition covers WSJ, DJN, Barron's, MarketWatch). Disclosed in pre-registration and methodology. Not a gap to patch.
+**Historical corpus only (NBER, SSRN):** Historical bulk retrieval failed; both are Phase 6 live RSS only. `NBERIngestor` and `SSRNIngestor` remain in code but commented out of `InstitutionalIngestor` for historical runs.
 
-### Dynamics layer (volume time series for SIR/logistic fitting)
+**Stated limitation:** Premium analytical press — WSJ opinion, Bloomberg Opinion, FT — is not represented in text form. Their volume signal is captured by the RavenPack dynamics layer. Disclosed in pre-registration and methodology.
+
+### Layer 2 — Detection (story counts only, no embedding)
+
+**Source: Media Cloud API.** Daily story count time series by keyword/topic query across thousands of outlets. Fires candidate narrative emergence flags before institutional sources have characterized it. API key: `MEDIACLOUD_API_KEY` in `.env`. Output: `data/detection/mediacloud/`. Code: `src/mnd/detection/mediacloud.py`.
+
+### Dynamics layer — Layer 1B (volume time series for SIR/logistic fitting)
 
 **Source: RavenPack RPA 1.0 Global Macro, Dow Jones Edition via WRDS.**
 
 - Metadata and event records only (not full text) for WSJ, Barron's, Dow Jones Newswires, MarketWatch, PR Newswire, and ~800 other sources
 - ~5-week lag, monthly vintage by design (look-ahead bias protection). Dashboard labels all RavenPack metrics "as of [last delivered month]"
 - Use for: historical volume time series on known narrative clusters; broader press propagation estimates
-- Emergence detection uses own-corpus volume counts from Tier 4 journalism — real-time signal
 - Do NOT feed RavenPack records into embedding or clustering — dynamics layer only
 
 ### Anchor narratives (FINAL — 10 narratives)
@@ -124,17 +127,18 @@ Removed from prior version: FTX collapse, GameStop short squeeze (out of macro s
 
 **Raw vs. smoothed series:** Volume curve primary trace = smoothed_combined (stratified-smoothed). Background trace = raw_combined. Both always visible.
 
-### Phase 2 pipeline (run on RCC)
+### Phase 2 pipeline (run on RCC, ADR-010)
 
 ```bash
 # Full historical ingestion (2010-present) — SLURM dependency chain
-INGEST_INST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
-INGEST_AP=$(sbatch --parsable --dependency=afterok:$INGEST_INST scripts/rcc/ingest_apnews_rcc.sh)
-INGEST_RT=$(sbatch --parsable --dependency=afterok:$INGEST_AP scripts/rcc/ingest_reuters_rcc.sh)
-FILTER=$(sbatch --parsable --dependency=afterok:$INGEST_RT scripts/rcc/filter_rcc.sh)
-EMBED_PRIMARY=$(sbatch --parsable --dependency=afterok:$FILTER --export=ROLE=primary scripts/rcc/embed_rcc.sh)
-EMBED_COMPARATOR=$(sbatch --parsable --dependency=afterok:$FILTER --export=ROLE=comparator scripts/rcc/embed_rcc.sh)
-sbatch --dependency=afterok:$EMBED_PRIMARY scripts/rcc/cluster_rcc.sh
+# Journalism tier removed; single institutional job only.
+INGEST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
+FILTER=$(sbatch --parsable --dependency=afterok:$INGEST scripts/rcc/filter_rcc.sh)
+EMBED=$(sbatch --parsable --dependency=afterok:$FILTER scripts/rcc/embed_rcc.sh)
+sbatch --dependency=afterok:$EMBED scripts/rcc/cluster_rcc.sh
+
+# Pre-embedding filter (excludes any archived journalism sources from raw JSONL)
+python scripts/run_pipeline.py filter-pre-embed
 
 # Corpus composition QA (run after filter)
 python scripts/run_pipeline.py corpus-composition --by-tier --output data/processed/corpus_composition.csv
@@ -156,6 +160,9 @@ python scripts/run_pipeline.py normalize-dynamics
 | Anchor narratives (locked) | `data/anchors/anchor_narratives.jsonl` |
 | Topic seed articles | `data/anchors/topic_seed_articles.jsonl` |
 | Architecture decisions | `docs/architecture_decisions.md` |
+| Project specification (supersedes CLAUDE.md on architecture) | `MND_PROJECT_SPEC.md` |
 | Pre-registration draft | `prereg/PREREGISTRATION.md` |
+| Media Cloud detection module | `src/mnd/detection/mediacloud.py` |
+| RavenPack dynamics ingestor | `src/mnd/ingestion/ravenpack.py` |
 | RCC SLURM scripts | `scripts/rcc/` |
 | Archived / superseded code | `scripts/archive/` |

@@ -23,32 +23,19 @@ temporal:
   live_update_day: "monday"         # day of week for the cron trigger
 
 # -----------------------------------------------------------------------------
-# Embedding (locked)
+# Embedding (locked — ADR-010)
 # -----------------------------------------------------------------------------
-# Two-model strategy:
-#  - PRIMARY: modern, strong general-purpose model. Used for all production work.
-#  - COMPARATOR: older model with cleaner pre-2021 cutoff, used ONLY for the
-#    mandatory look-ahead sensitivity check (config.validation.lookahead_check).
-#
-# This formalizes the look-ahead bias argument: if cluster quality and stage
-# classifications are stable across primary and comparator on pre-2021 data,
-# the bias is bounded. If not, we caveat and (per kill criteria) consider the
-# fallback scope.
+# Single-model strategy: all-mpnet-base-v2, training cutoff ~2020-2021.
+# Chosen over modern models (Qwen3, etc.) to minimize look-ahead bias on the
+# 2010-present historical corpus. ADR-001 (two-model Qwen3 strategy) superseded
+# by ADR-010. Look-ahead sensitivity check uses sub-period NMI comparison with
+# this single model — not a second model.
 embedding:
   primary:
-    model: "Qwen/Qwen3-Embedding-0.6B"
-    revision: "main"               # Pin to specific commit hash before Phase 2
-    dimensions: 1024
-    max_seq_len: 32768             # Full context for RCC (CUDA). On MPS/MacBook Air, override to 512 via env: MND_MAX_SEQ_LEN=512. See ADR-006.
-    instruction_aware: true
-    instruction_prefix: "Instruct: Represent this financial article for narrative clustering\nQuery: "
-    # Set to Qwen3-Embedding-4B if RCC capacity allows; identical interface
-    upgrade_path: "Qwen/Qwen3-Embedding-4B"
-  comparator:
     model: "sentence-transformers/all-mpnet-base-v2"
-    revision: "main"               # Pin before Phase 2
+    revision: "main"               # Pin to specific commit hash before Phase 2
     dimensions: 768
-    max_seq_len: 384
+    max_seq_len: 384               # Model's native max; env MND_MAX_SEQ_LEN overrides
     instruction_aware: false
   # Article preprocessing applied before embedding
   article:
@@ -191,9 +178,13 @@ compute:
 paths:
   raw_articles: "data/raw/articles"
   raw_validation: "data/raw/validation"
+  corpus_for_embedding: "data/processed/corpus_for_embedding.jsonl"  # filtered; excludes archived journalism sources
   processed_articles: "data/processed/articles.parquet"
   processed_embeddings: "data/processed/embeddings.npy"
   processed_clusters: "data/processed/clusters.parquet"
   processed_dynamics: "data/processed/dynamics.parquet"
+  dynamics_ravenpack: "data/dynamics/ravenpack"                       # Signal A: RavenPack press volume
+  dynamics_institutional: "data/dynamics/institutional"               # Signal B: institutional corpus counts
+  detection_mediacloud: "data/detection/mediacloud"                   # Layer 2: Media Cloud story counts
   dashboard_artifacts: "data/processed/dashboard"
   logs: "logs"

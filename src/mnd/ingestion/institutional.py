@@ -1,30 +1,34 @@
-"""Institutional, academic, and policy-journalism ingestors.
+"""Institutional, academic, and policy-analytical ingestors.
 
-Covers the semantic corpus tiers defined in ADR-008 and config/whitelist.yaml:
+Covers the semantic corpus tiers defined in ADR-010 / MND_PROJECT_SPEC.md
+and config/whitelist.yaml:
 
   Tier 1 — Institutional policy
-    FederalReserveIngestor  fed.py — FOMC, speeches, Beige Book
+    FederalReserveIngestor  fed.py — FOMC, speeches, Beige Book, FEDS Notes
     FedRegionalIngestor     Regional Fed blogs and Economic Letters
     JacksonHoleIngestor     Kansas City Fed Jackson Hole proceedings (2010–present)
     CongressionalIngestor   Treasury Secretary testimony (Senate Banking, HFSC)
-    IMFIngestor             imf.org — WEO/GFSR/F&D, Working Papers (RCC only)
-    BISIngestor             bis.org — Working Papers via sitemap
+    IMFIngestor             imf.org — WEO/GFSR/Blog/Working Papers (RCC only)
+    BISIngestor             bis.org — Quarterly Review + Working Papers
     TreasuryOFRIngestor     OFR Working Papers and Briefs, FSOC Annual Reports
+    CBOIngestor             cbo.gov — Budget/Economic Outlook (may 403 from residential IPs)
 
-  Tier 2 — Academic analytical
-    NBERIngestor            nber.org — WP abstracts + introductions (JEL E/F/G)
+  Tier 2 — Academic-analytical
+    NBERIngestor            nber.org — WP abstracts (Phase 6 live RSS only; historical blocked)
     ArxivIngestor           arxiv.org — econ.GN/EM, q-fin.EC/GN/RM preprints
     VoxEUIngestor           cepr.org/voxeu — full posts
-
-  Tier 3 — Policy-journalism bridge
+    SSRNIngestor            ssrn.com — abstracts (Phase 6 live RSS only; no historical archive)
     BrookingsIngestor       brookings.edu — macro-filtered articles
     PIIEIngestor            piie.com — policy briefs, working papers, blog posts
+    CFRIngestor             cfr.org — reports, backgrounders, expert briefs (macro-filtered)
 
-  InstitutionalIngestor   Composite: runs all of the above and merges output.
+  InstitutionalIngestor   Composite: runs all active ingestors and merges output.
+                          NBER and SSRN are EXCLUDED from historical corpus runs
+                          (historical_corpus=false in whitelist.yaml). They run in
+                          Phase 6 live RSS updates only.
 
-Removed sources:
-  CBOIngestor   — cbo.gov returns 403 from all tested IPs (JS challenge); cut
-  SSRNIngestor  — SSRN exposes only 30–90 day RSS window, not historical archive
+Journalism tier (AP News, Reuters, MarketWatch) removed in ADR-010.
+Ingestors archived in scripts/archive/.
 
 All timestamps follow the ADR-008 rule: publication/release date only.
 FOMC minutes = release date. NBER papers = posting date.
@@ -1676,6 +1680,69 @@ class PIIEIngestor(Ingestor):
             time.sleep(0.5)
 
 
+class CFRIngestor(Ingestor):
+    """Council on Foreign Relations: RSS-based retrieval.
+
+    CFR publishes reports, backgrounders, and expert briefs on global macro-
+    financial topics: dollar dynamics, sovereign debt, global monetary policy,
+    trade, and geopolitical-financial intersections. Tier 2 per ADR-010.
+
+    Retrieval: RSS feed (cfr.org/rss/all) with macro-relevance title filter.
+    Pre-2015 historical archive coverage via Wayback CDX of cfr.org patterns
+    may be incomplete; corpus composition QA will flag this.
+    """
+
+    source_id = "cfr"
+
+    _RSS_URL = "https://www.cfr.org/rss/all"
+
+    _MACRO_TERMS = {
+        "inflation", "monetary", "interest rate", "federal reserve", "central bank",
+        "exchange rate", "gdp", "recession", "unemployment", "credit", "fiscal",
+        "financial", "dollar", "debt", "trade", "currency", "bond", "yield",
+        "growth", "economy", "economics", "market", "policy", "capital",
+        "banking", "banking crisis", "treasury", "fed", "global economy",
+        "emerging market", "imf", "world bank", "g20", "g7",
+    }
+
+    def fetch(self, start: date, end: date) -> Iterator[Article]:
+        seen: set[str] = set()
+        for entry in _parse_rss(self._RSS_URL):
+            pub_date = _entry_date(entry)
+            if not pub_date or pub_date < start or pub_date > end:
+                continue
+            url = entry.get("link", "")
+            if not url or url in seen:
+                continue
+            title = entry.get("title", "")
+            if not self._is_macro_relevant(title):
+                continue
+            seen.add(url)
+
+            body = _extract_body(url) or BeautifulSoup(
+                entry.get("summary", ""), "lxml"
+            ).get_text(strip=True)
+            if not body or len(body.split()) < 50:
+                continue
+
+            yield _make_article(
+                source_id=self.source_id,
+                url=url,
+                published_at=pub_date.isoformat() + "T00:00:00Z",
+                title=title,
+                body=body,
+                author=entry.get("author"),
+                section="cfr_publication",
+                tier=2,
+                document_type="cfr_brief",
+            )
+            time.sleep(1.0)
+
+    def _is_macro_relevant(self, title: str) -> bool:
+        tl = title.lower()
+        return any(term in tl for term in self._MACRO_TERMS)
+
+
 # ---------------------------------------------------------------------------
 # Tier 1 — Jackson Hole / Kansas City Fed
 # ---------------------------------------------------------------------------
@@ -1932,11 +1999,16 @@ class InstitutionalIngestor(Ingestor):
             IMFIngestor(),
             BISIngestor(),
             TreasuryOFRIngestor(),
-            NBERIngestor(),
+            CBOIngestor(),
+            # NBER and SSRN excluded from historical corpus runs (historical_corpus=false).
+            # Uncomment for Phase 6 live RSS updates only:
+            # NBERIngestor(),
+            # SSRNIngestor(),
             ArxivIngestor(),
             VoxEUIngestor(),
             BrookingsIngestor(),
             PIIEIngestor(),
+            CFRIngestor(),
         ]
 
     def _load_checkpoint(self) -> dict:

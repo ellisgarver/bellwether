@@ -524,6 +524,61 @@ volume counts, which are real-time.
 
 ---
 
+## ADR-010: Full project spec overhaul — corpus architecture, embedding model, detection layer
+
+- **Status**: Accepted
+- **Date**: 2026-05-11
+- **Supersedes**: ADR-001 (two-model embedding), ADR-008 (Phase 2 corpus with AP News), ADR-009 (MarketWatch reinstatement)
+
+### Context
+
+MND_PROJECT_SPEC.md (rev2, 2026-05-11) was written as a comprehensive superseding document after Phase 2 ingestion completed on RCC. Several architectural decisions made during Phase 1 piloting and early Phase 2 planning required consolidation:
+
+1. **Journalism tier (AP News / MarketWatch / Reuters) in semantic corpus**: ADR-008 added AP News as Tier 4; ADR-009 reinstated MarketWatch. Reuters was added 2026-05-07. During Phase 2 review, it became clear that wire journalism adds noise to the semantic clustering — narrative *identity* is determined in institutional and academic discourse, not in wire redistribution. RavenPack (Layer 1B) provides the journalism propagation signal more cleanly and consistently than Wayback CDX retrieval.
+
+2. **Two-model embedding strategy (ADR-001)**: Using Qwen3-Embedding-0.6B as primary with a modern training cutoff increased look-ahead exposure substantially. The spec settles this by reverting to `all-mpnet-base-v2`, whose pre-2021 cutoff is consistent with our historical corpus window. The look-ahead sensitivity check is retained but implemented as a sub-period comparison within the single model run.
+
+3. **CFR added to Tier 2**: ADR-009 dropped CFR ("geopolitical framing dominates"), but the spec reinstates it. CFR's macro-financial coverage of dollar dynamics, sovereign debt, and global monetary policy is distinct from its geopolitical work and is relevant to the corpus.
+
+4. **Media Cloud as Layer 2 detection**: A new detection layer is added — Media Cloud provides daily story count time series by keyword/topic query across thousands of outlets. Its sole role is to detect anomalous narrative volume before institutional sources have characterized it in embeddable text. This does not feed embedding or clustering.
+
+5. **JLN → EPU in validation**: The Jurado-Ludvigson-Ng uncertainty index (accessed via WRDS) is replaced by the Baker-Bloom-Davis Economic Policy Uncertainty index (free direct download). EPU is constructed from the same kind of newspaper text this project analyzes, making it the strongest external benchmark.
+
+6. **NBER and SSRN**: Historical bulk retrieval failed (bot-protected, JavaScript-rendered). Both are retained for Phase 6 live RSS updates only. NBER and SSRN ingestors remain in `src/mnd/ingestion/institutional.py` but are excluded from the institutional RCC ingestion job for the historical corpus.
+
+### Decision
+
+**1. Journalism tier (Tier 4) removed from semantic corpus.** AP News, MarketWatch, and Reuters ingestors are moved to `scripts/archive/`. Raw ingested data remains on RCC (`data/raw/articles/`) but is excluded from embedding by `scripts/filter_corpus_pre_embed.py`. RavenPack provides the journalism volume signal as Layer 1B (dynamics fitting only).
+
+**2. Embedding model: `all-mpnet-base-v2` is the single production model.** The two-model strategy from ADR-001 is superseded. The look-ahead sensitivity check compares pre-2021 and post-2021 sub-period cluster quality using this single model (NMI comparison). The `comparator` config slot is removed.
+
+**3. CFR (Council on Foreign Relations) added as Tier 2 source.** RSS: `cfr.org/rss/all`. `CFRIngestor` added to `institutional.py` and to the `InstitutionalIngestor` composite. The prior exclusion note ("geopolitical framing dominates") is superseded.
+
+**4. Media Cloud detection layer added.** `src/mnd/detection/mediacloud.py` provides daily story count queries. API key: `MEDIACLOUD_API_KEY` in `.env`. Output to `data/detection/mediacloud/`. Does not feed embedding or clustering.
+
+**5. Validation: EPU replaces JLN.** EPU (Baker-Bloom-Davis) is a free download from `policyuncertainty.com`. `WRDS_MFS_*` env vars removed. EPU provides stronger benchmark validity because it is text-based, matching the discourse-measurement methodology.
+
+**6. NBER and SSRN excluded from historical corpus ingestion.** Both ingestors remain in the codebase for Phase 6 live RSS updates. The institutional SLURM job (`ingest_institutional_rcc.sh`) excludes them from the historical run.
+
+**7. FEDS Notes added explicitly to FederalReserveIngestor.** URL pattern: `federalreserve.gov/econres/notes/feds-notes/`. Board economists' fast-response analytical layer, published ~70/yr, was previously not distinguished from FEDS Working Papers.
+
+### Consequences
+
+**Positive:**
+- Semantic corpus is now purely institutional and academic register — cleaner clustering signal.
+- Single embedding model eliminates the two-model orchestration complexity.
+- CFR adds dollar dynamics and global monetary policy coverage absent from other Tier 2 sources.
+- Media Cloud detection enables pre-characterization narrative emergence signaling.
+- EPU validation is free, text-based, and directly comparable to this system's detection approach.
+
+**Negative / risks:**
+- Existing Phase 2 RCC ingestion output (AP News, Reuters, MarketWatch raw JSONL) must be filtered before embedding. `scripts/filter_corpus_pre_embed.py` handles this.
+- `all-mpnet-base-v2` is weaker than Qwen3-Embedding-0.6B on MTEB benchmarks. Tradeoff is accepted: the look-ahead bias argument becomes cleaner and the model is sufficient for the institutional corpus register.
+- CFR ingestion is RSS-based; historical archive back to 2010 may be incomplete. Corpus composition QA will flag pre-2015 CFR coverage.
+- University of Michigan consumer sentiment (`umich_inflation_exp`) remains in `whitelist.yaml` validation supplements for now; user has flagged it for future removal.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

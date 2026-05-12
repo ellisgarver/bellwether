@@ -1,9 +1,10 @@
-"""Pipeline orchestration CLI (plan §9.1).
+"""Pipeline orchestration CLI.
 
 Dispatches pipeline stages:
-  ingest              — fetch raw articles from configured sources
+  ingest              — fetch raw articles from institutional/academic sources
+  filter-pre-embed    — filter raw JSONL to exclude archived journalism sources
   filter              — topic filter + near-duplicate removal
-  embed               — encode articles to embeddings (primary or comparator model)
+  embed               — encode articles to embeddings (all-mpnet-base-v2)
   cluster             — BERTopic hierarchical clustering
   stability           — bootstrap stability eval (kill criterion 1: mean NMI ≥ 0.40)
   validate            — anchor narrative recovery (kill criterion 2: ≥7/10 recovered)
@@ -11,10 +12,9 @@ Dispatches pipeline stages:
 
 All paths default to config.paths.*. Override with --input / --output flags.
 
-Phase 2 full-corpus ingestion (run on RCC; see scripts/rcc/ingest_rcc.sh):
+Phase 2 full-corpus ingestion (ADR-010; run on RCC via SLURM scripts):
   python scripts/run_pipeline.py ingest --start 2010-01-01 --end 2025-12-31 --sources institutional
-  python scripts/run_pipeline.py ingest --start 2010-01-01 --end 2025-12-31 --sources apnews
-  python scripts/run_pipeline.py ingest --start 2010-01-01 --end 2025-12-31 --sources marketwatch
+  python scripts/run_pipeline.py filter-pre-embed   # excludes archived journalism sources
   python scripts/run_pipeline.py filter
   python scripts/run_pipeline.py embed --role primary
   python scripts/run_pipeline.py cluster
@@ -24,6 +24,11 @@ Phase 2 full-corpus ingestion (run on RCC; see scripts/rcc/ingest_rcc.sh):
 Phase 2 corpus QA (after full ingestion):
   python scripts/run_pipeline.py corpus-composition
   python scripts/run_pipeline.py corpus-composition --by-tier --output data/processed/corpus_composition.csv
+
+Note: AP News, Reuters, and MarketWatch have been removed from the semantic corpus
+(ADR-010). Their raw JSONL is retained in data/raw/articles/ but excluded from
+embedding by the filter-pre-embed step. RavenPack provides the journalism dynamics
+signal (Layer 1B); see src/mnd/ingestion/ravenpack.py.
 """
 from __future__ import annotations
 
@@ -66,10 +71,12 @@ def cli(ctx: click.Context) -> None:
     "--sources", default="institutional",
     show_default=True,
     help=(
-        "Comma-separated source IDs: institutional, apnews, marketwatch. "
-        "'institutional' covers Fed, IMF, BIS, CEA, CBO, Treasury/OFR, NBER, SSRN, VoxEU, "
-        "Brookings, PIIE (Tiers 1–3). 'apnews' and 'marketwatch' are Tier 4 open journalism "
-        "via Wayback CDX (ADR-008, ADR-009)."
+        "Comma-separated source IDs. Only 'institutional' is active for the semantic corpus "
+        "(ADR-010). Covers Fed (FOMC/speeches/Beige Book/FEDS Notes), Regional Feds, IMF, "
+        "BIS, CEA, CBO, Treasury/OFR, Jackson Hole, Congressional testimony, arXiv, VoxEU, "
+        "Brookings, PIIE, CFR (Tiers 1–2). "
+        "AP News, Reuters, and MarketWatch have been removed from the semantic corpus — "
+        "see scripts/archive/ for their ingestors."
     ),
 )
 @click.option("--output-dir", default=None, help="Output directory for raw JSONL files (overrides config default)")
@@ -77,14 +84,10 @@ def cli(ctx: click.Context) -> None:
 def ingest(
     ctx: click.Context, start: str, end: str, sources: str, output_dir: str | None,
 ) -> None:
-    """Fetch raw articles from configured ingestion sources (ADR-008)."""
+    """Fetch raw articles from institutional/academic sources (ADR-010)."""
     from datetime import date as date_t
 
-    from mnd.ingestion import (
-        APNewsIngestor,
-        InstitutionalIngestor,
-        MarketWatchIngestor,
-    )
+    from mnd.ingestion import InstitutionalIngestor
 
     cfg = ctx.obj["cfg"]
     root = project_root()
@@ -94,24 +97,25 @@ def ingest(
     start_d = date_t.fromisoformat(start)
     end_d = date_t.fromisoformat(end)
 
-    # Checkpoint file extension by source: institutional uses JSON (sub-source map),
-    # AP News and MarketWatch use TXT (set of already-fetched URLs).
     _checkpoint_ext = {"institutional": "json"}
 
     def _make_ingestor(name: str, cp_path):
         if name == "institutional":
             return InstitutionalIngestor(checkpoint_path=cp_path)
-        if name == "apnews":
-            return APNewsIngestor(checkpoint_path=cp_path)
-        if name == "marketwatch":
-            return MarketWatchIngestor(checkpoint_path=cp_path)
-        raise ValueError(f"Unknown source: {name}")
+        raise ValueError(
+            f"Unknown source: '{name}'. Only 'institutional' is active. "
+            "AP News, Reuters, and MarketWatch have been removed from the semantic corpus (ADR-010)."
+        )
 
-    valid_sources = {"institutional", "apnews", "marketwatch"}
+    valid_sources = {"institutional"}
 
     for name in [s.strip() for s in sources.split(",")]:
         if name not in valid_sources:
-            log.warning("Unknown source '%s' — skipping", name)
+            log.error(
+                "Unknown or inactive source '%s'. Valid: %s. "
+                "AP News, Reuters, and MarketWatch have been removed from the semantic corpus (ADR-010).",
+                name, valid_sources,
+            )
             continue
         out_path = raw_dir / f"{name}_{start}_{end}.jsonl"
         ext = _checkpoint_ext.get(name, "txt")
@@ -137,6 +141,72 @@ def ingest(
             log.error("  %s: credentials not set — %s", name, exc)
         except Exception as exc:
             log.error("  %s failed: %s", name, exc, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# filter-pre-embed  (new in ADR-010)
+# ---------------------------------------------------------------------------
+
+_ARCHIVED_JOURNALISM_SOURCES = {"ap_news", "apnews", "marketwatch", "reuters"}
+
+
+@cli.command("filter-pre-embed")
+@click.option("--input-dir", default=None, help="Raw articles directory (default: config paths.raw_articles)")
+@click.option("--output", default=None, help="Output JSONL path (default: config paths.corpus_for_embedding)")
+@click.pass_context
+def filter_pre_embed(
+    ctx: click.Context, input_dir: str | None, output: str | None
+) -> None:
+    """Filter raw JSONL to exclude archived journalism sources before embedding.
+
+    Reads all JSONL files from the raw articles directory, drops records where
+    source_id is in {ap_news, apnews, marketwatch, reuters}, and writes the
+    filtered corpus to corpus_for_embedding.jsonl.
+
+    Run this after ingestion and before the filter / embed stages to ensure
+    the embedding step operates on the institutional+academic corpus only.
+    """
+    cfg = ctx.obj["cfg"]
+    root = project_root()
+    raw_dir = Path(input_dir) if input_dir else root / cfg["paths"]["raw_articles"]
+    out_path = Path(output) if output else root / cfg["paths"]["corpus_for_embedding"]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    jsonl_files = sorted(raw_dir.glob("*.jsonl"))
+    if not jsonl_files:
+        log.error("No JSONL files found in %s. Run `ingest` first.", raw_dir)
+        sys.exit(1)
+
+    total = 0
+    kept = 0
+    excluded = 0
+    excluded_sources: dict[str, int] = {}
+
+    with out_path.open("w", encoding="utf-8") as fh:
+        for jsonl_file in jsonl_files:
+            with jsonl_file.open(encoding="utf-8") as src:
+                for line in src:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    total += 1
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    source_id = record.get("source_id", record.get("source", ""))
+                    if source_id.lower() in _ARCHIVED_JOURNALISM_SOURCES:
+                        excluded += 1
+                        excluded_sources[source_id] = excluded_sources.get(source_id, 0) + 1
+                        continue
+                    fh.write(line + "\n")
+                    kept += 1
+
+    log.info("filter-pre-embed: %d total → %d kept, %d excluded", total, kept, excluded)
+    if excluded_sources:
+        for src, n in sorted(excluded_sources.items()):
+            log.info("  excluded %s: %d articles", src, n)
+    log.info("Output: %s", out_path)
 
 
 # ---------------------------------------------------------------------------
@@ -183,8 +253,9 @@ def filter_cmd(
 @cli.command()
 @click.option(
     "--role", default="primary",
-    type=click.Choice(["primary", "comparator"]),
+    type=click.Choice(["primary"]),
     show_default=True,
+    help="Embedding role. Only 'primary' (all-mpnet-base-v2) is active per ADR-010.",
 )
 @click.option("--input", "input_path", default=None, help="Input parquet path")
 @click.option("--output", default=None, help="Output .npy path")
@@ -192,7 +263,7 @@ def filter_cmd(
 def embed(
     ctx: click.Context, role: str, input_path: str | None, output: str | None
 ) -> None:
-    """Encode articles to embeddings with primary or comparator model."""
+    """Encode articles to embeddings (all-mpnet-base-v2, single-model per ADR-010)."""
     from mnd.embedding.embedder import Embedder, prepare_text_for_embedding
 
     cfg = ctx.obj["cfg"]
@@ -202,11 +273,6 @@ def embed(
     )
     if output:
         npy_path = Path(output)
-    elif role == "comparator":
-        # Comparator writes to a separate file so primary and comparator jobs
-        # can run in parallel without clobbering each other.
-        base = root / cfg["paths"]["processed_embeddings"]
-        npy_path = base.with_name("embeddings_comparator.npy")
     else:
         npy_path = root / cfg["paths"]["processed_embeddings"]
 
