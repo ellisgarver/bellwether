@@ -579,6 +579,67 @@ MND_PROJECT_SPEC.md (rev2, 2026-05-11) was written as a comprehensive supersedin
 
 ---
 
+## ADR-011: Revert primary embedding model to Qwen3-Embedding-0.6B; formalize look-ahead check
+
+- **Status**: Accepted
+- **Date**: 2026-05-11
+- **Supersedes**: ADR-010 (embedding section only — all other ADR-010 decisions stand)
+- **Restores**: ADR-001 (two-model strategy), with enhanced look-ahead check methodology
+
+### Context
+
+ADR-010 replaced the Qwen3-Embedding-0.6B primary model (from ADR-001) with `all-mpnet-base-v2` primarily to minimize look-ahead bias. After review, two problems with that decision:
+
+**1. Context window mismatch with the corpus.** After removing the journalism tier (ADR-010), the semantic corpus is now almost entirely long-form institutional and academic documents:
+- FOMC minutes: 10,000–15,000 words
+- BIS Quarterly Review articles: 3,000–8,000 words
+- Jackson Hole symposium papers: 8,000–15,000 words
+- VoxEU full posts: 800–2,500 words
+- NBER abstracts (Phase 6): 300–500 words
+
+`all-mpnet-base-v2` has a hard max_seq_len of 384 tokens (~280–300 words). With our headline + body pipeline, this means we embed the headline plus roughly the first 220–250 words of body text. For a 12,000-word FOMC minutes document, that is the first ~2% of the document — systematically missing the staff economic outlook, participants' views on economic conditions, and forward guidance discussion that constitute the majority of the analytical signal. The 600-token article truncation rule in config is irrelevant if the model only attends to 384 tokens.
+
+This context truncation is acceptable for short wire articles (which we've now removed). It is not acceptable for the long-form institutional corpus that is the analytical core of this project.
+
+**2. Look-ahead risk is bounded and measurable, not assumed.** The look-ahead concern with Qwen3 (2025 training cutoff) is real but operates through a specific channel: the model may embed documents with representations influenced by knowledge of how events resolved. Evaluating this risk requires:
+
+- For pre-2015 events (2013 taper tantrum, 2015 China devaluation): Qwen3's knowledge is effectively frozen. These are historicized events with stable interpretive vocabulary; no new outcome information entered the training distribution.
+- For 2020–2023 events (COVID crash, SVB, Credit Suisse, soft landing): Qwen3 may embed documents with representations shifted by outcome knowledge. This is the at-risk window.
+- The key insight: the risk **can be measured directly** by comparing NMI and silhouette scores on pre-2021 vs post-2021 sub-corpora across Qwen3 and mpnet. If Qwen3 shows dramatically inflated post-2021 cluster quality relative to mpnet, look-ahead is significant. If they track closely, the bias is bounded. This is a better epistemic argument than assuming mpnet is unbiased — mpnet has a 2020-2021 cutoff which means it also has look-ahead exposure on 2020-2021 data.
+
+The honest framing: both models have look-ahead exposure on some of the historical corpus. Qwen3 has more exposure but also far superior context and representational quality. The right response is to measure the exposure, not to assume the weaker model is safe.
+
+### Decision
+
+**1. Restore Qwen3-Embedding-0.6B as the primary production model.** Context window (32,768 tokens) and representational quality are decisive for the long-form institutional corpus. Apache 2.0 license. Run on RCC (CUDA) with full context; local MPS runs use `MND_MAX_SEQ_LEN=512` per ADR-006.
+
+**2. Restore all-mpnet-base-v2 as the comparator model.** Its sole role is the look-ahead sensitivity check — not production embedding. The sensitivity check is now formalized as a quantitative comparison (see below) rather than a qualitative assumption.
+
+**3. Formalize the look-ahead sensitivity check.** The check must:
+- Embed a representative sample of all 10 anchor narratives (and their ±3-month surrounding corpus windows) with BOTH Qwen3 and mpnet.
+- Compute NMI and mean pairwise silhouette separately for the pre-2021 sub-corpus and post-2021 sub-corpus for each model.
+- Report the metric deltas: Δ_NMI(Qwen3) vs Δ_NMI(mpnet) across the temporal split.
+- Kill criterion: if Qwen3's post-2021 NMI exceeds pre-2021 NMI by more than 0.15 AND mpnet does not show the same pattern, document as significant look-ahead and add caveat to the pre-registration and methodology section.
+- If both models show similar temporal patterns, look-ahead is bounded by corpus vocabulary stability (the expected result for stable institutional register text).
+
+This check is run once after full corpus embedding (Phase 3) and reported in the methodology section. It is not used to change the clustering — it is a diagnostic for the methodology appendix.
+
+**4. Maintain the 600-token article truncation rule in config.** For Qwen3 with 32,768 token context, 600 tokens is well within capacity. For mpnet (384 tokens), the model naturally truncates to 384 tokens regardless of this setting. The config rule still governs the text that is fed to the model; mpnet just truncates further internally.
+
+### Consequences
+
+**Positive:**
+- Full analytical content of FOMC minutes, BIS reports, and academic papers is encoded — not just the header text.
+- Look-ahead risk is measured, not assumed, which is a stronger methodological argument.
+- The temporal sensitivity check produces a reportable finding (even if null) that strengthens the methodology section.
+
+**Negative / risks:**
+- Qwen3's 2025 training cutoff means it has seen some of the post-2020 events in this corpus. For SVB (2023), Credit Suisse (2023), and soft landing narrative (2023-2024), the embedding representations may incorporate outcome knowledge. This is disclosed in the pre-registration.
+- Instruction-aware prompting prefix required for Qwen3 — adds a small per-document overhead.
+- On local MPS runs, MND_MAX_SEQ_LEN=512 is required to avoid OOM (ADR-006). This limits local testing but doesn't affect RCC production runs.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

@@ -253,9 +253,13 @@ def filter_cmd(
 @cli.command()
 @click.option(
     "--role", default="primary",
-    type=click.Choice(["primary"]),
+    type=click.Choice(["primary", "comparator"]),
     show_default=True,
-    help="Embedding role. Only 'primary' (all-mpnet-base-v2) is active per ADR-010.",
+    help=(
+        "Embedding role (ADR-011). 'primary' = Qwen3-Embedding-0.6B (production). "
+        "'comparator' = all-mpnet-base-v2 (look-ahead sensitivity check only — "
+        "compares Δ_NMI pre-2021 vs post-2021 against primary)."
+    ),
 )
 @click.option("--input", "input_path", default=None, help="Input parquet path")
 @click.option("--output", default=None, help="Output .npy path")
@@ -263,7 +267,7 @@ def filter_cmd(
 def embed(
     ctx: click.Context, role: str, input_path: str | None, output: str | None
 ) -> None:
-    """Encode articles to embeddings (all-mpnet-base-v2, single-model per ADR-010)."""
+    """Encode articles to embeddings (Qwen3 primary; mpnet comparator for look-ahead check)."""
     from mnd.embedding.embedder import Embedder, prepare_text_for_embedding
 
     cfg = ctx.obj["cfg"]
@@ -273,6 +277,9 @@ def embed(
     )
     if output:
         npy_path = Path(output)
+    elif role == "comparator":
+        base = root / cfg["paths"]["processed_embeddings"]
+        npy_path = base.with_name("embeddings_comparator.npy")
     else:
         npy_path = root / cfg["paths"]["processed_embeddings"]
 

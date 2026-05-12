@@ -23,23 +23,42 @@ temporal:
   live_update_day: "monday"         # day of week for the cron trigger
 
 # -----------------------------------------------------------------------------
-# Embedding (locked — ADR-010)
+# Embedding (locked — ADR-001, restored by ADR-011)
 # -----------------------------------------------------------------------------
-# Single-model strategy: all-mpnet-base-v2, training cutoff ~2020-2021.
-# Chosen over modern models (Qwen3, etc.) to minimize look-ahead bias on the
-# 2010-present historical corpus. ADR-001 (two-model Qwen3 strategy) superseded
-# by ADR-010. Look-ahead sensitivity check uses sub-period NMI comparison with
-# this single model — not a second model.
+# Two-model strategy:
+#
+#  PRIMARY (production): Qwen3-Embedding-0.6B
+#    - 32,768 token context — essential for long-form institutional corpus
+#      (FOMC minutes 10-15k words, BIS QR 3-8k words, Jackson Hole 8-15k words)
+#    - Apache 2.0, top-tier MTEB. Instruction-aware.
+#    - Training cutoff ~2025: look-ahead exposure exists; mitigated by formal
+#      sensitivity check (ADR-011). Local MPS: MND_MAX_SEQ_LEN=512 (ADR-006).
+#
+#  COMPARATOR (look-ahead sensitivity check only, not used for production):
+#    - all-mpnet-base-v2, training cutoff ~2020-2021, max 384 tokens.
+#    - Run on the 10 anchor narrative sub-corpora to compare NMI/silhouette
+#      across pre-2021 vs post-2021 windows against primary (ADR-011).
+#    - If Qwen3 Δ_NMI(post-2021 − pre-2021) > 0.15 AND mpnet does not show
+#      the same pattern → document as look-ahead; caveat in pre-registration.
+#
 embedding:
   primary:
-    model: "sentence-transformers/all-mpnet-base-v2"
+    model: "Qwen/Qwen3-Embedding-0.6B"
     revision: "main"               # Pin to specific commit hash before Phase 2
+    dimensions: 1024
+    max_seq_len: 32768             # Full context for RCC (CUDA). MPS: MND_MAX_SEQ_LEN=512
+    instruction_aware: true
+    instruction_prefix: "Instruct: Represent this financial policy document for narrative clustering\nQuery: "
+    upgrade_path: "Qwen/Qwen3-Embedding-4B"  # If RCC capacity allows; identical interface
+  comparator:
+    model: "sentence-transformers/all-mpnet-base-v2"
+    revision: "main"
     dimensions: 768
-    max_seq_len: 384               # Model's native max; env MND_MAX_SEQ_LEN overrides
+    max_seq_len: 384
     instruction_aware: false
   # Article preprocessing applied before embedding
   article:
-    truncation_tokens: 600         # Headline + first 600 tokens of body
+    truncation_tokens: 600         # Headline + first 600 tokens fed to model
     include_headline: true
     include_lead_paragraph: true   # First paragraph is high-signal
     normalize_whitespace: true
@@ -147,10 +166,15 @@ validation:
   required_anchors_recovered: 7    # Out of 10 (kill criterion 2)
   min_bootstrap_nmi: 0.40          # Across all parameter settings (kill criterion 1)
   lookahead_check:
+    # ADR-011: compare Qwen3 primary vs mpnet comparator across temporal split.
+    # Metric: Δ_NMI = NMI(post_window) − NMI(pre_window) for each model.
+    # If Qwen3 Δ_NMI exceeds threshold AND mpnet Δ_NMI does not: flag look-ahead.
+    # Both models evaluated on all 10 anchor narrative sub-corpora (±3 months).
     pre_cutoff_window: ["2010-01-01", "2020-12-31"]
     post_cutoff_window: ["2021-01-01", "auto"]
-    metric: "silhouette_diff"      # Difference in mean silhouette between windows
-    fail_threshold: 0.15           # Silhouette diff > this = significant lookahead
+    metric: "nmi_delta"            # Δ_NMI(post − pre) compared across primary vs comparator
+    fail_threshold: 0.15           # Primary Δ_NMI > this AND comparator Δ_NMI ≤ this → flag
+    report_always: true            # Always report both model deltas; fail only flags, not stops
 
 # -----------------------------------------------------------------------------
 # Reproducibility (locked)
