@@ -72,8 +72,11 @@ def test_whitelist_loads_and_has_required_outlets():
     tier_2_policy_ids = {e["id"] for e in wl["tier_2_policy_analytical"]}
     for required in ("fed_board", "imf", "bis"):
         assert required in tier_1_ids, f"missing required tier-1 source: {required}"
-    for required in ("voxeu", "arxiv"):
-        assert required in tier_2_ids, f"missing required tier-2 academic source: {required}"
+    # arxiv removed in ADR-012 (2017-only coverage, low macro volume)
+    assert "arxiv" not in tier_2_ids, "arxiv should not be in semantic corpus (ADR-012)"
+    # jackson_hole removed in ADR-012 (covered by fed_board speeches ingestor)
+    assert "jackson_hole" not in tier_1_ids, "jackson_hole separate entry should not exist (ADR-012)"
+    assert "voxeu" in tier_2_ids, "missing required tier-2 academic source: voxeu"
     for required in ("brookings", "piie", "cfr"):
         assert required in tier_2_policy_ids, f"missing required tier-2 policy source: {required}"
     # Journalism sources must be absent from all active semantic corpus tiers

@@ -72,11 +72,10 @@ def cli(ctx: click.Context) -> None:
     show_default=True,
     help=(
         "Comma-separated source IDs. Only 'institutional' is active for the semantic corpus "
-        "(ADR-010). Covers Fed (FOMC/speeches/Beige Book/FEDS Notes), Regional Feds, IMF, "
-        "BIS, CEA, CBO, Treasury/OFR, Jackson Hole, Congressional testimony, arXiv, VoxEU, "
-        "Brookings, PIIE, CFR (Tiers 1–2). "
-        "AP News, Reuters, and MarketWatch have been removed from the semantic corpus — "
-        "see scripts/archive/ for their ingestors."
+        "(ADR-012). Covers Fed (FOMC/speeches/Beige Book/FEDS Notes), Regional Feds, IMF, "
+        "BIS, CEA, CBO, Treasury/OFR, Congressional testimony, VoxEU, Brookings, PIIE, CFR "
+        "(Tiers 1–2). arXiv and Jackson Hole removed in ADR-012 — see MND_PROJECT_SPEC rev3. "
+        "AP News, Reuters, and MarketWatch removed in ADR-010 — see scripts/archive/."
     ),
 )
 @click.option("--output-dir", default=None, help="Output directory for raw JSONL files (overrides config default)")
@@ -220,8 +219,16 @@ def filter_pre_embed(
 def filter_cmd(
     ctx: click.Context, input_dir: str | None, output: str | None
 ) -> None:
-    """Apply topic filter and near-duplicate removal."""
-    from mnd.filtering import Deduplicator, TopicFilter
+    """Date-range filter and near-duplicate removal.
+
+    Per MND_PROJECT_SPEC rev3 Stage 2: no topic filter is applied — all Layer 1A
+    sources are macro-relevant by construction. Only two operations run:
+      1. Date range filter: retain documents with publication_date in [2010-01-01, present]
+      2. Near-duplicate removal: MinHash-based dedup within rolling 48-hour windows
+    """
+    from datetime import date as date_t
+
+    from mnd.filtering import Deduplicator
 
     cfg = ctx.obj["cfg"]
     root = project_root()
@@ -234,12 +241,21 @@ def filter_cmd(
         log.error("No articles found. Run `ingest` first.")
         sys.exit(1)
 
-    tf = TopicFilter()
-    tf.filter(articles)
-    passed = [a for a in articles if a.raw_metadata.get("passed_filter")]
-    log.info("Topic filter: %d/%d passed", len(passed), len(articles))
+    # Date range filter — keep 2010-01-01 to today
+    date_start = date_t(2010, 1, 1)
+    date_end = date_t.today()
+    in_range = []
+    for a in articles:
+        pub = getattr(a, "published_at", None) or ""
+        try:
+            pub_date = date_t.fromisoformat(pub[:10])
+            if date_start <= pub_date <= date_end:
+                in_range.append(a)
+        except (ValueError, TypeError):
+            in_range.append(a)  # keep if date unparseable
+    log.info("Date range filter: %d/%d in [2010-01-01, %s]", len(in_range), len(articles), date_end)
 
-    unique = Deduplicator().deduplicate(passed)
+    unique = Deduplicator().deduplicate(in_range)
     log.info("After dedup: %d unique articles", len(unique))
 
     _save_articles_parquet(unique, out_path)

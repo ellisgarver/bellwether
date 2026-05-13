@@ -16,6 +16,7 @@ architectural decisions are in `docs/handoff_to_claude_code.md` and
 - Do not load held-out (2020+) data into clustering or hyperparameter search before Phase 4.
 - Do not add closed-source or paid-API dependencies to the core pipeline.
 - ProQuest, Factiva, Bloomberg, AP News, Reuters, MarketWatch are NOT semantic corpus sources — do not reinstate without a new ADR. (AP News and Reuters were removed in ADR-010, 2026-05-11.)
+- arXiv and Jackson Hole (separate ingestor) are NOT active sources — removed in ADR-012, 2026-05-13. arXiv had 2017-only coverage; Jackson Hole speeches are captured by FederalReserveIngestor.
 - Any deviation from the above requires a new ADR in `docs/architecture_decisions.md` first.
 
 ## Communication style
