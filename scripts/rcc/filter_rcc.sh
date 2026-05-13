@@ -47,10 +47,15 @@ cd "$REPO_ROOT"
 
 mkdir -p logs data/processed
 
-module load python/anaconda-2023.09
-source /software/python-anaconda-2023.09-el8-x86_64/etc/profile.d/conda.sh
-conda activate mnd
-export PYTHONNOUSERSITE=1   # prevent ~/.local site-packages from shadowing conda env
+MND_CONDA_ENV="/home/ehgarver/.conda/envs/mnd"
+export PATH="${MND_CONDA_ENV}/bin:$PATH"
+export PYTHONNOUSERSITE=1
+PYTHON_USED="$(which python)"
+if [[ "$PYTHON_USED" != "${MND_CONDA_ENV}/bin/python" ]]; then
+    echo "ERROR: expected ${MND_CONDA_ENV}/bin/python but got $PYTHON_USED" >&2
+    exit 1
+fi
+echo "Python: $PYTHON_USED"
 
 export USE_TF=0
 export KERAS_BACKEND=torch
