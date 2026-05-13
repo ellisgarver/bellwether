@@ -146,7 +146,14 @@ def ingest(
 # filter-pre-embed  (new in ADR-010)
 # ---------------------------------------------------------------------------
 
-_ARCHIVED_JOURNALISM_SOURCES = {"ap_news", "apnews", "marketwatch", "reuters"}
+_EXCLUDED_SOURCES = {
+    # Journalism tier removed in ADR-010 (2026-05-11)
+    "ap_news", "apnews", "marketwatch", "reuters",
+    # arXiv removed in ADR-012 (2026-05-13): 2017-only coverage, low macro volume
+    "arxiv",
+    # Jackson Hole removed in ADR-012: covered by FederalReserveIngestor
+    "jackson_hole",
+}
 
 
 @cli.command("filter-pre-embed")
@@ -156,14 +163,16 @@ _ARCHIVED_JOURNALISM_SOURCES = {"ap_news", "apnews", "marketwatch", "reuters"}
 def filter_pre_embed(
     ctx: click.Context, input_dir: str | None, output: str | None
 ) -> None:
-    """Filter raw JSONL to exclude archived journalism sources before embedding.
+    """Filter raw JSONL to exclude removed sources before embedding.
 
     Reads all JSONL files from the raw articles directory, drops records where
-    source_id is in {ap_news, apnews, marketwatch, reuters}, and writes the
-    filtered corpus to corpus_for_embedding.jsonl.
+    source_id is in the excluded set (journalism tier, arXiv, Jackson Hole),
+    and writes the filtered corpus to corpus_for_embedding.jsonl.
 
-    Run this after ingestion and before the filter / embed stages to ensure
-    the embedding step operates on the institutional+academic corpus only.
+    Excluded sources: ap_news, apnews, marketwatch, reuters (ADR-010);
+    arxiv, jackson_hole (ADR-012).
+
+    Run this after ingestion and before the filter / embed stages.
     """
     cfg = ctx.obj["cfg"]
     root = project_root()
@@ -194,7 +203,7 @@ def filter_pre_embed(
                     except json.JSONDecodeError:
                         continue
                     source_id = record.get("source_id", record.get("source", ""))
-                    if source_id.lower() in _ARCHIVED_JOURNALISM_SOURCES:
+                    if source_id.lower() in _EXCLUDED_SOURCES:
                         excluded += 1
                         excluded_sources[source_id] = excluded_sources.get(source_id, 0) + 1
                         continue
