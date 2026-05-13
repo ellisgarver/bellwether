@@ -105,3 +105,13 @@ else
     echo "ERROR: expected output not found at $EXPECTED_OUTPUT" >&2
     exit 1
 fi
+
+# chunks.parquet is written by the primary embed run; verify it exists
+if [[ "$ROLE" == "primary" ]]; then
+    if [[ -f "data/processed/chunks.parquet" ]]; then
+        python -c "import pandas as pd; df=pd.read_parquet('data/processed/chunks.parquet'); print(f'Chunks: {len(df)} rows, {df[\"is_chunked\"].sum()} chunked')"
+    else
+        echo "ERROR: chunks.parquet not found — embed may not have run chunking step" >&2
+        exit 1
+    fi
+fi

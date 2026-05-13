@@ -62,14 +62,15 @@ class FederalReserveIngestor(Ingestor):
         yield from self._fetch_speeches(start, end)
         yield from self._fetch_beige_books(start, end)
         yield from self._fetch_feds_notes(start, end)
+        yield from self._fetch_mpr(start, end)
+        yield from self._fetch_fsr(start, end)
 
     def _fetch_fomc_statements(self, start: date, end: date) -> Iterator[Article]:
         """Walk the FOMC calendars page; emit one Article per statement."""
         try:
             resp = _get(FOMC_CALENDARS_URL)
-        except Exception as exc:  # pragma: no cover
-            log.error("Failed to fetch FOMC calendar index: %s", exc)
-            return
+        except Exception as exc:
+            raise RuntimeError(f"FOMC calendar index fetch failed after retries: {exc}") from exc
         soup = BeautifulSoup(resp.text, "lxml")
         # Statement links match patterns like /newsevents/pressreleases/monetary20240131a.htm
         for link in soup.find_all("a", href=True):
@@ -120,8 +121,7 @@ class FederalReserveIngestor(Ingestor):
         try:
             resp = _get(FOMC_CALENDARS_URL)
         except Exception as exc:
-            log.error("Failed to fetch FOMC calendar for minutes: %s", exc)
-            return
+            raise RuntimeError(f"FOMC calendar index fetch failed after retries (minutes): {exc}") from exc
         soup = BeautifulSoup(resp.text, "lxml")
         for link in soup.find_all("a", href=True):
             href = link["href"]
@@ -329,13 +329,22 @@ class FederalReserveIngestor(Ingestor):
                 continue
             title = link.get_text(strip=True) or f"FEDS Note {note_year}"
             pub_date = date(note_year, 1, 1)
-            # Try to parse exact date from the note's page or URL
+            # Try path-embedded date: /YYYY/MM/DD/
             date_m = _re.search(r"/(\d{4})/(\d{2})/(\d{2})/", href)
             if date_m:
                 try:
                     pub_date = date(int(date_m.group(1)), int(date_m.group(2)), int(date_m.group(3)))
                 except ValueError:
                     pass
+            # Try filename-embedded date: fn20240115.htm → 20240115
+            if pub_date == date(note_year, 1, 1):
+                stem = href.rsplit("/", 1)[-1]
+                stem_m = _re.search(r"(\d{4})(\d{2})(\d{2})", stem)
+                if stem_m:
+                    try:
+                        pub_date = date(int(stem_m.group(1)), int(stem_m.group(2)), int(stem_m.group(3)))
+                    except ValueError:
+                        pass
             if pub_date < start or pub_date > end:
                 continue
             yield Article(
@@ -357,6 +366,165 @@ class FederalReserveIngestor(Ingestor):
             )
             import time as _time
             _time.sleep(0.5)
+
+    def _fetch_mpr(self, start: date, end: date) -> Iterator[Article]:
+        """Fetch Monetary Policy Reports (2x/yr, Feb and Jul).
+
+        Index: federalreserve.gov/monetarypolicy/mpr_default.htm
+        HTML summary pattern: /monetarypolicy/YYYY-MM-mpr-summary.htm
+        """
+        import re as _re
+        index_url = "https://www.federalreserve.gov/monetarypolicy/mpr_default.htm"
+        try:
+            resp = _get(index_url)
+        except Exception as exc:
+            log.error("Failed to fetch MPR index: %s", exc)
+            return
+        soup = BeautifulSoup(resp.text, "lxml")
+        seen: set[str] = set()
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            if "mpr" not in href.lower():
+                continue
+            if href.lower().endswith(".pdf"):
+                continue
+            pub_date: date | None = None
+            # Pattern: YYYY-MM-mpr (e.g. /monetarypolicy/2024-02-mpr-summary.htm)
+            m = _re.search(r"(\d{4})-(\d{2})-mpr", href)
+            if m:
+                try:
+                    pub_date = date(int(m.group(1)), int(m.group(2)), 1)
+                except ValueError:
+                    pass
+            # Pattern: mprYYYYMMDD or mprYYYYMM
+            if pub_date is None:
+                m = _re.search(r"mpr(\d{4})(\d{2})(\d{2})", href)
+                if m:
+                    try:
+                        pub_date = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                    except ValueError:
+                        pass
+            if pub_date is None:
+                m = _re.search(r"mpr(\d{4})(\d{2})", href)
+                if m:
+                    try:
+                        pub_date = date(int(m.group(1)), int(m.group(2)), 1)
+                    except ValueError:
+                        pass
+            if pub_date is None:
+                continue
+            if pub_date < start or pub_date > end:
+                continue
+            full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
+            if full_url in seen:
+                continue
+            seen.add(full_url)
+            try:
+                page = _get(full_url)
+            except Exception as exc:
+                log.warning("Failed to fetch MPR %s: %s", full_url, exc)
+                continue
+            body = _extract_text(page.text)
+            if not body or len(body.split()) < 200:
+                continue
+            yield Article(
+                article_id=_stable_article_id(self.source_id, full_url),
+                source_id="federalreserve",
+                url=full_url,
+                published_at=pub_date.isoformat() + "T14:00:00Z",
+                retrieved_at=_now_utc_iso(),
+                title=f"Monetary Policy Report — {pub_date.strftime('%B %Y')}",
+                body=body,
+                author="Federal Reserve",
+                section="monetary_policy_report",
+                language="en",
+                tier=1,
+                access="free",
+                retrieval="fed_site",
+                word_count=len(body.split()),
+                raw_metadata={"document_type": "monetary_policy_report"},
+            )
+
+    def _fetch_fsr(self, start: date, end: date) -> Iterator[Article]:
+        """Fetch Financial Stability Reports (2x/yr, May and Nov).
+
+        Index: federalreserve.gov/publications/financial-stability-report.htm
+        HTML pattern: /publications/financial-stability-report-YYYYMM.htm
+                   or /publications/YYYY-mon-financial-stability-report.htm
+        """
+        import re as _re
+        index_url = "https://www.federalreserve.gov/publications/financial-stability-report.htm"
+        try:
+            resp = _get(index_url)
+        except Exception as exc:
+            log.error("Failed to fetch FSR index: %s", exc)
+            return
+        soup = BeautifulSoup(resp.text, "lxml")
+        seen: set[str] = set()
+        _MONTH_ABBR = {
+            "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+            "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+        }
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            if "financial-stability-report" not in href.lower():
+                continue
+            if href.lower().endswith(".pdf"):
+                continue
+            # Skip the index page itself
+            if href.rstrip("/").endswith("financial-stability-report"):
+                continue
+            pub_date: date | None = None
+            # Pattern: financial-stability-report-YYYYMM
+            m = _re.search(r"financial-stability-report-(\d{4})(\d{2})", href)
+            if m:
+                try:
+                    pub_date = date(int(m.group(1)), int(m.group(2)), 1)
+                except ValueError:
+                    pass
+            # Pattern: YYYY-mon-financial-stability-report (e.g. 2024-may-financial-stability-report)
+            if pub_date is None:
+                m = _re.search(r"(\d{4})-([a-z]{3})-financial-stability-report", href.lower())
+                if m:
+                    month = _MONTH_ABBR.get(m.group(2))
+                    if month:
+                        try:
+                            pub_date = date(int(m.group(1)), month, 1)
+                        except ValueError:
+                            pass
+            if pub_date is None:
+                continue
+            if pub_date < start or pub_date > end:
+                continue
+            full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
+            if full_url in seen:
+                continue
+            seen.add(full_url)
+            try:
+                page = _get(full_url)
+            except Exception as exc:
+                log.warning("Failed to fetch FSR %s: %s", full_url, exc)
+                continue
+            body = _extract_text(page.text)
+            if not body or len(body.split()) < 200:
+                continue
+            yield Article(
+                article_id=_stable_article_id(self.source_id, full_url),
+                source_id="federalreserve",
+                url=full_url,
+                published_at=pub_date.isoformat() + "T14:00:00Z",
+                retrieved_at=_now_utc_iso(),
+                title=f"Financial Stability Report — {pub_date.strftime('%B %Y')}",
+                body=body,
+                author="Federal Reserve",
+                section="financial_stability_report",
+                language="en",
+                tier=1,
+                access="free",
+                retrieval="fed_site",
+                word_count=len(body.split()),
+                raw_metadata={"document_type": "financial_stability_report"},
+            )
 
     def _fetch_speeches_rss_year(self, year: int, start: date, end: date) -> Iterator[Article]:
         """RSS fallback for Fed speeches when annual index pages are unreachable."""
