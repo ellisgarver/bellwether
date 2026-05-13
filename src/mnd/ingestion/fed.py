@@ -32,7 +32,7 @@ SPEECHES_INDEX = f"{SPEECHES_BASE}/{{year}}-speeches.htm"
 SPEECHES_RSS = "https://www.federalreserve.gov/feeds/speeches.xml"
 
 
-@retry(stop=stop_after_attempt(5), wait=wait_random_exponential(multiplier=1, max=30))
+@retry(stop=stop_after_attempt(8), wait=wait_random_exponential(multiplier=2, max=120))
 def _get(url: str, *, timeout: float = 30.0) -> requests.Response:
     resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout)
     resp.raise_for_status()
@@ -221,17 +221,28 @@ class FederalReserveIngestor(Ingestor):
             try:
                 resp = _get(index_url)
             except Exception as exc:
-                log.warning(
-                    "Speech index %s failed after retries: %s — trying RSS fallback",
-                    index_url, exc,
-                )
-                yield from self._fetch_speeches_rss_year(year, start, end)
+                current_year = date.today().year
+                if year >= current_year - 1:
+                    # RSS feed only holds recent content — useful for current/last year
+                    log.warning("Speech index %s failed: %s — trying RSS fallback", index_url, exc)
+                    yield from self._fetch_speeches_rss_year(year, start, end)
+                else:
+                    # RSS has no historical content; RSS fallback would silently return 0
+                    # articles, creating an invisible coverage gap. Log error and skip.
+                    log.error(
+                        "Speech index %s failed after %d retries: %s — "
+                        "COVERAGE GAP: speeches for %d will be missing from corpus",
+                        index_url, 8, exc, year,
+                    )
                 continue
             soup = BeautifulSoup(resp.text, "lxml")
             eventlist = soup.select_one(".eventlist")
             if not eventlist:
-                log.warning("Speech index %s: .eventlist container not found — trying RSS fallback", index_url)
-                yield from self._fetch_speeches_rss_year(year, start, end)
+                log.error(
+                    "Speech index %s: .eventlist container not found — "
+                    "COVERAGE GAP: speeches for %d will be missing from corpus",
+                    index_url, year,
+                )
                 continue
             for entry in eventlist.select("div.row"):
                 date_node = entry.select_one("time")
