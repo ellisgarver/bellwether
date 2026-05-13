@@ -640,6 +640,42 @@ This check is run once after full corpus embedding (Phase 3) and reported in the
 
 ---
 
+## ADR-012: Remove arXiv and Jackson Hole separate ingestor; remove topic filter from Stage 2
+
+- **Status**: Accepted
+- **Date**: 2026-05-13
+
+### Context
+
+MND_PROJECT_SPEC rev3 (2026-05-11) identified three issues to fix before running the full corpus pipeline:
+
+1. **arXiv**: Active in `InstitutionalIngestor` but cut from scope in rev3. Reason: arXiv economics coverage was only reliably available from 2017 (the econ category was created in 2017), the macro-relevant volume is low relative to institutional sources, and the preprint abstracts add noise rather than characterizing discourse. arXiv is not in the final spec.
+
+2. **Jackson Hole separate ingestor**: `JacksonHoleIngestor` fetched the Kansas City Fed's proceedings index page (overview text only, not the actual papers). The spec notes that Jackson Hole speeches are delivered by Fed Chair and other governors, published on `federalreserve.gov`, and therefore already captured by `FederalReserveIngestor`. The separate ingestor created duplicates and ingested only low-value overview pages, not the speeches themselves.
+
+3. **Topic filter in Stage 2**: The `filter` pipeline command previously applied keyword-based topic filtering (TopicFilter). This was designed for journalism sources (AP News, MarketWatch) with mixed content. With those sources removed in ADR-010, all remaining Layer 1A sources are macro-relevant by construction — Fed speeches, IMF reports, VoxEU posts, etc. are definitionally in scope. Topic filtering is unnecessary noise that risks incorrectly dropping valid institutional documents.
+
+### Decision
+
+1. **Remove arXiv** from `InstitutionalIngestor._sub_ingestors` and `config/whitelist.yaml`. Archive `src/mnd/ingestion/arxiv.py` → `scripts/archive/arxiv_ingestor.py`.
+
+2. **Remove `JacksonHoleIngestor`** from `InstitutionalIngestor._sub_ingestors` and delete the class from `institutional.py`. Add note to whitelist that Fed Board's speeches ingestor covers Jackson Hole. Jackson Hole speeches are published on federalreserve.gov; they flow through `FederalReserveIngestor` with no gap.
+
+3. **Remove TopicFilter from the `filter` pipeline stage.** Stage 2 now runs: (a) date range filter [2010-01-01, present], (b) MinHash near-duplicate removal. No keyword filter.
+
+### Consequences
+
+**Positive:**
+- Corpus ingestion no longer attempts arXiv (which had a 2017 coverage floor) or creates Jackson Hole duplicates.
+- Stage 2 filter is simpler and will not incorrectly drop institutional documents that don't contain keyword seeds.
+- Ingestion job is cleaner and faster.
+
+**Negative / risks:**
+- Any arXiv macro econ abstracts from 2017–present are no longer in the semantic corpus. This is an acknowledged scope constraint (noted in MND_PROJECT_SPEC rev3 §4 removed sources table).
+- Jackson Hole speeches are captured only as Fed speeches — they carry `source_id=fed_board` and `document_type=speech`, not a dedicated jackson_hole type. This is correct per the spec.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

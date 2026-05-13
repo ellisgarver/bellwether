@@ -17,8 +17,9 @@
 #   Tier 2 — Academic analytical:
 #     VoxEU/CEPR, Brookings, PIIE, CFR
 #     NBER (Phase 6 live RSS only — historical bulk retrieval failed)
-#     arXiv (econ/q-fin)
 #     SSRN (Phase 6 live RSS only — no historical archive)
+#     arXiv REMOVED (ADR-012): 2017-only coverage, low macro volume.
+#     Jackson Hole REMOVED (ADR-012): covered by fed_board speeches ingestor.
 #
 # JOURNALISM TIER REMOVED (ADR-010):
 #   AP News, Reuters, MarketWatch — removed from semantic corpus.
@@ -152,14 +153,10 @@ tier_1_institutional_policy:
       - working_papers
     notes: "Budget and Economic Outlook; long-run projections; working papers."
 
-  - id: jackson_hole
-    name: "Kansas City Fed Jackson Hole Economic Policy Symposium"
-    domains: ["kansascityfed.org"]
-    retrieval: direct_fetch
-    document_types:
-      - jackson_hole_paper
-    historical_start: "2010-01-01"
-    notes: "Annual symposium proceedings (late August). ~8–15 papers per year; ~100–150 total historically."
+  # NOTE: Jackson Hole speeches are Fed Chair and governor speeches published on
+  # federalreserve.gov — captured by the fed_board ingestor above. No separate
+  # jackson_hole entry is needed. A separate ingestor was removed in ADR-012 to
+  # avoid duplicates. (MND_PROJECT_SPEC rev3, 2026-05-13)
 
   - id: congressional
     name: "Congressional Testimony — Treasury Secretary"
@@ -201,23 +198,9 @@ tier_2_academic_analytical:
     phase_6_live: true
     notes: "Abstracts + introductions (not full PDFs). Filter to JEL E/F/G. Timestamp = posting date. Historical archive inaccessible — RSS feed used for Phase 6 live updates only."
 
-  - id: arxiv
-    name: "arXiv — Economics and Quantitative Finance"
-    domains: ["arxiv.org"]
-    retrieval: direct_fetch
-    categories_include:
-      - "econ.GN"    # General Economics
-      - "econ.EM"    # Econometrics
-      - "q-fin.EC"   # Economics
-      - "q-fin.GN"   # General Finance
-      - "q-fin.RM"   # Risk Management
-    categories_exclude:
-      - "econ.TH"    # Theory (micro/mechanism design)
-      - "econ.ST"    # Statistics
-      - "q-fin.CP"   # Computational Finance
-      - "q-fin.TR"   # Trading and Market Microstructure
-    document_content: "abstract_only"
-    notes: "Preprint abstracts. Date filter via submittedDate field. 3s sleep between requests per arXiv policy."
+  # arXiv removed in ADR-012 / MND_PROJECT_SPEC rev3 (2026-05-13):
+  # 2017-only coverage, low macro volume, not in spec.
+  # Ingestor archived at scripts/archive/arxiv_ingestor.py.
 
   - id: voxeu
     name: "VoxEU / CEPR"

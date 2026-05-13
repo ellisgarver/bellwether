@@ -1,12 +1,13 @@
 """Institutional, academic, and policy-analytical ingestors.
 
-Covers the semantic corpus tiers defined in ADR-010 / MND_PROJECT_SPEC.md
+Covers the semantic corpus tiers defined in ADR-012 / MND_PROJECT_SPEC (1).md rev3
 and config/whitelist.yaml:
 
   Tier 1 — Institutional policy
     FederalReserveIngestor  fed.py — FOMC, speeches, Beige Book, FEDS Notes
+                            NOTE: Fed Chair Jackson Hole speeches are published on
+                            federalreserve.gov and captured here — no separate ingestor needed.
     FedRegionalIngestor     Regional Fed blogs and Economic Letters
-    JacksonHoleIngestor     Kansas City Fed Jackson Hole proceedings (2010–present)
     CongressionalIngestor   Treasury Secretary testimony (Senate Banking, HFSC)
     IMFIngestor             imf.org — WEO/GFSR/Blog/Working Papers (RCC only)
     BISIngestor             bis.org — Quarterly Review + Working Papers
@@ -15,7 +16,6 @@ and config/whitelist.yaml:
 
   Tier 2 — Academic-analytical
     NBERIngestor            nber.org — WP abstracts (Phase 6 live RSS only; historical blocked)
-    ArxivIngestor           arxiv.org — econ.GN/EM, q-fin.EC/GN/RM preprints
     VoxEUIngestor           cepr.org/voxeu — full posts
     SSRNIngestor            ssrn.com — abstracts (Phase 6 live RSS only; no historical archive)
     BrookingsIngestor       brookings.edu — macro-filtered articles
@@ -26,6 +26,13 @@ and config/whitelist.yaml:
                           NBER and SSRN are EXCLUDED from historical corpus runs
                           (historical_corpus=false in whitelist.yaml). They run in
                           Phase 6 live RSS updates only.
+
+Removed (ADR-012 / MND_PROJECT_SPEC rev3):
+  JacksonHoleIngestor — redundant; Jackson Hole speeches are on federalreserve.gov
+                        and captured by FederalReserveIngestor. Separate ingestor
+                        created duplicates.
+  ArxivIngestor       — cut from scope: 2017-only coverage, low macro volume.
+                        Archived at scripts/archive/arxiv_ingestor.py.
 
 Journalism tier (AP News, Reuters, MarketWatch) removed in ADR-010.
 Ingestors archived in scripts/archive/.
@@ -50,7 +57,6 @@ import trafilatura
 from bs4 import BeautifulSoup
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random_exponential
 
-from mnd.ingestion.arxiv import ArxivIngestor
 from mnd.ingestion.base import Article, Ingestor, _now_utc_iso, _stable_article_id
 from mnd.ingestion.fed import FederalReserveIngestor
 from mnd.utils.logging import get_logger
@@ -1744,106 +1750,6 @@ class CFRIngestor(Ingestor):
 
 
 # ---------------------------------------------------------------------------
-# Tier 1 — Jackson Hole / Kansas City Fed
-# ---------------------------------------------------------------------------
-
-
-class JacksonHoleIngestor(Ingestor):
-    """Kansas City Fed Jackson Hole Economic Policy Symposium proceedings.
-
-    One symposium per year (late August). Papers are PDF-only; we ingest the
-    HTML symposium overview page for each year within the date window.
-    Expected yield: 1 document per in-window year (~16 documents for 2010–2025).
-
-    Approach: fetch the proceedings index page, discover all symposium theme URLs,
-    follow each, extract year from the page title/content, and yield the overview
-    text as a single document per symposium.
-    """
-
-    source_id = "jackson_hole"
-
-    _BASE = "https://www.kansascityfed.org"
-    _PROCEEDINGS_URL = (
-        "https://www.kansascityfed.org"
-        "/research/jackson-hole-economic-symposium/economic-symposium-conference-proceedings/"
-    )
-
-    def fetch(self, start: date, end: date) -> Iterator[Article]:
-        # Symposium is late August; skip entirely if window doesn't overlap August–September
-        sym_start = date(start.year, 1, 1)
-        sym_end = date(end.year, 12, 31)
-        if sym_end < start or sym_start > end:
-            return
-
-        try:
-            resp = requests.get(self._PROCEEDINGS_URL, headers=_HEADERS, timeout=30.0)
-            resp.raise_for_status()
-        except Exception as exc:
-            log.warning("JacksonHole proceedings index failed: %s", exc)
-            return
-
-        soup = BeautifulSoup(resp.text, "lxml")
-        seen: set[str] = set()
-
-        # Collect symposium theme URLs (all /research/jackson-hole-economic-symposium/<slug>/ links)
-        candidate_urls: list[str] = []
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if not re.match(r"^/research/jackson-hole-economic-symposium/[^/]+/?$", href):
-                continue
-            skip_slugs = {"about-jackson-hole-economic-symposium", "economic-symposium-conference-proceedings",
-                          "jackson-hole-faqs", "jackson-hole-media-resources",
-                          "jackson-hole-economic-policy-symposium-through-years"}
-            slug = href.strip("/").split("/")[-1]
-            if slug in skip_slugs:
-                continue
-            url = self._BASE + href
-            if url not in seen:
-                seen.add(url)
-                candidate_urls.append(url)
-
-        # Also try year-numeric URLs for 2025+
-        for year in range(max(start.year, 2025), end.year + 1):
-            url = f"{self._BASE}/research/jackson-hole-economic-symposium/{year}/"
-            if url not in seen:
-                seen.add(url)
-                candidate_urls.append(url)
-
-        for sym_url in candidate_urls:
-            body, title, _, page_date = _fetch_page_full(sym_url, min_words=50)
-            if not body or len(body.split()) < 50:
-                time.sleep(0.5)
-                continue
-
-            # Extract year from title (e.g. "2023 Jackson Hole") or page content
-            year_match = re.search(r"\b(20[12]\d)\b", title + " " + body[:500])
-            if not year_match:
-                time.sleep(0.5)
-                continue
-            sym_year = int(year_match.group(1))
-
-            # Symposium is held in late August
-            pub_date = page_date or date(sym_year, 8, 24)
-            if pub_date < start or pub_date > end:
-                time.sleep(0.5)
-                continue
-
-            yield _make_article(
-                source_id=self.source_id,
-                url=sym_url,
-                published_at=pub_date.isoformat() + "T00:00:00Z",
-                title=title or f"Jackson Hole Economic Policy Symposium {sym_year}",
-                body=body,
-                author="Kansas City Fed",
-                section="jackson_hole_proceedings",
-                tier=1,
-                document_type="jackson_hole_symposium",
-                extra_meta={"symposium_year": sym_year},
-            )
-            time.sleep(1.0)
-
-
-# ---------------------------------------------------------------------------
 # Tier 1 — Congressional testimony
 # ---------------------------------------------------------------------------
 
@@ -1994,7 +1900,6 @@ class InstitutionalIngestor(Ingestor):
         self._sub_ingestors: list[Ingestor] = [
             FederalReserveIngestor(),
             FedRegionalIngestor(),
-            JacksonHoleIngestor(),
             CongressionalIngestor(),
             IMFIngestor(),
             BISIngestor(),
@@ -2004,7 +1909,6 @@ class InstitutionalIngestor(Ingestor):
             # Uncomment for Phase 6 live RSS updates only:
             # NBERIngestor(),
             # SSRNIngestor(),
-            ArxivIngestor(),
             VoxEUIngestor(),
             BrookingsIngestor(),
             PIIEIngestor(),
