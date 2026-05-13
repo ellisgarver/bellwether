@@ -204,6 +204,7 @@ paths:
   raw_validation: "data/raw/validation"
   corpus_for_embedding: "data/processed/corpus_for_embedding.jsonl"  # filtered; excludes archived journalism sources
   processed_articles: "data/processed/articles.parquet"
+  processed_chunks: "data/processed/chunks.parquet"
   processed_embeddings: "data/processed/embeddings.npy"
   processed_clusters: "data/processed/clusters.parquet"
   processed_dynamics: "data/processed/dynamics.parquet"

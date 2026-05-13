@@ -261,7 +261,7 @@ def filter_cmd(
             if date_start <= pub_date <= date_end:
                 in_range.append(a)
         except (ValueError, TypeError):
-            in_range.append(a)  # keep if date unparseable
+            continue  # drop articles with unparseable dates
     log.info("Date range filter: %d/%d in [2010-01-01, %s]", len(in_range), len(articles), date_end)
 
     unique = Deduplicator().deduplicate(in_range)
@@ -308,14 +308,27 @@ def embed(
     else:
         npy_path = root / cfg["paths"]["processed_embeddings"]
 
-    df = pd.read_parquet(parquet_path)
+    from mnd.processing.chunker import chunk_corpus
+
+    chunks_path = root / cfg["paths"]["processed_chunks"]
+    if chunks_path.exists():
+        log.info("Loading existing chunks from %s", chunks_path)
+        chunk_df = pd.read_parquet(chunks_path)
+    else:
+        log.info("Chunking corpus from %s", parquet_path)
+        df = pd.read_parquet(parquet_path)
+        chunk_df = chunk_corpus(df)
+        chunks_path.parent.mkdir(parents=True, exist_ok=True)
+        chunk_df.to_parquet(chunks_path, index=False)
+        log.info("Saved %d chunks → %s", len(chunk_df), chunks_path)
+
     texts = [
         prepare_text_for_embedding(
             str(row.get("title", "")), str(row.get("body", ""))
         )
-        for row in df.to_dict("records")
+        for row in chunk_df.to_dict("records")
     ]
-    log.info("Embedding %d articles with %s model → %s", len(texts), role, npy_path)
+    log.info("Embedding %d chunks with %s model → %s", len(texts), role, npy_path)
 
     embedder = Embedder.from_config(role)  # type: ignore[arg-type]
     embeddings = embedder.encode(texts)
@@ -356,7 +369,7 @@ def cluster(
 
     cfg = ctx.obj["cfg"]
     root = project_root()
-    arts_path = Path(articles) if articles else root / cfg["paths"]["processed_articles"]
+    arts_path = Path(articles) if articles else root / cfg["paths"]["processed_chunks"]
     emb_path = Path(embeddings) if embeddings else root / cfg["paths"]["processed_embeddings"]
     out_path = Path(output) if output else root / cfg["paths"]["processed_clusters"]
 
