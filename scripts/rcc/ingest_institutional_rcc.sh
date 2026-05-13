@@ -3,10 +3,12 @@
 #
 # Covers Tiers 1–2 (ADR-010 / MND_PROJECT_SPEC.md):
 #   Tier 1 — Federal Reserve (FOMC, speeches, Beige Book, FEDS Notes, MPR),
-#             Regional Feds (NY, SF, Chicago, Atlanta), IMF (Blog/WEO/GFSR/WPs),
-#             BIS (QR/WPs), CEA, CBO, Treasury/OFR, Jackson Hole, Congressional
-#   Tier 2 — arXiv (econ/q-fin), VoxEU, Brookings, PIIE, CFR
-#             (NBER and SSRN excluded from historical corpus — Phase 6 only)
+#             Regional Feds (NY, SF, Chicago, Atlanta, Dallas, StLouis, Cleveland),
+#             IMF (Blog/WEO/GFSR/WPs), BIS (QR/WPs), CEA, CBO, Treasury/OFR,
+#             Congressional testimony (Treasury Sec)
+#             NOTE: Jackson Hole removed (ADR-012) — covered by Fed speeches ingestor
+#   Tier 2 — VoxEU, Brookings, PIIE, CFR
+#             (arXiv removed ADR-012; NBER/SSRN excluded from historical — Phase 6 only)
 #
 # JOURNALISM TIER REMOVED (ADR-010): AP News, Reuters, MarketWatch are no longer
 # in the semantic corpus. Do not add them back without a new ADR.
@@ -62,6 +64,7 @@ mkdir -p logs data/raw/articles
 module load python/anaconda-2023.09
 source /software/python-anaconda-2023.09-el8-x86_64/etc/profile.d/conda.sh
 conda activate mnd
+export PYTHONNOUSERSITE=1   # prevent ~/.local site-packages from shadowing conda env
 
 export USE_TF=0
 export KERAS_BACKEND=torch

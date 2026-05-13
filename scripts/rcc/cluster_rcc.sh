@@ -48,6 +48,7 @@ mkdir -p logs data/processed
 module load python/anaconda-2023.09
 source /software/python-anaconda-2023.09-el8-x86_64/etc/profile.d/conda.sh
 conda activate mnd
+export PYTHONNOUSERSITE=1   # prevent ~/.local site-packages from shadowing conda env
 
 export USE_TF=0
 export KERAS_BACKEND=torch
