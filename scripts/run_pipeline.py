@@ -222,11 +222,12 @@ def filter_pre_embed(
 # ---------------------------------------------------------------------------
 
 @cli.command("filter")
-@click.option("--input-dir", default=None, help="Raw articles directory")
+@click.option("--input-dir", default=None, help="Raw articles directory (used only if corpus_for_embedding is absent)")
+@click.option("--input", "input_jsonl", default=None, help="Filtered corpus JSONL (overrides corpus_for_embedding)")
 @click.option("--output", default=None, help="Output parquet path")
 @click.pass_context
 def filter_cmd(
-    ctx: click.Context, input_dir: str | None, output: str | None
+    ctx: click.Context, input_dir: str | None, input_jsonl: str | None, output: str | None
 ) -> None:
     """Date-range filter and near-duplicate removal.
 
@@ -234,6 +235,15 @@ def filter_cmd(
     sources are macro-relevant by construction. Only two operations run:
       1. Date range filter: retain documents with publication_date in [2010-01-01, present]
       2. Near-duplicate removal: MinHash-based dedup within rolling 48-hour windows
+
+    Input precedence (auto-detected to enforce ADR-010 / ADR-012 source exclusion):
+      1. --input <jsonl>                           (explicit override)
+      2. cfg.paths.corpus_for_embedding            (written by `filter-pre-embed`)
+      3. cfg.paths.raw_articles directory          (with inline source exclusion)
+
+    When falling back to (3), records whose source_id is in _EXCLUDED_SOURCES are
+    dropped at load time so AP News / MarketWatch / Reuters / arXiv / Jackson Hole
+    JSONL files never reach embedding even if `filter-pre-embed` was skipped.
     """
     from datetime import date as date_t
 
@@ -241,13 +251,33 @@ def filter_cmd(
 
     cfg = ctx.obj["cfg"]
     root = project_root()
-    raw_dir = Path(input_dir) if input_dir else root / cfg["paths"]["raw_articles"]
     out_path = Path(output) if output else root / cfg["paths"]["processed_articles"]
 
-    articles = _load_raw_articles(raw_dir)
-    log.info("Loaded %d raw articles from %s", len(articles), raw_dir)
+    corpus_path = root / cfg["paths"]["corpus_for_embedding"]
+    raw_dir = Path(input_dir) if input_dir else root / cfg["paths"]["raw_articles"]
+
+    if input_jsonl:
+        src_path = Path(input_jsonl)
+        if not src_path.exists():
+            log.error("--input %s not found", src_path)
+            sys.exit(1)
+        log.info("Loading filtered corpus JSONL: %s", src_path)
+        articles = _load_jsonl_articles(src_path, exclude_sources=_EXCLUDED_SOURCES)
+    elif corpus_path.exists():
+        log.info("Loading corpus_for_embedding JSONL (filter-pre-embed output): %s", corpus_path)
+        # filter-pre-embed already excluded archived sources, but defensively re-apply
+        articles = _load_jsonl_articles(corpus_path, exclude_sources=_EXCLUDED_SOURCES)
+    else:
+        log.warning(
+            "corpus_for_embedding.jsonl missing at %s — falling back to raw_articles directory %s. "
+            "Run `filter-pre-embed` first for canonical ADR-010/012 enforcement. Inline exclusion is applied here as a backstop.",
+            corpus_path, raw_dir,
+        )
+        articles = _load_raw_articles(raw_dir, exclude_sources=_EXCLUDED_SOURCES)
+
+    log.info("Loaded %d articles for filtering (after archived-source exclusion)", len(articles))
     if not articles:
-        log.error("No articles found. Run `ingest` first.")
+        log.error("No articles found. Run `ingest` (and optionally `filter-pre-embed`) first.")
         sys.exit(1)
 
     # Date range filter — keep 2010-01-01 to today
@@ -293,7 +323,7 @@ def embed(
     ctx: click.Context, role: str, input_path: str | None, output: str | None
 ) -> None:
     """Encode articles to embeddings (Qwen3 primary; mpnet comparator for look-ahead check)."""
-    from mnd.embedding.embedder import Embedder, prepare_text_for_embedding
+    from mnd.embedding.embedder import Embedder
 
     cfg = ctx.obj["cfg"]
     root = project_root()
@@ -322,16 +352,29 @@ def embed(
         chunk_df.to_parquet(chunks_path, index=False)
         log.info("Saved %d chunks → %s", len(chunk_df), chunks_path)
 
-    texts = [
-        prepare_text_for_embedding(
-            str(row.get("title", "")), str(row.get("body", ""))
-        )
-        for row in chunk_df.to_dict("records")
-    ]
+    # Build the per-chunk text fed to the embedder. The chunker (chunk_corpus)
+    # has already enforced the 600-BPE-token chunk window; we therefore do NOT
+    # additionally call prepare_text_for_embedding (which would re-truncate to
+    # 600 *whitespace* tokens and defeat the long-context strategy on RCC).
+    # The embedder's max_seq_len + the model tokenizer handle final truncation.
+    texts: list[str] = []
+    for row in chunk_df.to_dict("records"):
+        title = str(row.get("title") or "").strip()
+        body = str(row.get("body") or "").strip()
+        if title and body:
+            texts.append(f"{title}. {body}")
+        else:
+            texts.append(title or body)
     log.info("Embedding %d chunks with %s model → %s", len(texts), role, npy_path)
 
     embedder = Embedder.from_config(role)  # type: ignore[arg-type]
     embeddings = embedder.encode(texts)
+
+    if embeddings.shape[0] != len(chunk_df):
+        raise RuntimeError(
+            f"Embedding row count {embeddings.shape[0]} does not match chunk count {len(chunk_df)}. "
+            "Refusing to save misaligned matrix — downstream clustering would corrupt silently."
+        )
 
     npy_path.parent.mkdir(parents=True, exist_ok=True)
     np.save(str(npy_path), embeddings)
@@ -375,6 +418,12 @@ def cluster(
 
     df = pd.read_parquet(arts_path)
     emb = np.load(str(emb_path))
+    if emb.shape[0] != len(df):
+        raise RuntimeError(
+            f"Embedding matrix has {emb.shape[0]} rows but chunks parquet has {len(df)} rows. "
+            "Refusing to cluster — row misalignment would silently corrupt cluster assignments. "
+            "Re-run `embed` to regenerate the embedding matrix against the current chunks.parquet."
+        )
     docs = (df["title"].fillna("") + " " + df["body"].fillna("")).tolist()
 
     if min_cluster_size is not None:
@@ -435,11 +484,19 @@ def stability(
 
     cfg = ctx.obj["cfg"]
     root = project_root()
-    arts_path = Path(articles) if articles else root / cfg["paths"]["processed_articles"]
+    # Embeddings are chunk-aligned (chunk_corpus splits long docs), so docs must
+    # come from processed_chunks — not processed_articles — to match row counts.
+    arts_path = Path(articles) if articles else root / cfg["paths"]["processed_chunks"]
     emb_path = Path(embeddings) if embeddings else root / cfg["paths"]["processed_embeddings"]
 
     df = pd.read_parquet(arts_path)
     emb = np.load(str(emb_path))
+    if emb.shape[0] != len(df):
+        raise RuntimeError(
+            f"Embedding matrix has {emb.shape[0]} rows but chunks parquet has {len(df)} rows. "
+            "Refusing to evaluate stability — row misalignment would silently corrupt NMI/ARI. "
+            "Re-run `embed` to regenerate the embedding matrix against the current chunks.parquet."
+        )
     docs = (df["title"].fillna("") + " " + df["body"].fillna("")).tolist()
 
     if min_cluster_size is not None:
@@ -658,36 +715,35 @@ def corpus_composition(
 # Minimum article count per institutional sub-source when sampling up to
 # --max-per-source articles from a full calendar year.  These are conservative
 # floors; hitting zero for any source with min > 0 indicates a fetch failure.
+# NBER and SSRN are not in the historical composite (Phase 6 live RSS only)
+# and are therefore not probed here. AP News / MarketWatch / Reuters and arXiv
+# / Jackson Hole are removed per ADR-010 / ADR-012.
 _INST_MIN_COUNTS: dict[str, int] = {
-    "fed_board":     5,
-    "fed_regional":  3,
-    "imf":           3,
-    "bis":           3,
-    "cbo":           1,
-    "treasury_ofr":  0,   # sparse; best-effort
-    "nber":          5,
-    "ssrn_finance":  3,
-    "voxeu":         5,
-    "brookings":     2,
-    "piie":          2,
+    "federalreserve": 5,
+    "fed_regional":   3,
+    "congressional":  0,   # sparse; best-effort
+    "imf":            3,
+    "bis":            3,
+    "cbo":            1,
+    "treasury_ofr":   0,   # sparse; best-effort
+    "voxeu":          5,
+    "brookings":      2,
+    "piie":           2,
+    "cfr":            2,
 }
 
 
 @cli.command("sample-check")
 @click.option(
     "--source", required=True,
-    type=click.Choice(["institutional", "apnews", "marketwatch"]),
-    help="Which source to probe",
+    type=click.Choice(["institutional"]),
+    help="Which source to probe (only 'institutional' is active per ADR-010/012)",
 )
 @click.option("--start", default=None, help="Override start date (YYYY-MM-DD)")
 @click.option("--end", default=None, help="Override end date (YYYY-MM-DD)")
 @click.option(
     "--max-per-source", default=20, show_default=True,
     help="Max articles fetched per institutional sub-source (limits runtime)",
-)
-@click.option(
-    "--max-urls", default=50, show_default=True,
-    help="Max Wayback URLs to actually fetch for journalism check",
 )
 @click.pass_context
 def sample_check(
@@ -696,51 +752,48 @@ def sample_check(
     start: str | None,
     end: str | None,
     max_per_source: int,
-    max_urls: int,
 ) -> None:
     """Connectivity and content-quality probe — run before any RCC submission.
 
     Institutional: fetches up to --max-per-source articles per sub-source for
     the given year (default 2024) and reports counts against minimum thresholds.
 
-    Journalism: queries Wayback CDX for URL counts, then fetches up to
-    --max-urls articles in parallel and reports extraction success rate and
-    sample titles.
+    Journalism probes (apnews / marketwatch) were removed in ADR-010 — the
+    archived ingestors live under scripts/archive/ and are not part of the
+    semantic corpus.
     """
     from datetime import date as date_t
 
-    if source == "institutional":
-        start_d = date_t.fromisoformat(start) if start else date_t(2024, 1, 1)
-        end_d = date_t.fromisoformat(end) if end else date_t(2024, 12, 31)
-        _sample_check_institutional(start_d, end_d, max_per_source)
-    else:
-        start_d = date_t.fromisoformat(start) if start else date_t(2023, 1, 1)
-        end_d = date_t.fromisoformat(end) if end else date_t(2023, 1, 31)
-        _sample_check_journalism(source, start_d, end_d, max_urls)
+    # only 'institutional' is accepted; click already validates the choice
+    start_d = date_t.fromisoformat(start) if start else date_t(2024, 1, 1)
+    end_d = date_t.fromisoformat(end) if end else date_t(2024, 12, 31)
+    _sample_check_institutional(start_d, end_d, max_per_source)
 
 
 def _sample_check_institutional(
     start, end, max_per_source: int
 ) -> None:
     from mnd.ingestion.institutional import (
-        BISIngestor, BrookingsIngestor, CBOIngestor,
-        FedRegionalIngestor, IMFIngestor, NBERIngestor,
-        PIIEIngestor, SSRNIngestor, TreasuryOFRIngestor, VoxEUIngestor,
+        BISIngestor, BrookingsIngestor, CBOIngestor, CFRIngestor,
+        CongressionalIngestor, FedRegionalIngestor, IMFIngestor,
+        PIIEIngestor, TreasuryOFRIngestor, VoxEUIngestor,
     )
     from mnd.ingestion.fed import FederalReserveIngestor
 
+    # Mirror InstitutionalIngestor._sub_ingestors exactly (no NBER/SSRN — those
+    # are Phase 6 live RSS only and are not part of the historical corpus).
     sub_ingestors = [
         FederalReserveIngestor(),
         FedRegionalIngestor(),
+        CongressionalIngestor(),
         IMFIngestor(),
         BISIngestor(),
-        CBOIngestor(),
         TreasuryOFRIngestor(),
-        NBERIngestor(),
-        SSRNIngestor(),
+        CBOIngestor(),
         VoxEUIngestor(),
         BrookingsIngestor(),
         PIIEIngestor(),
+        CFRIngestor(),
     ]
 
     click.echo(f"\n=== Institutional sample-check ({start} → {end}, cap {max_per_source}/source) ===\n")
@@ -782,100 +835,92 @@ def _sample_check_institutional(
         click.echo("PASS — all sources at or above minimum expected counts")
 
 
-def _sample_check_journalism(
-    source: str, start, end, max_urls: int
-) -> None:
-    import time
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    from mnd.ingestion.apnews import (
-        _cdx_query, _worker_fetch, _AP_CDX_PATTERNS, _MW_CDX_PATTERNS,
-    )
-
-    patterns = _AP_CDX_PATTERNS if source == "apnews" else _MW_CDX_PATTERNS
-    domain = "apnews" if source == "apnews" else "marketwatch"
-
-    click.echo(f"\n=== {source} sample-check ({start} → {end}) ===\n")
-
-    # Step 1: CDX discovery
-    all_pairs: list[tuple[str, str]] = []
-    for pat in patterns:
-        pairs = _cdx_query(pat, start, end, domain=domain)
-        click.echo(f"  CDX {pat}: {len(pairs)} URLs")
-        all_pairs.extend(pairs)
-
-    # Deduplicate by URL
-    seen: set[str] = set()
-    unique_pairs = []
-    for url, ts in all_pairs:
-        if url not in seen:
-            seen.add(url)
-            unique_pairs.append((url, ts))
-
-    click.echo(f"\n  Total unique CDX URLs: {len(unique_pairs)}")
-    if not unique_pairs:
-        click.echo("  FAIL — no CDX URLs found", err=True)
-        sys.exit(1)
-
-    # Step 2: fetch up to max_urls in parallel
-    to_fetch = unique_pairs[:max_urls]
-    click.echo(f"  Fetching {len(to_fetch)} URLs (8 parallel workers) …\n")
-
-    success, fail = 0, 0
-    samples: list[str] = []
-    t0 = time.monotonic()
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(_worker_fetch, url, ts): url for url, ts in to_fetch}
-        for future in as_completed(futures):
-            try:
-                url, _ts, body = future.result()
-            except Exception:
-                body = None
-            if body and len(body.split()) >= 50:
-                success += 1
-                if len(samples) < 3:
-                    first_line = body.split("\n")[0][:120]
-                    samples.append(f"    [{success}] {futures[future]}\n        {first_line}…")
-            else:
-                fail += 1
-    elapsed = time.monotonic() - t0
-
-    rate = 100.0 * success / len(to_fetch) if to_fetch else 0
-    click.echo(f"  Success: {success}/{len(to_fetch)}  ({rate:.0f}%)  |  Failed/empty: {fail}")
-    click.echo(f"  Elapsed: {elapsed:.1f}s")
-    click.echo("\n  Sample articles:")
-    for s in samples:
-        click.echo(s)
-    click.echo()
-
-    if source == "marketwatch" and start.year < 2015:
-        click.echo(f"  Note: pre-2015 Wayback CDX coverage is sparse for MarketWatch — low counts expected")
-
-    click.echo("─" * 60)
-    if rate < 20:
-        click.echo(f"  FAIL — extraction rate {rate:.0f}% is below 20% threshold", err=True)
-        sys.exit(1)
-    else:
-        click.echo(f"  PASS — extraction rate {rate:.0f}%")
+# Journalism sample-check (apnews / marketwatch) was removed with the journalism
+# tier in ADR-010. See scripts/archive/ for the archived ingestor code.
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _load_raw_articles(raw_dir: Path):
+def _load_raw_articles(raw_dir: Path, exclude_sources: set[str] | None = None):
+    """Load every JSONL under raw_dir into Article objects.
+
+    Skips malformed lines (counted) and records whose source_id is in
+    exclude_sources (case-insensitive). Returns the list of Article objects.
+    """
     from mnd.ingestion.base import Article
 
+    excluded = {s.lower() for s in (exclude_sources or set())}
     articles = []
+    n_malformed = 0
+    n_excluded = 0
+    excluded_breakdown: dict[str, int] = {}
     for jsonl_file in sorted(raw_dir.glob("*.jsonl")):
         with jsonl_file.open("r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
                     continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    n_malformed += 1
+                    continue
+                source_id = (data.get("source_id") or data.get("source") or "").lower()
+                if source_id in excluded:
+                    n_excluded += 1
+                    excluded_breakdown[source_id] = excluded_breakdown.get(source_id, 0) + 1
+                    continue
+                try:
+                    articles.append(
+                        Article(**{k: v for k, v in data.items() if k in Article.__dataclass_fields__})
+                    )
+                except (TypeError, ValueError) as exc:
+                    n_malformed += 1
+                    log.debug("Article construct failed: %s", exc)
+    if n_malformed:
+        log.warning("_load_raw_articles: skipped %d malformed JSONL lines", n_malformed)
+    if n_excluded:
+        log.info("_load_raw_articles: excluded %d archived-source records (%s)",
+                 n_excluded,
+                 ", ".join(f"{s}={n}" for s, n in sorted(excluded_breakdown.items())))
+    return articles
+
+
+def _load_jsonl_articles(jsonl_path: Path, exclude_sources: set[str] | None = None):
+    """Load a single JSONL file (typically corpus_for_embedding.jsonl) into Articles."""
+    from mnd.ingestion.base import Article
+
+    excluded = {s.lower() for s in (exclude_sources or set())}
+    articles = []
+    n_malformed = 0
+    n_excluded = 0
+    with jsonl_path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
                 data = json.loads(line)
+            except json.JSONDecodeError:
+                n_malformed += 1
+                continue
+            source_id = (data.get("source_id") or data.get("source") or "").lower()
+            if source_id in excluded:
+                n_excluded += 1
+                continue
+            try:
                 articles.append(
                     Article(**{k: v for k, v in data.items() if k in Article.__dataclass_fields__})
                 )
+            except (TypeError, ValueError) as exc:
+                n_malformed += 1
+                log.debug("Article construct failed: %s", exc)
+    if n_malformed:
+        log.warning("_load_jsonl_articles: skipped %d malformed JSONL lines in %s", n_malformed, jsonl_path)
+    if n_excluded:
+        log.info("_load_jsonl_articles: excluded %d archived-source records from %s", n_excluded, jsonl_path)
     return articles
 
 

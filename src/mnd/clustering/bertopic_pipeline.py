@@ -13,7 +13,6 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-import pandas as pd
 
 from mnd.utils.config import load_config
 from mnd.utils.logging import get_logger

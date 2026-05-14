@@ -39,50 +39,49 @@ The core model treats narratives as epidemic phenomena following the SIR (Suscep
 
 Multiple parametric models are fit in parallel per narrative cluster:
 - **SIR/SEIR** — epidemiologically motivated, primary model
-- **Logistic growth** — f(t) = L / (1 + e^(-k(t-t₀))), robust fallback
+- **Logistic growth** — f(t) = L / (1 + e^(-k(t-t₀))), robust fallback; always fit regardless
 - **Gompertz growth** — asymmetric peak, common in diffusion modeling
-- **Simple exponential** — baseline for early-stage narratives
+- **Simple exponential** — baseline for very early-stage narratives
 
-If SIR fits poorly across the validation set, fall back to logistic growth or non-parametric raw curve features (peak velocity, time-to-peak, decay slope). Logistic is the MVP fallback and is always fit regardless.
+If SIR fits poorly across the validation set, fall back to logistic growth or non-parametric raw curve features (peak velocity, time-to-peak, decay slope). Logistic is the MVP fallback.
 
 ---
 
 ## 4. Data Source Architecture — FINAL
 
-**This replaces all prior corpus architecture decisions. The AP News and MarketWatch journalism tier has been cut as direct text sources. The GDELT and Common Crawl sources remain archived. NBER and SSRN are removed from the historical ingestion pipeline (they remain available for Phase 6 live updates only, per prior decision).**
+**This supersedes all prior corpus architecture. The following are permanently removed from active ingestion: AP News, MarketWatch, GDELT, Common Crawl, ProQuest, NewsAPI, arXiv, Jackson Hole papers as a separate source. NBER and SSRN are removed from historical ingestion and retained for Phase 6 live updates only. RavenPack is the journalism coverage layer. Media Cloud is the detection layer. JLN uncertainty indices are replaced by EPU.**
 
-The corpus is built on three functionally distinct layers. Each layer maps directly onto a phase of Shiller's narrative propagation framework: narratives are characterized in analytical institutional discourse (Layer 1 text), propagate into financial journalism (Layer 1 RavenPack), and their emergence is detected via broad volume signals before institutional characterization begins (Layer 2). These layers are kept operationally separate — RavenPack contributes to dynamics fitting but not to text embedding; Media Cloud contributes to detection only.
+The architecture maps directly onto Shiller's narrative propagation framework: narratives are characterized in analytical institutional discourse (Layer 1A text), propagate into financial journalism (Layer 1B RavenPack), and their emergence is detected via broad volume signals before institutional characterization begins (Layer 2). These layers are operationally separate — RavenPack does not feed text embedding; Media Cloud does not feed clustering.
 
-### Layer 1: Corpus (semantic text + journalism coverage)
+---
 
-Layer 1 has two sub-components with different roles. **1A** provides the text that gets embedded and clustered — this is where narrative identity is determined. **1B** provides structured premium press coverage via RavenPack that supplements the dynamics fitting with a journalism propagation signal — this does NOT feed text embedding.
+### Layer 1A — Semantic Text Corpus (embedding and clustering)
 
-#### 1A — Semantic Text Sources (embedding and clustering)
+All sources are free, open access, and programmatically retrievable. No paywalled content. Every document can be directly linked on the public dashboard. This layer determines narrative identity.
 
-All sources are free, open access, and programmatically retrievable. No paywalled content. Every document in this layer can be directly linked on the public dashboard.
+**Tier 1 — Institutional policy**
 
-**Tier 1 — Institutional policy (primary narrative sources)**
+These are where macro narratives originate. Think tanks are downstream of this layer.
 
-These are where macro narratives originate. Think tanks and analytical outlets are downstream of this layer.
+| Source | Document type | Volume | Retrieval |
+|--------|--------------|--------|-----------|
+| Fed Board — FOMC Statements | Policy decision + forward guidance | ~500–1,000 words, 8×/yr | federalreserve.gov structured endpoints |
+| Fed Board — FOMC Minutes | Full deliberation record including dissenting views | 10,000–15,000 words, 8×/yr, 3-week lag | federalreserve.gov |
+| Fed Board — Speeches | Narrative testing before policy crystallization; track speaker identity | 2,000–8,000 words, 50–100/yr | federalreserve.gov/news/speeches |
+| Fed Board — Beige Book | 12 regional qualitative economic condition narratives + national summary; ingest each section separately | 15,000–25,000 words total, 8×/yr | federalreserve.gov |
+| Fed Board — FEDS Notes | Board economists' fast analytical response; faster than working papers | 1,000–3,000 words, ~70/yr | federalreserve.gov/econres/feds |
+| Fed Board — MPR, FSR | Monetary Policy Report (2×/yr); Financial Stability Report (2×/yr) | Long-form | federalreserve.gov |
+| Regional Fed blogs | Fast institutional text; authoritative within days of major events | 500–2,000 words, multiple/week collectively | Individual RSS feeds (see list below) |
+| IMF Blog | IMF's fast-response analytical layer; previews WEO/GFSR framing | 800–2,000 words, multiple/week | imf.org/en/Blogs RSS |
+| IMF — WEO, GFSR | Formal flagship reports; international macro and financial stability | 2×/yr each | imf.org structured downloads |
+| BIS Quarterly Review | Best source for banking-sector and financial stability narratives | 3–6 articles, 3,000–8,000 words each, 4×/yr | bis.org direct download |
+| CEA Blog | Executive branch macro framing; distinct from Fed on labor/fiscal | 500–1,500 words, ~75/yr | whitehouse.gov/cea RSS |
+| Treasury / OFR / FSOC | FSOC Annual Report; OFR working papers; Treasury crisis statements | Low volume, high signal | treasury.gov, financialresearch.gov, fsoc.gov |
+| CBO | Economic and Budget Outlooks; fiscal narrative | ~50/yr | cbo.gov |
+| Congressional testimony | Fed Chair, Treasury Secretary at Senate/House committees; primary narrative moments | ~40 key/yr | congress.gov, federalreserve.gov/testimony |
 
-| Source | What it provides | Retrieval | Notes |
-|--------|-----------------|-----------|-------|
-| Fed Board — FOMC Statements | ~500–1,000 words, 8×/yr; policy decision + forward guidance language | federalreserve.gov structured endpoints | Highest-authority narrative anchors; every word deliberate |
-| Fed Board — FOMC Minutes | 10,000–15,000 words, 8×/yr, 3-week lag | federalreserve.gov | Records narrative debate; "several participants noted..."; most valuable single document type |
-| Fed Board — Speeches | 2,000–8,000 words, 50–100/yr | federalreserve.gov/news/speeches | Narrative testing before crystallization in statements; track speaker identity |
-| Fed Board — Beige Book | 15,000–25,000 words, 8×/yr; 12 regional sections | federalreserve.gov | Regional narrative texture; qualitative economic conditions; ingest national summary + each region separately |
-| Fed Board — FEDS Notes | 1,000–3,000 words, ~70/yr | federalreserve.gov/econres/feds | Board economists' fast-response analytical layer; faster than working papers; public domain |
-| Fed Board — MPR, FSR | Monetary Policy Report (2×/yr), Financial Stability Report (2×/yr) | federalreserve.gov | Formal narrative crystallization documents |
-| Regional Fed blogs | 500–2,000 words, multiple/week collectively | Individual RSS feeds | Fastest embeddable institutional text; authoritative within days of events |
-| IMF Blog | 800–2,000 words, multiple/week | imf.org/en/Blogs RSS | IMF's fast-response layer; international macro framing; previews WEO/GFSR language |
-| IMF — WEO, GFSR | 2×/yr each; formal flagship reports | imf.org structured downloads | Formal international institutional characterization |
-| BIS Quarterly Review | 3–6 articles, 3,000–8,000 words each, 4×/yr | bis.org direct download | Best source for banking-sector and financial stability narratives; highly rigorous |
-| CEA Blog | 500–1,500 words, ~75/yr | whitehouse.gov/cea RSS | Executive branch macro framing; distinct from Fed framing on labor/fiscal narratives |
-| Treasury / OFR / FSOC | FSOC Annual Report, OFR working papers, Treasury statements | treasury.gov, financialresearch.gov, fsoc.gov | Financial stability narrative; FSOC Annual Report is primary systemic risk characterization |
-| CBO | Economic and Budget Outlooks, supplemental reports | cbo.gov | Fiscal policy narrative; narrow scope but clean signal |
-
-**Regional Fed blogs to ingest explicitly:**
-- NY Fed Liberty Street Economics — `libertystreeteconomics.newyorkfed.org` — multiple posts/week, fastest
+**Regional Fed blogs — ingest all of the following explicitly:**
+- NY Fed Liberty Street Economics — `libertystreeteconomics.newyorkfed.org` — multiple posts/week; fastest institutional layer
 - SF Fed Economic Letters and blog — `frbsf.org`
 - Chicago Fed On the Economy — `chicagofed.org`
 - Atlanta Fed macroblog — `frbatlanta.org`
@@ -90,72 +89,89 @@ These are where macro narratives originate. Think tanks and analytical outlets a
 - St. Louis Fed On the Economy — `stlouisfed.org`
 - Cleveland Fed Economic Commentary — `clevelandfed.org`
 
-**Tier 2 — Academic-analytical (fast academic framing)**
+**Note on Jackson Hole:** Jackson Hole symposium speeches are Fed Chair and governor speeches published on federalreserve.gov. They are captured by the Fed speeches ingestor. Do not implement a separate Jackson Hole ingestor — it creates duplicates. Confirm the Fed speeches ingestor scope includes these documents and remove any separate Jackson Hole source that exists in the codebase.
 
-| Source | What it provides | Retrieval | Notes |
-|--------|-----------------|-----------|-------|
-| VoxEU / CEPR | 800–2,500 words, ~1,000 macro-relevant/yr | voxeu.org RSS (back to 2007) | Academic economists writing accessible policy commentary; fastest academic layer; often frames narratives before press |
-| Brookings Institution | 500–5,000 words, ~500 macro-relevant/yr | brookings.edu RSS | High authority, fast response; Hutchins Center on Fiscal and Monetary Policy is especially relevant |
-| PIIE (Peterson Institute) | 500–3,000 words, ~300/yr | piie.com RSS | World-class international macro; best free source for dollar dynamics, trade, and global monetary narratives |
-| CFR (Council on Foreign Relations) | 500–3,000 words, ~200/yr | cfr.org RSS | Geopolitical-financial narrative intersection; global macro policy |
+**Tier 2 — Academic-analytical**
 
-**Sources explicitly excluded from historical ingestion (archived, not deleted):**
-- AP News — removed; replaced by RavenPack as the journalism coverage signal (see 1B)
-- MarketWatch — removed; same reason
-- GDELT — archived at `scripts/archive/`; superseded
-- Common Crawl ingestor — archived; superseded
-- ProQuest export script — archived; superseded
-- NBER — historical bulk retrieval failed (JavaScript-rendered, bot-protected); removed from historical corpus; RSS feed remains for Phase 6 live updates only
-- SSRN — same as NBER; live updates only
+| Source | Document type | Volume | Retrieval |
+|--------|--------------|--------|-----------|
+| VoxEU / CEPR | Academic economists writing fast accessible policy commentary; often frames narratives before press | 800–2,500 words, ~1,000 macro-relevant/yr | voxeu.org RSS (back to 2007) |
+| Brookings Institution | High authority, fast response; Hutchins Center on Fiscal and Monetary Policy especially relevant | 500–5,000 words, ~500 macro-relevant/yr | brookings.edu RSS |
+| PIIE (Peterson Institute) | World-class international macro; best free source for dollar, trade, and global monetary narratives | 500–3,000 words, ~300/yr | piie.com RSS |
+| CFR (Council on Foreign Relations) | Geopolitical-financial narrative intersection; global macro policy | 500–3,000 words, ~200/yr | cfr.org RSS |
 
-#### 1B — Journalism Supplement via RavenPack (dynamics fitting only, no text embedding)
+**Sources removed — archived, not deleted:**
 
-RavenPack provides structured article-level metadata and volume time series from ~30 premium financial outlets (WSJ, Bloomberg, FT, Reuters, and others) consistently from 2010 to present. Access is via WRDS academic subscription — no paywall scraping, no Wayback CDX patching, no coverage inconsistency.
-
-**What RavenPack contributes:** Article volume time series per outlet cluster, event category tags (macro, monetary policy, recession, inflation, etc.), relevance scores, and sentiment scores. It does NOT provide full text for embedding.
-
-**What RavenPack does NOT do:** Feed the semantic clustering pipeline. Narrative *identity* is determined entirely by the institutional text in 1A. RavenPack measures how widely a narrative has propagated into financial journalism after it has been characterized in analytical discourse.
-
-**Role in dynamics fitting:** RavenPack provides the primary volume series for SIR/logistic parameter estimation. The institutional corpus document counts (from 1A) provide a secondary, analytical-community-specific dynamics signal. Fitting on RavenPack press volume gives broader, more consistent time series than institutional counts alone, especially for the 2010–2015 window when think tank digital presence was smaller. Concordance between institutional corpus dynamics and RavenPack dynamics is itself a finding — it measures how quickly analytical framing propagates into financial journalism.
-
-| Source | What it provides | Access | Notes |
-|--------|-----------------|--------|-------|
-| RavenPack RPA 1.0 Global Macro, Dow Jones Edition | Weekly article volume time series, event tags, relevance/sentiment scores per outlet cluster, 2010–present | WRDS (`WRDS_USERNAME`, `WRDS_PASSWORD`) | Research-standard; covers premium press without paywalls; do not use for text embedding |
-
-**Implementation note:** RavenPack data goes to `data/dynamics/ravenpack/` — separate from the semantic corpus pipeline. The ingestor (`src/mnd/ingestion/ravenpack.py`) queries via WRDS PostgreSQL or Python API, filters to macro-relevant event categories, and outputs weekly volume time series per outlet cluster. Store separately; do not mix with document metadata from 1A.
+| Source | Location | Reason |
+|--------|----------|--------|
+| AP News | `scripts/archive/` | Journalism layer replaced by RavenPack (Layer 1B) |
+| MarketWatch | `scripts/archive/` | Same |
+| GDELT | `scripts/archive/` | Superseded; no full text; quality issues |
+| Common Crawl ingestor | `scripts/archive/` | Superseded |
+| ProQuest export script | `scripts/archive/` | Superseded |
+| arXiv | Remove from any active scripts immediately | Cut from scope: 2017-only coverage, low macro volume, not in spec |
+| Jackson Hole (separate ingestor) | Remove from any active scripts immediately | Redundant: covered by Fed speeches ingestor |
+| NBER | Removed from historical ingestion | Bulk retrieval failed; RSS retained for Phase 6 live updates only |
+| SSRN | Removed from historical ingestion | Same as NBER; live updates only |
 
 ---
 
-### Layer 2: Detection (narrative emergence signaling)
+### Layer 1B — Journalism Coverage via RavenPack (dynamics fitting only, no text embedding)
 
-Media Cloud provides story count time series by keyword/entity across thousands of outlets. It does not provide text. Its sole role is to detect when a topic is receiving anomalous volume attention — firing a candidate narrative flag before institutional sources have characterized it in embeddable text. This is the earliest signal in the pipeline.
+RavenPack provides structured article-level metadata and weekly volume time series from ~30 premium financial outlets (WSJ, Bloomberg, FT, Reuters, and others) consistently from 2010 to present. Access is via WRDS academic subscription. No paywall scraping. No Wayback CDX patching. No coverage inconsistency across years.
 
-**What Media Cloud contributes:** Daily story counts per keyword/topic query, outlet-tier breakdown (prestige national vs. regional vs. trade press). When volume for a topic cluster exceeds a threshold or shows anomalous growth relative to baseline, flag as candidate narrative. This creates a provisional detection event that gets enriched as 1A institutional documents arrive.
+**What RavenPack provides:** Article volume time series per outlet cluster, event category tags (macro, monetary policy, recession, inflation, etc.), relevance scores, sentiment scores.
 
-**The detection → characterization sequence:** Media Cloud fires (day 0–3) → think tank and regional Fed blog documents begin arriving and get embedded into a cluster (day 3–14) → cluster gains sufficient volume for dynamics fitting → RavenPack confirms press-level propagation. The lag between Media Cloud detection and institutional characterization is itself a measurable signal of narrative propagation speed.
+**What RavenPack does NOT do:** Provide full text for embedding. Do not pass RavenPack records into the semantic corpus pipeline. Narrative identity is determined entirely by the institutional text in Layer 1A. RavenPack measures how widely a narrative has propagated into financial journalism after being characterized in analytical discourse.
 
-| Source | What it provides | Access | Notes |
-|--------|-----------------|--------|-------|
-| Media Cloud | Daily story count time series by keyword/entity/outlet tier, 2010–present | mediacloud.org API; `MEDIACLOUD_API_KEY` in `.env` | Detection only; no text; do not embed |
+**Role in dynamics fitting:** RavenPack provides Signal A — the primary volume series for SIR/logistic parameter estimation. It is richer and more consistent than institutional corpus counts alone, especially for the 2010–2015 window when think tank digital presence was smaller. Concordance between RavenPack dynamics (journalism propagation) and institutional corpus dynamics (analytical community engagement) is itself a finding — it measures how quickly analytical framing propagates into financial journalism, which is a direct empirical test of Shiller's propagation framework.
 
-### Layer 3: Validation Data
+| Source | Provides | Access |
+|--------|---------|--------|
+| RavenPack RPA 1.0 Global Macro, Dow Jones Edition | Weekly article volume time series, event tags, relevance/sentiment per outlet cluster, 2010–present | WRDS — `WRDS_USERNAME`, `WRDS_PASSWORD` |
 
-Not ingested as text. Used for two distinct purposes: (1) exploratory outcome correlation — checking whether detected narrative dynamics co-move meaningfully with real-world macro outcomes to establish face validity; (2) business cycle context labeling — marking narrative life-cycles as occurring during expansion or recession. Anchor narrative timing validation does not use this layer at all — that check compares detected cluster emergence dates directly against documented reference dates in `anchor_narratives.jsonl`.
+**Implementation:** `src/mnd/ingestion/ravenpack.py`. Query via WRDS PostgreSQL or Python API. Filter to macro-relevant event categories. Output weekly volume time series per outlet cluster to `data/dynamics/ravenpack/`. Store entirely separately from the Layer 1A document pipeline — these are time series, not documents.
+
+---
+
+### Layer 2 — Detection via Media Cloud
+
+Media Cloud provides story count time series by keyword/entity across thousands of outlets. No full text. Its sole function is detecting when a topic receives anomalous volume attention — firing a candidate narrative flag before institutional sources have characterized it in embeddable text.
+
+**Detection → characterization sequence:**
+- Day 0–3: Media Cloud volume spike detected (candidate flag raised)
+- Day 3–14: Regional Fed blog and think tank documents arrive, get embedded, cluster begins forming
+- Day 14–21: Formal Fed communications, IMF Blog engage with the narrative
+- Week 3+: RavenPack confirms press-level propagation; cluster has sufficient volume for dynamics fitting
+
+The lag between Media Cloud detection and institutional characterization is a measurable signal of narrative propagation speed — not a system weakness.
+
+| Source | Provides | Access |
+|--------|---------|--------|
+| Media Cloud | Daily story counts by keyword/entity/outlet tier, 2010–present | mediacloud.org API — `MEDIACLOUD_API_KEY` in `.env` |
+
+**Implementation:** `src/mnd/detection/mediacloud.py`. Output to `data/detection/mediacloud/`. Do not integrate into the embedding or clustering pipeline.
+
+---
+
+### Layer 3 — Validation Data
+
+Not ingested as text. Used for: (1) exploratory outcome correlation — checking whether detected narrative dynamics co-move with real-world macro outcomes to establish face validity; (2) business cycle context labeling. Anchor narrative timing validation does not use this layer — it compares detected cluster emergence dates directly against `data/anchors/anchor_narratives.jsonl`.
 
 | Source | Provides | Access | Role |
 |--------|---------|--------|------|
 | FRED | CPI, PCE, unemployment, yield curve, breakeven inflation, VIX, credit spreads | `fredapi`, free; `FRED_API_KEY` in `.env` | Primary outcome correlation series |
-| EPU (Baker-Bloom-Davis Economic Policy Uncertainty) | Monthly news-based economic policy uncertainty index, 1985–present | policyuncertainty.com, free direct download | Strongest face-validity benchmark — EPU is itself constructed from newspaper text coverage of uncertainty, directly comparable to this system's narrative detection; narrative emergence events should co-move with EPU spikes |
-| NBER Business Cycle Dating | Official U.S. recession start/end dates | nber.org, public | Cycle context labels on narrative life-cycles; not for correlation |
-| University of Michigan consumer sentiment | Monthly inflation expectations and consumer sentiment | FRED | Inflation narrative validation specifically — check whether inflation narrative clusters co-move with survey-based expectations |
+| EPU (Baker-Bloom-Davis) | Monthly news-based economic policy uncertainty index, 1985–present | policyuncertainty.com, free direct download | Strongest face-validity benchmark — EPU is itself built from newspaper text coverage of uncertainty, directly comparable to this system's output; narrative emergence events should co-move with EPU spikes |
+| NBER Business Cycle Dating | Official U.S. recession start/end dates | nber.org, public | Cycle context labels; not for correlation |
+| University of Michigan consumer sentiment | Monthly inflation expectations and consumer sentiment | FRED | Inflation narrative validation specifically |
 
-**Note on EPU replacing JLN:** The Jurado-Ludvigson-Ng index (previously listed) measures forecast error variance — an indirect signal. EPU is constructed from the same kind of discourse this project analyzes, making it the strongest available external benchmark. Concordance between system-detected narrative emergence and EPU spikes is meaningful evidence the detection is capturing economically real signal rather than statistical noise.
+**EPU replaces JLN:** The Jurado-Ludvigson-Ng index has been removed. JLN measures forecast error variance — an indirect signal requiring WRDS MFS access. EPU is constructed from the same kind of text-based discourse this project analyzes, is freely downloadable, and is the stronger benchmark for this specific use case. Remove any `WRDS_MFS_*` env vars related to JLN.
 
 ---
 
 ## 5. System Architecture — 7 Stages
 
-Each stage produces a checkpointed artifact. Downstream stages consume the prior checkpoint. Partial completion produces useful outputs. Failures in one stage do not require redoing upstream work.
+Each stage produces a checkpointed artifact. Downstream stages consume the prior checkpoint. Partial completion still produces useful outputs. Failures in one stage do not require redoing upstream work.
 
 ```
 Stage 1: Ingestion
@@ -167,197 +183,201 @@ Stage 6: Stage Classification
 Stage 7: Dashboard
 ```
 
+---
+
 ### Stage 1: Ingestion
 
-Pull documents from all Tier 1 and Tier 2 sources above. Each ingestor outputs documents with the following standard fields:
+Pull documents from all Layer 1A sources. Each ingestor outputs documents with the following standard schema:
 
 ```json
 {
-  "doc_id": "unique identifier",
-  "source": "ny_fed_liberty_street",
-  "source_tier": "institutional_policy",
-  "doc_type": "blog_post | speech | statement | minutes | report | brief",
-  "title": "...",
-  "body_text": "...",
+  "doc_id":           "unique identifier",
+  "source":           "ny_fed_liberty_street",
+  "source_tier":      "institutional_policy",
+  "doc_type":         "blog_post | speech | statement | minutes | report | brief | testimony",
+  "title":            "...",
+  "body_text":        "...",
   "publication_date": "YYYY-MM-DD",
-  "author": "...",
-  "url": "...",
-  "tags": ["..."]
+  "author":           "...",
+  "url":              "...",
+  "tags":             ["..."]
 }
 ```
 
-**Timestamp rule:** Use publication/release date, not meeting or event date. FOMC minutes timestamp = release date (3 weeks after meeting). NBER papers timestamp = posting date. Rationale: the system measures when ideas enter public discourse, not when privately held.
+**Timestamp rule:** Use publication/release date, not meeting or event date. FOMC minutes timestamp = release date (3 weeks after meeting), not the meeting date. The system measures when ideas enter public discourse.
+
+Run RavenPack ingestion separately via `src/mnd/ingestion/ravenpack.py`. Output goes to `data/dynamics/ravenpack/` as time series — do not mix with document records from Layer 1A.
+
+---
 
 ### Stage 2: Filtering and Deduplication
 
-No topic filter needed — sources are macro-relevant by construction. Two operations only:
+No topic filter needed — all Layer 1A sources are macro-relevant by construction. Two operations only:
 
 1. **Near-duplicate removal:** MinHash-based detection within rolling 48-hour windows. Removes wire redistributions and minor edits. Retain one canonical version per duplicate cluster.
-2. **Date range filter:** Retain only documents with publication_date between 2010-01-01 and present.
+2. **Date range filter:** Retain only documents with `publication_date` between 2010-01-01 and present.
+
+---
 
 ### Stage 3: Embedding
 
-**Model: `all-mpnet-base-v2` — locked, do not change.**
+**Model: `all-mpnet-base-v2` — currently locked per ADR-006. Read the note below before proceeding.**
 
-- Truncate to: headline + first 600 tokens of body text
-- For documents over 2,000 words: split into overlapping 600-token chunks with 100-token overlap before embedding. Embed each chunk separately.
-- Each chunk carries full document-level metadata.
-- Store embeddings with chunk-to-document mapping preserved.
-- Run on RCC (GPU partition). See infrastructure section.
+**Known limitation — evaluate before running:** all-mpnet-base-v2 has a native maximum sequence length of 384 tokens. The config shows `max_seq_len: 32768` and preprocessing truncates to headline + first 600 tokens, but the model silently caps at 384 tokens at inference time regardless of config. For long institutional documents (FOMC minutes at 10,000+ words, BIS articles at 3,000–8,000 words), the embedding is derived from the opening ~280 words of body text — not the substantive content.
 
-**Look-ahead bias mitigation:** `all-mpnet-base-v2` is a general-purpose model (training cutoff ~2020–2021), not a finance-specialized model. Finance-tuned models (e.g., FinTextSim) would amplify look-ahead concerns on this domain. The tradeoff — marginally noisier clusters — is accepted.
+**If Phase 3 embedding has NOT yet run:** Evaluate switching to `Qwen3-Embedding-0.6B` or a comparable long-context model before committing GPU time. Qwen3-Embedding supports 32,768 token context, ranks significantly above all-mpnet on MTEB clustering benchmarks, and would produce substantially better cluster coherence for the long institutional documents that make up this corpus. The look-ahead concern (Qwen3 training cutoff ~2024) is real but bounded by the mandatory pre/post-2021 sensitivity check. If switching, update `config.yaml` embedding_model field and document as a new ADR.
 
-**Mandatory sensitivity check (Phase 3):** Compare cluster quality and NMI across pre-2021 and post-2021 sub-periods. If clusters are dramatically cleaner post-cutoff, document as evidence of significant look-ahead and caveat accordingly.
+**If Phase 3 embedding IS already running or complete:** Proceed with all-mpnet. Document the 384-token limitation explicitly in the methodology as a known constraint. Do not re-embed.
+
+**Embedding procedure:**
+- Truncate input to: headline + first 600 tokens of body text
+- Documents over 2,000 words: split into overlapping 600-token chunks with 100-token overlap; embed each chunk separately
+- Each chunk carries full parent document metadata
+- Store embeddings with chunk-to-document mapping preserved
+- Run on RCC GPU partition
+
+---
 
 ### Stage 4: Clustering
 
-BERTopic with dynamic topic modeling extensions.
+BERTopic with dynamic topic modeling.
 
-**Locked parameters (from config.yaml — do not tune):**
+**Locked parameters — do not change without a new ADR:**
+```yaml
+umap_n_neighbors: 15
+umap_min_dist: 0.1
+umap_n_components: 5
+umap_metric: cosine
+hdbscan_min_cluster_size: 20        # default; sensitivity sweep {10, 20, 40}
+hdbscan_min_samples: 5
+hdbscan_cluster_selection_method: eom
 ```
-UMAP:    n_neighbors=15, min_dist=0.1, n_components=5, metric='cosine'
-HDBSCAN: min_cluster_size=20, min_samples=5, cluster_selection_method='eom'
-Sensitivity sweep: min_cluster_size ∈ {10, 20, 40}
-```
 
-Three granularity levels:
-- **Fine:** 200+ clusters
-- **Medium:** 40–80 clusters — primary analysis unit; a "narrative" is operationally a medium-granularity cluster
-- **Coarse:** 10–20 clusters
+**Three granularity levels:**
+- Fine: 200+ clusters
+- Medium: 40–80 clusters — primary analysis unit; a "narrative" is operationally a medium-granularity cluster
+- Coarse: 10–20 clusters
 
-**Bootstrap stability evaluation:** 20 replicates with deterministic seeds. Report NMI and ARI across all pairs for each granularity level. **Kill criterion: NMI < 0.40 across all parameter settings → stop and investigate before proceeding.**
+**Bootstrap stability evaluation:** 20 replicates with deterministic seeds. Report NMI and ARI across all pairs for each granularity level.
 
-**Source-type contamination check (post-clustering diagnostic):** For each cluster, groupby source_tier. Clusters > 90% one source type are flagged for manual review — potential register-based rather than semantic clustering. One groupby operation; not an algorithmic correction.
+**Kill criterion:** NMI < 0.40 across all parameter settings → stop, investigate, do not proceed.
 
-**Look-ahead sensitivity check:** After clustering, compute NMI separately for pre-2021 and post-2021 sub-corpora. Document findings.
+**Post-clustering diagnostics (run after clustering, one-time, do not feed back into clustering):**
+- *Source-type contamination check:* For each cluster, groupby `source_tier`. Flag clusters > 90% one source type for manual review — potential register-based rather than semantic clustering.
+- *Look-ahead sensitivity check:* Compute NMI separately for pre-2021 and post-2021 sub-corpora. If clusters are dramatically cleaner post-2021, document as evidence of significant look-ahead bias.
+
+---
 
 ### Stage 5: Dynamics Fitting
 
-Two volume signals feed this stage. They are kept separate and produce complementary outputs.
+Two volume signals feed this stage and are kept operationally separate.
 
-**Signal A — RavenPack press volume (primary dynamics series):** Weekly article counts from the ~30-outlet premium press whitelist. This is the primary series for SIR/logistic parameter estimation. Consistent, outlet-normalized, covers the full 2010–present window reliably. Stored in `data/dynamics/ravenpack/`.
+**Signal A — RavenPack press volume (primary)**
+Weekly article counts from the ~30-outlet premium press whitelist. Primary series for SIR/logistic parameter estimation. Consistent, outlet-normalized, full 2010–present window. Stored at `data/dynamics/ravenpack/`.
 
-**Signal B — Institutional corpus document counts (secondary dynamics series):** Per-cluster document counts from the 1A semantic corpus. Counts by document, not by chunk. This signal measures how quickly the analytical-institutional community engages with a narrative — a distinct and independently interesting dynamic that complements press volume. Stored alongside cluster output.
+**Signal B — Institutional corpus document counts (secondary)**
+Per-cluster document counts from Layer 1A. Count by document, not by chunk. Measures analytical-institutional community engagement. Stored at `data/dynamics/institutional/`.
 
-**Concordance between Signal A and Signal B is a finding:** If institutional discourse dynamics and press volume dynamics show similar R₀ and peak timing, that is evidence of rapid propagation from analytical framing into journalism. If they diverge — institutional engagement precedes press peak by weeks — that lag is itself a measurable feature of narrative transmission speed worth reporting.
+**Concordance between Signal A and Signal B is a finding.** Concordant dynamics (similar R₀ and peak timing) indicates rapid propagation from analytical framing to journalism. Divergence — institutional engagement preceding press peak — is a measurable lag in narrative transmission speed and a direct empirical result for the Shiller framework.
 
-For each narrative cluster:
+**Fitting procedure for each narrative cluster:**
 
-1. Extract Signal B time series (institutional corpus documents per day, count by document not chunk)
-2. Extract Signal A time series (RavenPack weekly volume for matched topic/event categories)
-3. Apply 7-day centered moving average smoothing to both (bump to 21-day if noisy)
-4. Apply **stratified smoothing** on Signal B — smooth institutional documents and think-tank documents separately to prevent quarterly BIS or IMF publications from spiking the series
+1. Extract Signal B time series (Layer 1A document counts per day)
+2. Extract Signal A time series (RavenPack weekly volume for matched macro event categories)
+3. Apply 7-day centered moving average smoothing to both series (bump to 21-day if noisy — this is the only parameter to adjust before escalating)
+4. Apply **stratified smoothing** on Signal B — smooth institutional and think-tank documents separately to prevent quarterly BIS or IMF report releases from spiking the series
 5. Apply **calendar annotation** — flag FOMC meeting dates, BLS release dates, and major known macro events on the weekly series
-6. Fit four parametric models in parallel on Signal A (primary): SIR, logistic, Gompertz, exponential
-7. Fit logistic model on Signal B (secondary) for comparison
-8. Use Bayesian inference with weakly-informative priors (PyMC) — produces full posterior distributions, not point estimates
+6. Fit four parametric models in parallel **on Signal A** (primary): SIR, logistic, Gompertz, exponential
+7. Fit logistic model **on Signal B** (secondary) for comparison
+8. Use Bayesian inference with weakly-informative priors (PyMC) — full posterior distributions over parameters, not point estimates
 9. **Volume normalization (Signal A):** Express weekly RavenPack counts as fraction of total RavenPack corpus articles that week. Makes R₀ comparable across years; absorbs outlet coverage expansion effects.
 
-**Two-stage fitting threshold:** Apply parametric models only when a cluster exceeds **3 articles/week averaged over 4 consecutive weeks AND 50 cumulative articles** in Signal A. Below threshold: report descriptive stats only (first appearance, cumulative count, most recent document). Label as "pre-fitting" in dashboard. Do not force a fit on thin data.
+**Two-stage fitting threshold:** Apply parametric models only when a cluster exceeds **3 articles/week averaged over 4 consecutive weeks AND 50 cumulative articles** in Signal A. Below threshold: descriptive stats only (first appearance, cumulative count, most recent document title). Label "pre-fitting" in dashboard. Do not force a fit on thin data.
+
+---
 
 ### Stage 6: Stage Classification
 
-Classify each narrative cluster into one of five life-cycle stages based on its fitted curve:
+Classify each narrative cluster into one of five life-cycle stages based on its fitted Signal A curve:
 
 | Stage | Criteria |
 |-------|----------|
-| Pre-emergence | < 50 cumulative articles; R₀ poorly identified |
+| Pre-emergence | < 50 cumulative articles in Signal A; R₀ poorly identified |
 | Early-spread | R₀ > 1.0; currently in growth phase; peak day not yet reached |
 | Peak | At or near maximum daily volume; growth rate near zero |
 | Decay | Post-peak; declining article volume |
 | Dormant | Very low volume; R₀ < 1; narrative effectively concluded |
 
-Threshold values are pre-specified in config.yaml — do not modify without documenting as an ADR.
+Threshold values are pre-specified in `config.yaml`. Do not modify without a new ADR.
+
+---
 
 ### Stage 7: Dashboard
 
-Public web tool. Reads pre-computed static artifacts — no live computation at user request time. Two primary views:
+Public web tool. Reads pre-computed static artifacts only — no live computation at user request time. Two primary views:
 
-**View 1 — Life-Cycle Viewer:** Select a narrative → see growth curve with fitted model overlaid, R₀ estimate with credible interval, current life-cycle stage, representative document titles from key moments with links to original sources.
+**View 1 — Life-Cycle Viewer:** Select a narrative → growth curve with fitted model overlaid, R₀ estimate with credible interval, current life-cycle stage, representative document titles from key moments, links to original source URLs.
 
-**View 2 — Emerging Narratives Panel:** Three sections:
-- *Currently emerging:* Narratives crossing from pre-emergence into early-spread within the past 7–30 days. Show R₀ estimate with credible interval, current document volume, sample titles.
-- *Historical analogs:* For each emerging narrative, top 3–5 historical narratives with most similar early-stage trajectories.
-- *Aggregate state:* Summary metrics — number of narratives per stage, dominant clusters.
+**View 2 — Emerging Narratives Panel:**
+- *Currently emerging:* Narratives crossing from pre-emergence into early-spread within the past 7–30 days; R₀ estimate, current volume, sample titles
+- *Historical analogs:* Top 3–5 historical narratives with most similar early-stage Signal A trajectories
+- *Aggregate state:* Number of narratives per stage, dominant clusters, current discourse landscape
 
-**Stretch — Narrative Map:** 2D UMAP projection with cluster centroids labeled, zoom and click-to-explore. Cut this if time-constrained.
+**Stretch — Narrative Map:** 2D UMAP projection with cluster centroids labeled, zoom and click. Cut this if time-constrained.
 
-**Onboarding:** Persistent "what is this?" page explaining the framework in plain language with a worked example of a historical narrative life-cycle. Tooltips on R₀, stage labels, etc.
+**Onboarding:** Persistent "what is this?" page with plain-language explanation and a worked historical example. Tooltips on R₀, stage labels, and technical terms.
 
-**Live update architecture:** Weekly cron job on RCC or small VPS. Pulls past week's documents, embeds, assigns to existing clusters or flags candidate new clusters, refits parameters on changed clusters, writes static JSON/HTML artifacts. Frontend (Hugging Face Spaces or Vercel free tier) reads only static artifacts. If a weekly update fails, display last-good state with prominent "last updated" timestamp — failure is visible, not hidden.
+**Live update architecture:** Weekly cron job (RCC or small VPS). Pulls past week's documents from all Layer 1A sources. Embeds, assigns to existing clusters or flags candidate new clusters. Refits parameters on changed clusters. Writes static JSON/HTML artifacts. Frontend (Hugging Face Spaces or Vercel free tier) reads static artifacts only. If a weekly update fails, display last-good state with prominent "last updated" timestamp.
 
 ---
 
 ## 6. Current Project Status
 
-### Completed
-
-**Phase 1 — Pilot:** Complete. Bootstrap NMI passes kill criterion. Anchor narrative detection on three-narrative pilot set confirmed. Do not rerun or modify pilot code.
-
-**Phase 2 — Data Pipeline:** Complete. Full historical ingestion (2010–present) ran on RCC under account `pi-dachxiu`. The ingested corpus includes institutional sources, AP News (Wayback CDX), and MarketWatch (Wayback CDX).
+### Complete
+- **Phase 1 — Pilot:** Bootstrap NMI passes kill criterion. Three-narrative anchor detection confirmed. Do not rerun or modify pilot code.
+- **Phase 2 — Data Pipeline:** Full historical ingestion (2010–present) ran on RCC. Ingested corpus includes institutional sources, AP News (Wayback CDX), and MarketWatch (Wayback CDX).
 
 ### In Progress
+- **Phase 3 — Embedding, Clustering, Dynamics:** Running on RCC. SLURM embedding jobs had dependency resolution issues at last check. Clustering and dynamics fitting not yet confirmed complete.
 
-**Phase 3 — Embedding, Clustering, Dynamics:** Currently running on RCC. SLURM jobs for embedding were submitted but had dependency resolution issues at last check. Clustering and dynamics fitting have not yet completed.
+### Known Issues to Fix Before Proceeding
+
+**Issue 1 — arXiv is active in `ingest_institutional_rcc.sh`:**
+arXiv was cut from scope. Remove it from the Tier 2 sources list in the ingest script and from any source configuration files (`whitelist.yaml`, etc.). arXiv has 2017-only coverage, low macro volume, and is not in this spec.
+
+**Issue 2 — Jackson Hole papers listed as a separate source:**
+Remove any separate Jackson Hole ingestor. These speeches are Fed Chair and governor speeches on federalreserve.gov, already captured by the Fed speeches ingestor. A separate ingestor creates duplicates. Confirm Fed speeches ingestor covers them, then remove the redundant entry from all scripts and config.
+
+**Issue 3 — AP News and MarketWatch in the processed corpus:**
+These were ingested in Phase 2 but have since been removed from scope. Before embedding (if not yet run): write `scripts/filter_corpus_pre_embed.py` to filter `data/processed/` excluding documents where `source` is `ap_news` or `marketwatch`, output to `data/processed/corpus_for_embedding.jsonl`, report counts before/after. If embedding is already complete: filter by dropping those rows from the embedding matrix before clustering.
+
+**Issue 4 — Embedding model decision:**
+Check whether Phase 3 embedding has run. If not, evaluate switching to a long-context model (see Stage 3 note) before committing GPU time. If switching, create a new ADR.
 
 ---
 
 ## 7. Immediate Tasks for Claude Code
 
-**First action: determine current Phase 3 state before doing anything else.**
+**First action — determine actual Phase 3 state:**
 
 ```bash
-# On RCC Midway3
 squeue -u ehgarver
+sacct -u ehgarver --starttime=2026-05-01 --format=JobID,JobName,State,Elapsed
 ls -lh /scratch/midway3/ehgarver/data/embeddings/ 2>/dev/null
 ls -lh /scratch/midway3/ehgarver/data/clusters/ 2>/dev/null
-sacct -u ehgarver --starttime=2026-05-01 --format=JobID,JobName,State,Elapsed
 ```
 
-Report what's there before proceeding. The path forward depends on where Phase 3 actually is.
+Report what exists. Then proceed in this order:
 
-### If embedding is NOT yet complete (preferred path)
-
-The corpus needs to be corrected before embedding runs. AP News and MarketWatch have been cut from the semantic corpus (see Section 4). Do the following:
-
-1. **Update `whitelist.yaml`:** Move AP News and MarketWatch from active sources to `archived_sources` section with note: "journalism tier removed 2026-05-11; institutional+analytical corpus only; these sources remain in ingested raw data but are excluded from embedding and all downstream stages."
-
-2. **Filter the processed corpus:** Before embedding, filter `data/processed/` to exclude documents where `source` is `ap_news` or `marketwatch`. Write a script `scripts/filter_corpus_pre_embed.py` that reads the processed JSONL, drops those source types, writes a filtered JSONL to `data/processed/corpus_for_embedding.jsonl`, and reports counts before/after.
-
-3. **Add CFR to the source list:** If CFR (Council on Foreign Relations) is not already in `whitelist.yaml` and `src/mnd/ingestion/institutional.py`, add it. RSS feed: `cfr.org/rss/all`. Same pattern as Brookings/PIIE.
-
-4. **Add FEDS Notes explicitly:** Confirm `federalreserve.gov/econres/feds/` is in the Fed ingestor scope. FEDS Notes are short analytical notes from Board economists — distinct from working papers and speeches. If not present, add as a source type under the Fed ingestor.
-
-5. **Re-run ingestion for CFR and FEDS Notes if missing**, then proceed to embed the filtered corpus.
-
-6. **Submit embedding job:** `sbatch scripts/rcc/embed_rcc.sh` on the filtered corpus.
-
-### If embedding IS complete but clustering has not run
-
-1. Apply the corpus filter retroactively: before passing embeddings to BERTopic, load the embedding matrix, filter rows where the corresponding document's source is `ap_news` or `marketwatch`, and proceed with the filtered embedding matrix. Write this as a preprocessing step in the cluster pipeline.
-
-2. Add CFR and FEDS Notes ingestion for historical data if not already present. These will be included in Phase 6 live updates.
-
-3. Proceed with clustering on filtered embeddings.
-
-### If clustering IS complete
-
-Proceed with current corpus as-is. Document the AP News / MarketWatch inclusion in methodology (they are now out of scope for live updates). Implement source corrections for Phase 6.
-
-### Regardless of Phase 3 state — additional tasks
-
-**Media Cloud integration:** Add Media Cloud as the detection layer. This is new and was not in the prior architecture. It does not affect the semantic corpus or embedding — it is a separate signal pipeline.
-
-- Add `src/mnd/detection/mediacloud.py`
-- Queries the Media Cloud API for story count time series by keyword/topic
-- Output: daily story counts per keyword query, stored as `data/detection/mediacloud_{query}_{date_range}.jsonl`
-- Used in Phase 6 to flag candidate emerging narratives before institutional sources have characterized them
-- API key goes in `.env` as `MEDIACLOUD_API_KEY`
-- Do not integrate into the main embedding/clustering pipeline — this is a parallel detection signal
-
-**Push all commits:** After any changes, commit and push to origin. Confirm remote is up to date. Every session should end with a push.
-
-**RCC discipline:** All jobs submit under `--account pi-dachxiu`. All data writes to `/scratch/midway3/ehgarver/` only — never to the PI's project folder. Be conservative with resource requests. Embedding: GPU partition, 1 GPU, 32GB RAM, 12h wall time. Clustering: caslake partition, CPU only, 64GB RAM, 8h wall time.
+1. Fix Issue 1: remove arXiv from `ingest_institutional_rcc.sh` and all config
+2. Fix Issue 2: remove Jackson Hole separate ingestor; confirm Fed speeches covers it
+3. Fix Issue 3: filter AP News and MarketWatch from corpus (pre- or post-embed as appropriate)
+4. Fix Issue 4: make embedding model decision; create ADR if changing
+5. Add `src/mnd/detection/mediacloud.py` — new, does not exist; Media Cloud detection layer
+6. Confirm `src/mnd/ingestion/ravenpack.py` exists and outputs to `data/dynamics/ravenpack/` as time series only — not into the document corpus
+7. Implement EPU validation data pull from policyuncertainty.com; remove any JLN/WRDS_MFS references
+8. Remove env vars: `PROQUEST_DATASET_ID`, `NEWS_API_KEY`, `WRDS_MFS_*`
+9. Commit and push all changes; confirm remote is up to date
 
 ---
 
@@ -365,49 +385,41 @@ Proceed with current corpus as-is. Document the AP News / MarketWatch inclusion 
 
 ### Phase 4 — Validation
 
-Do not begin until Phase 3 NMI and ARI results are in hand and pass kill criteria.
+Do not begin until Phase 3 NMI and ARI results are confirmed and pass kill criteria.
 
-1. **Pre-registration:** Commit `prereg/PREREGISTRATION.md` to a public timestamp (GitHub or OSF) before examining any outcome data. This document specifies all hypotheses, variables, statistical tests, and decision criteria. Must be done before any FRED data is correlated against narrative clusters.
+1. **Pre-registration first:** Commit `prereg/PREREGISTRATION.md` to a public timestamp (GitHub or OSF) before examining any outcome data. Must specify all hypotheses, variables, statistical tests, decision criteria before any FRED or EPU data is correlated against narrative clusters.
 
-2. **Anchor narrative recovery:** System must recover all 10 anchor narratives within 14-day tolerance. See anchor list in Section 9.
+2. **Anchor narrative recovery:** System must recover all 10 anchor narratives within 14-day tolerance (Section 10).
 
 3. **Fizzled-narrative validation:** For each anchor, validate that contemporaneous narratives that did not crystallize receive appropriately different stage classifications.
 
-4. **Sensitivity analysis:** Run three pre-specified parameter settings (strict: min_cluster_size=10, default: 20, permissive: 40). Core conclusions must hold across all three.
+4. **Sensitivity analysis:** Three pre-specified parameter settings (strict: `min_cluster_size=10`, default: `20`, permissive: `40`). Core conclusions must hold across all three.
 
-5. **Exploratory predictive analysis (compressible):** Granger causality testing in both directions, FDR-corrected with Benjamini-Hochberg. Report null results honestly if no associations survive correction — this is not a project killer.
+5. **Exploratory predictive analysis (compressible):** Granger causality testing in both directions; Benjamini-Hochberg FDR correction across all reported hypotheses. Null results reported honestly — not a project killer.
 
 **Kill criteria for Phase 4:**
-- Fewer than 7 of 10 anchor narratives recovered within 14-day tolerance → debug embedding/filtering; if persistent, shift to novelty-velocity framework
-- Median R² < 0.30 across validation narratives OR R₀ posterior CIs spanning > 2 units → drop SIR; fall back to logistic growth or non-parametric curve features
+- Fewer than 7/10 anchors recovered within 14-day tolerance → debug; if persistent, shift to novelty-velocity framework
+- Median R² < 0.30 OR R₀ posterior CIs > 2 units across validation narratives → drop SIR; fall back to logistic or non-parametric curve features
 
-**Out-of-sample discipline:** Training data 2010–2019. Held-out validation 2020–present. The held-out period is not examined until final analysis. All hyperparameters locked before held-out evaluation.
+**Out-of-sample discipline:** Training data 2010–2019. Held-out validation 2020–present. Held-out period not examined until final analysis. All hyperparameters locked before held-out evaluation.
 
 ### Phase 5 — Dashboard Build
 
-1. Streamlit (MVP) or React/Next.js single-page app
-2. Static cached artifacts produced by analysis pipeline (JSON cluster data, fitted parameters, stage classifications, representative document titles and URLs)
+1. Streamlit (MVP) or React single-page app
+2. Static cached artifacts from analysis pipeline (JSON cluster data, fitted parameters, stage classifications, document titles and URLs)
 3. Implement View 1 (Life-Cycle Viewer) and View 2 (Emerging Narratives Panel)
-4. Onboarding "what is this?" page with worked historical example
-5. Deploy to Hugging Face Spaces (free tier, public URL, no auth required)
+4. Onboarding page with worked historical example
+5. Deploy to Hugging Face Spaces (free tier, public URL, no authentication)
 
 ### Phase 6 — Live Updating
 
-Weekly cron job. Pulls past week's documents from all active sources (institutional, think tanks, VoxEU, Media Cloud detection signal). Embeds new documents. Assigns to existing clusters or flags as candidate new clusters. Refits parameters on changed clusters. Writes static artifacts.
-
-Sources active in live updates (beyond historical corpus sources):
-- NBER: RSS feed for new working paper abstracts
-- SSRN: RSS feed for new macro/finance submissions
-
-These were removed from historical ingestion but their RSS feeds provide genuinely fast signals for live updating. Include them in the weekly cron only.
-
-Robust failure handling: if a weekly job fails, dashboard displays last-good state with "last updated" timestamp. Failure is visible, not hidden.
+Weekly cron job. Pulls past week's documents from all active Layer 1A sources. Also activates NBER and SSRN RSS feeds (live-update-only, not in historical corpus). Embeds new documents. Assigns to existing clusters or flags candidate new clusters. Refits parameters on changed clusters. Writes static artifacts. Failure handling: display last-good state with "last updated" timestamp.
 
 ### Phase 7 — Writeup and Reproducibility
 
-1. GitHub repository: pinned dependencies (`requirements.txt`), clear README, replication instructions, pre-registration document, anchor narrative ground truth CSV/JSONL
-2. Short technical report: 5–8 pages describing methodology and findings
-3. Stretch: 12–15 page workshop-paper quality writeup for submission to ACL Economics and NLP or NeurIPS ML for Finance workshop
+1. GitHub: pinned dependencies (`requirements.txt`), clear README, replication instructions, pre-registration document, anchor narrative ground truth as CSV/JSONL
+2. Short technical report: 5–8 pages covering methodology and findings
+3. Stretch: 12–15 page workshop-paper quality writeup for ACL Economics and NLP or NeurIPS ML for Finance workshop
 
 ---
 
@@ -416,54 +428,57 @@ Robust failure handling: if a weekly job fails, dashboard displays last-good sta
 **Do not change any of these without creating a new ADR in `docs/architecture_decisions.md`.**
 
 ```yaml
-embedding_model: all-mpnet-base-v2        # locked; do not change
-article_truncation_tokens: 600             # headline + first 600 tokens
+# Embedding
+embedding_model: all-mpnet-base-v2        # see Stage 3 note — evaluate before running if not yet run
+article_truncation_tokens: 600
 chunk_size_tokens: 600
 chunk_overlap_tokens: 100
-chunk_threshold_words: 2000               # documents above this are chunked
+chunk_threshold_words: 2000
 
+# Clustering
 umap_n_neighbors: 15
 umap_min_dist: 0.1
 umap_n_components: 5
 umap_metric: cosine
-
-hdbscan_min_cluster_size: 20             # default; sweep {10, 20, 40}
+hdbscan_min_cluster_size: 20              # default; sensitivity sweep {10, 20, 40}
 hdbscan_min_samples: 5
 hdbscan_cluster_selection_method: eom
 
-smoothing_window_days: 7                 # centered MA; bump to 21 if noisy
+# Dynamics
+smoothing_window_days: 7                  # centered MA; only adjustment to try before escalating is bumping to 21
 bootstrap_replicates: 20
 anchor_tolerance_days: 14
 pre_emergence_threshold_articles: 50
 early_spread_r0_threshold: 1.0
+fitting_threshold_articles_per_week: 3    # Signal A, over 4 consecutive weeks
+fitting_threshold_cumulative: 50          # Signal A
 
-fitting_threshold_articles_per_week: 3   # over 4 consecutive weeks
-fitting_threshold_cumulative: 50
+# Validation split
+train_cutoff: 2019-12-31
+holdout_start: 2020-01-01
 
-train_cutoff: 2019-12-31                 # training data ends here
-holdout_start: 2020-01-01               # held-out validation starts here
-
-random_seed: pinned in config.yaml       # specific values there
+# Reproducibility
+random_seed: pinned in config.yaml        # specific values there
 ```
 
 ---
 
-## 10. Anchor Narratives (FINAL — 10 narratives)
+## 10. Anchor Narratives — FINAL (10 narratives)
 
-FTX collapse and GameStop short squeeze were removed (out of macro scope). Taper tantrum and China devaluation were added.
+FTX and GameStop were removed (not macro-scoped). Taper tantrum and China devaluation added to cover the 2010–2015 window.
 
 | # | Narrative | Reference Date | Why It Anchors |
 |---|-----------|---------------|----------------|
 | 1 | SVB collapse | 2023-03-09 | Entity-rich, sharp emergence, well-documented |
 | 2 | COVID market crash | 2020-02-24 | Largest single-narrative event in window |
 | 3 | Brexit aftermath | 2016-06-24 | Long-tail narrative with clear ignition |
-| 4 | Transitory inflation debate | 2021-Q2 | Slower, diffuse, well-documented Fed language |
+| 4 | Transitory inflation debate | 2021-Q2 | Slower, diffuse; well-documented Fed language evolution |
 | 5 | Credit Suisse stress | 2023-03-15 | Adjacent to SVB; tests cluster differentiation |
 | 6 | Regional banking contagion | 2023-03-13 | Tests narrative branching from anchor events |
 | 7 | 2022 inflation peak narrative | 2022-Q2/Q3 | Multi-month evolving narrative |
 | 8 | Soft landing emergence | 2023-Q3/Q4 | Slow emergence; uncontested timing |
-| 9 | 2013 taper tantrum | 2013-05-22 | Bernanke Senate testimony; tests 2010–2015 window |
-| 10 | 2015 China devaluation scare | 2015-08-11 | PBOC devaluation announcement; global contagion framing |
+| 9 | 2013 taper tantrum | 2013-05-22 | Bernanke Senate testimony; tests 2010–2015 coverage |
+| 10 | 2015 China devaluation scare | 2015-08-11 | PBOC devaluation; global contagion framing |
 
 ---
 
@@ -471,29 +486,28 @@ FTX collapse and GameStop short squeeze were removed (out of macro scope). Taper
 
 Pre-committed thresholds. If hit, stop and respond as specified — do not continue.
 
-| Criterion | Threshold | Check Point | Response |
-|-----------|-----------|-------------|----------|
+| Criterion | Threshold | Check Point | Response if Hit |
+|-----------|-----------|-------------|-----------------|
 | Cluster stability | Bootstrap NMI < 0.40 across all parameter settings | End of Phase 3 | Investigate; if unsalvageable, narrow to inflation-only fallback scope (2018–present) |
-| Anchor recovery | Fewer than 7 of 10 anchors recovered within 14-day tolerance | End of Phase 4 | Debug; if persistent, shift to novelty-velocity framework |
-| Dynamics fit quality | Median R² < 0.30 across validation narratives OR R₀ CIs > 2 units | End of Phase 4 | Drop SIR; fall back to logistic or non-parametric curve features |
-| Predictive null | No associations survive FDR correction | Phase 4 | Not a project killer — report null honestly as exploratory finding |
-| Live update reliability | > 25% of weeks fail | Phase 6 month 1 | Degrade to monthly updates; make "last updated" prominent |
-| Time budget | MVP not complete by month 3 from now | Mid-project | Cut from stretch downward; preserve MVP above all else |
+| Anchor recovery | Fewer than 7/10 anchors within 14-day tolerance | End of Phase 4 | Debug; if persistent, shift to novelty-velocity framework |
+| Dynamics fit quality | Median R² < 0.30 OR R₀ CIs > 2 units across validation narratives | End of Phase 4 | Drop SIR; fall back to logistic or non-parametric curve features |
+| Predictive null | No associations survive FDR correction | Phase 4 | Not a killer — report null honestly |
+| Live update reliability | > 25% of weekly updates fail | Phase 6 month 1 | Degrade to monthly; make "last updated" prominent |
+| Time budget | MVP not complete by month 3 | Mid-project | Cut stretch downward; preserve MVP above all else |
 
-**Fallback scope:** If multiple kill criteria trigger stress during Phase 3–4, narrow to inflation discourse only, 2018–present. Corpus halves, semantic homogeneity increases, look-ahead window shortens, CPI/PCE validation becomes cleaner. Methodology, dashboard, and tooling all transfer unchanged.
+**Fallback scope:** If multiple kill criteria trigger stress, narrow to inflation discourse only, 2018–present. Corpus halves, semantic homogeneity increases, look-ahead window shortens, CPI/PCE/EPU validation becomes cleaner. Methodology, dashboard, and tooling all transfer unchanged.
 
 ---
 
 ## 12. Infrastructure
 
 **Compute:** UChicago RCC Midway3
-- Account: `pi-dachxiu` (PI's account; use conservatively)
-- Scratch directory: `/scratch/midway3/ehgarver/` — all data here
-- Never write to PI's project folder
-- GPU partition for embedding; caslake (CPU) for clustering
+- Account: `pi-dachxiu` — use conservatively; do not exhaust allocation
+- Scratch directory: `/scratch/midway3/ehgarver/` — all data here; never write to PI's project folder
+- GPU partition for embedding; `caslake` (CPU) for clustering
 - SLURM scripts in `scripts/rcc/`
 
-**Environment variables required (`.env`):**
+**Environment variables (`.env`):**
 ```
 FRED_API_KEY=...
 WRDS_USERNAME=...
@@ -501,26 +515,27 @@ WRDS_PASSWORD=...
 MEDIACLOUD_API_KEY=...
 ```
 
-**Removed env vars (no longer needed):**
-- `PROQUEST_DATASET_ID` — remove
-- `NEWS_API_KEY` — remove
-- `WRDS_MFS_*` (JLN indices) — remove; JLN replaced by EPU
+**Remove — no longer needed:**
+```
+PROQUEST_DATASET_ID
+NEWS_API_KEY
+WRDS_MFS_*        (JLN indices replaced by EPU)
+```
 
 **Data paths:**
-- Raw documents: `/scratch/midway3/ehgarver/data/raw/`
-- Processed corpus: `/scratch/midway3/ehgarver/data/processed/`
-- Embeddings: `/scratch/midway3/ehgarver/data/embeddings/`
-- Clusters: `/scratch/midway3/ehgarver/data/clusters/`
-- RavenPack dynamics (Signal A): `/scratch/midway3/ehgarver/data/dynamics/ravenpack/`
-- Institutional dynamics (Signal B): `/scratch/midway3/ehgarver/data/dynamics/institutional/`
-- Media Cloud detection signals: `data/detection/mediacloud/`
-- Validation data: `data/raw/validation/` (local; FRED and EPU pulls are small)
-- Anchors: `data/anchors/anchor_narratives.jsonl`
+```
+/scratch/midway3/ehgarver/data/raw/                    # raw ingested documents
+/scratch/midway3/ehgarver/data/processed/              # cleaned, filtered documents
+/scratch/midway3/ehgarver/data/embeddings/             # embedding vectors + chunk-doc mapping
+/scratch/midway3/ehgarver/data/clusters/               # BERTopic output, all granularity levels
+/scratch/midway3/ehgarver/data/dynamics/ravenpack/     # Signal A — RavenPack time series
+/scratch/midway3/ehgarver/data/dynamics/institutional/ # Signal B — corpus document counts
+data/detection/mediacloud/                             # Media Cloud detection signals (local)
+data/raw/validation/                                   # FRED, EPU, NBER recession dates (local)
+data/anchors/anchor_narratives.jsonl                   # anchor narrative ground truth
+```
 
-**Archived sources (do not delete, do not reactivate):**
-- `src/mnd/ingestion/gdelt.py` → `scripts/archive/`
-- Common Crawl ingestor → `scripts/archive/`
-- ProQuest export script → `scripts/archive/`
+**Commit and push discipline:** Every session ends with a commit and push to origin. Confirm remote is up to date before ending any Claude Code session.
 
 ---
 
@@ -529,8 +544,8 @@ MEDIACLOUD_API_KEY=...
 - All quantitative claims report 95% bootstrap confidence intervals
 - All multiple-comparison contexts report both raw p-values and Benjamini-Hochberg corrected significance
 - Any predictive analysis additionally reports Deflated Sharpe Ratio if portfolio-style framings are used
-- Null results reported honestly — a null exploratory finding is still a finding
+- Null results reported honestly — a null exploratory finding is still a valid finding
 
 ---
 
-*Document version: 2026-05-11 rev2. Supersedes all prior CLAUDE.md corpus architecture sections, source specifications, and ingestion instructions. Changes from rev1: RavenPack restructured as Layer 1B journalism supplement (primary dynamics series); Media Cloud moved to standalone Layer 2 detection; Layer 3 validation data updated — JLN replaced by EPU (Baker-Bloom-Davis); Stage 5 dynamics fitting updated to reflect dual-signal approach (RavenPack Signal A primary, institutional corpus Signal B secondary); data paths updated accordingly. The project plan PDF remains valid for theoretical framework and methodology; this document takes precedence on source architecture and current status.*
+*Document version: 2026-05-11 rev3. Full rewrite. Key changes from prior versions: arXiv removed; Jackson Hole removed as separate source (covered by Fed speeches); RavenPack restructured as Layer 1B journalism supplement providing Signal A for dynamics fitting; Media Cloud is standalone Layer 2 detection; JLN replaced by EPU in Layer 3; Stage 5 rewritten for dual-signal dynamics approach; all-mpnet 384-token limitation documented with Qwen evaluation note; known issues section added covering all immediate fixes. The original project plan PDF remains valid for theoretical background; this document governs all implementation decisions.*

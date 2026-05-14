@@ -153,8 +153,8 @@ def chunk_corpus(
 
 def merge_chunk_embeddings(
     chunk_df: pd.DataFrame,
-    embeddings: "np.ndarray",  # noqa: F821
-) -> tuple[pd.DataFrame, "np.ndarray"]:  # noqa: F821
+    embeddings,  # np.ndarray — left untyped to avoid an import-only annotation
+):
     """For dynamics counting: return document-level (not chunk-level) records.
 
     When a document is chunked, keep only the first chunk's embedding as
@@ -168,8 +168,6 @@ def merge_chunk_embeddings(
     doc_embeddings : np.ndarray
         Embeddings aligned to doc_df.
     """
-    import numpy as np
-
     mask = (chunk_df["chunk_index"] == 0).values
     doc_df = chunk_df[mask].copy()
     doc_embeddings = embeddings[mask]

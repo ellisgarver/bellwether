@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Smoke tests for checkpoint/resume logic.
 
-Tests institutional and AP News ingestors with mocked sub-ingestors / network
-calls — no real HTTP requests. Verifies:
-  1. Checkpoint is written after a sub-ingestor / URL batch completes
-  2. On resume, completed work is skipped
+Tests the InstitutionalIngestor checkpoint/resume mechanism with mocked
+sub-ingestors — no real HTTP requests. Verifies:
+  1. Checkpoint is written after a sub-ingestor completes
+  2. On resume, completed sub-ingestors are skipped
   3. No duplicate articles appear in the combined JSONL output
+
+The AP News / MarketWatch journalism ingestors were archived in ADR-010 and
+are no longer part of the semantic corpus. Their checkpoint logic lives in
+scripts/archive/ and is not exercised by the production pipeline.
 
 Usage:
     python scripts/smoke_test_checkpoint.py
@@ -17,7 +21,6 @@ import sys
 import tempfile
 from datetime import date
 from pathlib import Path
-from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -26,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 # Helpers
 # ---------------------------------------------------------------------------
 
-FAKE_BODY = "word " * 150  # 150 words — above _MIN_BODY_WORDS (100)
+FAKE_BODY = "word " * 150  # 150 words — above any plausible min_body_words
 START = date(2024, 1, 1)
 END = date(2024, 12, 31)
 
@@ -74,15 +77,6 @@ def test_institutional_checkpoint() -> None:
         out_path = tmpdir / "institutional.jsonl"
 
         # --- Step 1: consume federalreserve (10) + first imf article, then kill ---
-        #
-        # The generator saves the checkpoint for a sub-ingestor AFTER its inner
-        # loop exhausts (StopIteration). That happens on the 11th next() call:
-        #   call 11 → generator resumes after yield #10, count+=1, inner loop
-        #             calls next(fed_gen) → StopIteration → loop done →
-        #             checkpoint["federalreserve"] = completed → saved →
-        #             outer loop advances to imf → imf yields article 0 →
-        #             yield article → caller receives it
-        # So we consume 10 fed + 1 imf (= 11 total), then break + close.
         inst = InstitutionalIngestor(checkpoint_path=checkpoint_path)
         inst._sub_ingestors = [
             _MockIngestor("federalreserve", 10),
@@ -95,7 +89,6 @@ def test_institutional_checkpoint() -> None:
             for art in gen:
                 fh.write(art.to_jsonl() + "\n")
                 run1_articles.append(art)
-                # 10 fed + 1 imf = checkpoint saves fed as completed, then we kill
                 if len(run1_articles) == 11:
                     break
         gen.close()  # simulates SLURM kill / KeyboardInterrupt
@@ -105,7 +98,9 @@ def test_institutional_checkpoint() -> None:
         cp = json.loads(checkpoint_path.read_text())
         if cp.get("federalreserve", {}).get("status") != "completed":
             _fail(f"federalreserve not marked completed in checkpoint: {cp}")
-        _pass(f"Checkpoint written: federalreserve=completed ({cp['federalreserve']['count']} articles)")
+        _pass(
+            f"Checkpoint written: federalreserve=completed ({cp['federalreserve']['count']} articles)"
+        )
 
         if "imf" in cp and cp["imf"].get("status") == "completed":
             _fail(f"imf should NOT be completed yet: {cp}")
@@ -150,119 +145,9 @@ def test_institutional_checkpoint() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — AP News checkpoint / resume
-# ---------------------------------------------------------------------------
-
-def test_apnews_checkpoint() -> None:
-    print("=== Test 2: AP News checkpoint/resume ===")
-
-    from mnd.ingestion.apnews import APNewsIngestor, _load_url_checkpoint
-
-    TOTAL_URLS = 50
-    KILL_AFTER = 25
-
-    # Fake CDX results — one pattern returns all 50 pairs, others empty
-    fake_pairs = [
-        (f"https://apnews.com/article/story-{i:04d}", f"20240115{i:06d}")
-        for i in range(TOTAL_URLS)
-    ]
-    all_fake_urls = {url for url, _ in fake_pairs}
-
-    def _cdx_side_effect(pattern, start, end, domain="apnews"):
-        return fake_pairs if "article" in pattern else []
-
-    def _worker_side_effect(url: str, ts: str):
-        return url, ts, FAKE_BODY
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmpdir = Path(tmpdir)
-        checkpoint_path = tmpdir / ".apnews_checkpoint.txt"
-        out_path = tmpdir / "apnews.jsonl"
-
-        # --- Step 1: fetch max_urls=50, kill after 25 articles ---
-        with patch("mnd.ingestion.apnews._cdx_query", side_effect=_cdx_side_effect), \
-             patch("mnd.ingestion.apnews._worker_fetch", side_effect=_worker_side_effect):
-
-            ingestor = APNewsIngestor(checkpoint_path=checkpoint_path, max_urls=TOTAL_URLS)
-            gen = ingestor.fetch(START, END)
-            run1_articles = []
-            with out_path.open("w") as fh:
-                for art in gen:
-                    fh.write(art.to_jsonl() + "\n")
-                    run1_articles.append(art)
-                    if len(run1_articles) >= KILL_AFTER:
-                        break
-            gen.close()  # triggers finally → saves checkpoint
-
-        # --- Step 2: verify checkpoint ---
-        assert checkpoint_path.exists(), "AP News checkpoint file not written after kill"
-        fetched_after_kill = _load_url_checkpoint(checkpoint_path)
-        if len(fetched_after_kill) < KILL_AFTER:
-            _fail(
-                f"Checkpoint has {len(fetched_after_kill)} URLs; expected ≥{KILL_AFTER}. "
-                f"The try/finally in fetch() must not have fired."
-            )
-        _pass(f"Checkpoint written after kill: {len(fetched_after_kill)} URLs saved")
-
-        # All checkpointed URLs must be in the fake set (no phantom URLs)
-        unknown = fetched_after_kill - all_fake_urls
-        if unknown:
-            _fail(f"Checkpoint contains unknown URLs: {unknown}")
-        _pass("All checkpointed URLs are from the fake CDX result set")
-
-        # --- Step 3: resume — only fetch remaining URLs ---
-        run2_worker_calls: list[str] = []
-
-        def _worker_tracking(url: str, ts: str):
-            run2_worker_calls.append(url)
-            return url, ts, FAKE_BODY
-
-        with patch("mnd.ingestion.apnews._cdx_query", side_effect=_cdx_side_effect), \
-             patch("mnd.ingestion.apnews._worker_fetch", side_effect=_worker_tracking):
-
-            ingestor2 = APNewsIngestor(checkpoint_path=checkpoint_path, max_urls=TOTAL_URLS)
-            run2_articles = []
-            with out_path.open("a") as fh:
-                for art in ingestor2.fetch(START, END):
-                    fh.write(art.to_jsonl() + "\n")
-                    run2_articles.append(art)
-
-        # Worker should NOT have been called for any already-checkpointed URL
-        already_fetched_called = [u for u in run2_worker_calls if u in fetched_after_kill]
-        if already_fetched_called:
-            _fail(
-                f"Run2 re-fetched {len(already_fetched_called)} URLs that were in the checkpoint: "
-                f"{already_fetched_called[:5]}"
-            )
-        _pass(f"Run2 worker called for {len(run2_worker_calls)} URLs, "
-              f"none from the prior checkpoint")
-
-        expected_remaining = TOTAL_URLS - len(fetched_after_kill)
-        _pass(f"Run2 fetched {len(run2_articles)} articles (expected ~{expected_remaining} remaining)")
-
-        # --- Step 4: no duplicate article IDs in combined JSONL ---
-        lines = [l for l in out_path.read_text().splitlines() if l.strip()]
-        all_arts = [json.loads(l) for l in lines]
-        ids = [a["article_id"] for a in all_arts]
-        dupes = [x for x in ids if ids.count(x) > 1]
-        if dupes:
-            _fail(f"Duplicate article IDs in combined JSONL: {set(dupes)}")
-        total_expected = len(fetched_after_kill) + len(run2_articles)
-        if len(all_arts) != total_expected:
-            _fail(
-                f"JSONL has {len(all_arts)} lines but expected {total_expected} "
-                f"(run1={len(run1_articles)}, run2={len(run2_articles)})"
-            )
-        _pass(f"No duplicates — combined JSONL has {len(all_arts)} unique articles")
-
-    print("  → Test 2 PASSED\n")
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     test_institutional_checkpoint()
-    test_apnews_checkpoint()
     print("All checkpoint smoke tests passed.")

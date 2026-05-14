@@ -10,12 +10,20 @@ spike from registering as narrative acceleration in the combined series. Smoothi
 the combined raw series directly would not localize the correction — it would also
 damp legitimate co-movement across tiers.
 
-Tier definitions (source_id → tier):
+Tier definitions (source_id → tier; per ADR-010 / ADR-012):
   Tier A — institutional:  federalreserve, fed_ny, fed_sf, fed_chicago,
                            fed_atlanta, fed_regional, imf, bis, cea, cbo,
-                           treasury_ofr
-  Tier B — academic:       nber, ssrn_finance, voxeu, brookings, piie
-  Tier C — journalism:     apnews, marketwatch
+                           treasury_ofr, congressional
+  Tier B — academic / policy bridge:
+                           voxeu, brookings, piie, cfr
+                           (nber, ssrn_finance present for Phase 6 live RSS only)
+
+Note: there is no journalism tier in the semantic corpus (ADR-010). The
+journalism propagation signal is captured by the RavenPack dynamics layer
+(Signal A) and not by stratified smoothing on the institutional/academic corpus.
+The raw_journalism column is retained as a structural placeholder so any
+unmapped source_id falls into a clearly-named bucket rather than silently
+contaminating the institutional/academic series.
 
 Smoothing:
   Centered rolling mean with window derived from config.dynamics.smoothing_window_days
@@ -29,7 +37,7 @@ Output columns (returned DataFrame):
   cluster_id              int
   raw_institutional       int   raw weekly count for Tier A sources
   raw_academic            int   raw weekly count for Tier B sources
-  raw_journalism          int   raw weekly count for Tier C sources
+  raw_journalism          int   raw weekly count for unmapped sources (sentinel)
   raw_combined            int   sum of all raw tier counts
   smoothed_institutional  float centered MA of raw_institutional
   smoothed_academic       float centered MA of raw_academic
@@ -41,8 +49,6 @@ as a background trace and smoothed_combined as the primary curve.
 """
 from __future__ import annotations
 
-from datetime import date
-
 import pandas as pd
 
 from mnd.utils.config import load_config
@@ -51,8 +57,9 @@ from mnd.utils.logging import get_logger
 log = get_logger(__name__)
 
 # Source ID → smoothing tier mapping.
-# Sources not listed here are assigned to "other" and rolled into raw_combined
-# without smoothing (they're treated as journalism for smoothing purposes).
+# Sources not listed here fall into the "journalism" bucket as a sentinel —
+# the journalism tier should be empty in the active corpus (ADR-010); any
+# rows that land there indicate an unmapped source_id worth flagging in QA.
 TIER_SOURCES: dict[str, set[str]] = {
     "institutional": {
         "federalreserve",
@@ -66,18 +73,17 @@ TIER_SOURCES: dict[str, set[str]] = {
         "cea",
         "cbo",
         "treasury_ofr",
+        "congressional",
     },
     "academic": {
-        "nber",
-        "ssrn_finance",
+        "nber",            # Phase 6 live RSS only; harmless to map for future
+        "ssrn_finance",    # Phase 6 live RSS only
         "voxeu",
         "brookings",
         "piie",
+        "cfr",
     },
-    "journalism": {
-        "apnews",
-        "marketwatch",
-    },
+    "journalism": set(),   # empty under ADR-010; sentinel bucket for unmapped sources
 }
 
 # Inverted: source_id → tier label
