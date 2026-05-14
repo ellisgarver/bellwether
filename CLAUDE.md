@@ -17,6 +17,7 @@ architectural decisions are in `docs/handoff_to_claude_code.md` and
 - Do not add closed-source or paid-API dependencies to the core pipeline.
 - ProQuest, Factiva, Bloomberg, AP News, Reuters, MarketWatch are NOT semantic corpus sources — do not reinstate without a new ADR. (AP News and Reuters were removed in ADR-010, 2026-05-11.)
 - arXiv and Jackson Hole (separate ingestor) are NOT active sources — removed in ADR-012, 2026-05-13. arXiv had 2017-only coverage; Jackson Hole speeches are captured by FederalReserveIngestor.
+- **IMF is TEMPORARILY DISABLED in historical runs as of 2026-05-14** — all hardcoded URLs and the publications API endpoint redirect to `/en/errors/404` (slug IDs were rotated and the site moved fully to Next.js SSR with no static index). The IMFIngestor class is retained but commented out of `InstitutionalIngestor._sub_ingestors`. Reinstate once a working retrieval path (Next.js `_next/data` SSG endpoint, `__NEXT_DATA__` payload scrape, or accepting Phase-6 RSS only) is implemented. Documented as a corpus limitation.
 - Any deviation from the above requires a new ADR in `docs/architecture_decisions.md` first.
 
 ## Communication style
@@ -69,7 +70,7 @@ modify pilot code. Resume instructions below are retained for reference only.
 
 | Tier | Sources | Retrieval |
 |---|---|---|
-| 1 — Institutional policy | Federal Reserve (all: FOMC, speeches incl. Jackson Hole, Beige Book, FEDS Notes, MPR, FSR), Regional Feds (NY/SF/Chicago/Atlanta), IMF (Blog/WEO/GFSR/WPs), BIS (QR/WPs), CBO, Treasury/OFR/FSOC, Congressional testimony (Treasury Sec) | Direct fetch / institutional RSS |
+| 1 — Institutional policy | Federal Reserve (all: FOMC, speeches incl. Jackson Hole, Beige Book, FEDS Notes, MPR, FSR), Regional Feds (NY/SF/Chicago/Atlanta), BIS (QR/WPs), CBO, Treasury/OFR/FSOC, Congressional testimony (Treasury Sec) | Direct fetch / institutional RSS |
 | 2 — Academic analytical + policy | VoxEU/CEPR (full posts), Brookings, PIIE, CFR | Direct fetch / RSS |
 
 **Removed from semantic corpus (ADR-010, 2026-05-11):** AP News, Reuters, MarketWatch. Their journalism propagation signal is captured by RavenPack (Layer 1B, dynamics only). Raw ingested JSONL retained in `data/raw/articles/`; excluded from embedding by `run_pipeline.py filter-pre-embed`.

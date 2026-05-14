@@ -46,7 +46,16 @@ embedding:
     model: "Qwen/Qwen3-Embedding-0.6B"
     revision: "main"               # Pin to specific commit hash before Phase 2
     dimensions: 1024
-    max_seq_len: 32768             # Full context for RCC (CUDA). MPS: MND_MAX_SEQ_LEN=512
+    # max_seq_len was 32768 (the model's native max). Reduced to 2048 because:
+    #   (a) processing/chunker.py already splits long docs into 600-BPE-token chunks
+    #       before embedding, so we never feed sequences > ~600 tokens in practice;
+    #   (b) the SDPA causal mask scales as O(seq_len^2 * batch_size). At 32768 x 32
+    #       this allocates ~16 GB just for the mask — OOMs the V100-16GB that RCC
+    #       hands out under --constraint=v100 (job 49622334 died this way 2026-05-13);
+    #   (c) at 2048 the mask is ~540 MB and the full forward pass fits comfortably.
+    # 2048 still gives 3.4x headroom over the 600-token chunk size, so any future
+    # tokenizer mismatch or BPE expansion is absorbed without re-truncation.
+    max_seq_len: 2048
     instruction_aware: true
     instruction_prefix: "Instruct: Represent this financial policy document for narrative clustering\nQuery: "
     upgrade_path: "Qwen/Qwen3-Embedding-4B"  # If RCC capacity allows; identical interface
