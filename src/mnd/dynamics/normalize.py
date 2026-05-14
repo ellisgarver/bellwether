@@ -26,10 +26,12 @@ Fitting threshold (ADR-008):
   articles. Below threshold: descriptive stats only.
 
 Two data sources feed this module:
-  1. RavenPack volume (dynamics layer): provides the total weekly corpus
-     denominator. This covers ~800+ sources in the Dow Jones edition.
-  2. Semantic corpus (embedding/clustering layer): provides raw_count per
-     cluster per week. This is a narrower source set (institutional + AP News).
+  1. RavenPack volume (dynamics layer, Signal A): provides the total weekly
+     corpus denominator. Covers ~800+ sources in the Dow Jones edition.
+  2. Semantic corpus (embedding/clustering layer, Signal B): provides
+     raw_count per cluster per week. Per ADR-010 / ADR-012 this is the
+     institutional+academic+policy-bridge corpus only — no journalism tier
+     (AP News, Reuters, MarketWatch are not in the semantic corpus).
 
 The normalized_share therefore reflects semantic-corpus cluster penetration
 as a fraction of the broader media ecosystem — which is the theoretically
@@ -40,7 +42,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from mnd.utils.config import load_config
 from mnd.utils.logging import get_logger
 
 log = get_logger(__name__)

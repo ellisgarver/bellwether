@@ -4,10 +4,8 @@ Run this BEFORE any pipeline work to confirm:
   1. Python and core dependencies importable
   2. Config files parse and have the expected schema version
   3. Anchor and fizzled JSONL files are well-formed
-  4. FRED API key is set and reachable (validation data layer)
-  5. GDELT API is reachable (article discovery layer)
-  6. Embedding model can be loaded (downloads ~600MB on first run)
-  7. The seven pipeline directories exist on disk
+  4. FRED API key is set (validation data layer)
+  5. Embedding model can be loaded (downloads model weights on first run)
 
 This script does NOT require UChicago library access — that gate is checked
 separately. The intent is to surface infrastructure problems before they
@@ -67,8 +65,11 @@ def check_configs() -> tuple[bool, str]:
     issues = []
     if cfg.get("schema_version") != "1.0.0":
         issues.append(f"config schema_version={cfg.get('schema_version')}")
-    if not wl.get("tier_1_core_financial_press"):
-        issues.append("whitelist tier_1 empty")
+    # Whitelist keys per ADR-010: tier_1_institutional_policy + tier_2_*
+    if not wl.get("tier_1_institutional_policy"):
+        issues.append("whitelist tier_1_institutional_policy empty")
+    if not wl.get("tier_2_academic_analytical"):
+        issues.append("whitelist tier_2_academic_analytical empty")
     n_kw = sum(len(v) for v in kw.get("categories", {}).values())
     if n_kw < 50:
         issues.append(f"only {n_kw} keywords loaded")
@@ -108,18 +109,15 @@ def check_fred() -> tuple[bool, str]:
     return True, "FRED_API_KEY present"
 
 
-@_check("GDELT reachable")
-def check_gdelt() -> tuple[bool, str]:
+@_check("Institutional ingestor importable")
+def check_institutional_ingestor() -> tuple[bool, str]:
     try:
-        from gdeltdoc import GdeltDoc
-    except ImportError:
-        return False, "gdeltdoc not installed"
-    try:
-        # Doc API has no health endpoint; instantiation alone validates import path.
-        GdeltDoc()
-        return True, "gdeltdoc importable"
-    except Exception as exc:  # pragma: no cover
-        return False, f"gdeltdoc init failed: {exc}"
+        from mnd.ingestion import InstitutionalIngestor
+        ing = InstitutionalIngestor()
+        n_sub = len(ing._sub_ingestors)
+        return n_sub >= 9, f"InstitutionalIngestor with {n_sub} sub-ingestors"
+    except Exception as exc:
+        return False, f"failed to instantiate InstitutionalIngestor: {exc}"
 
 
 @_check("Embedding model loadable")
@@ -143,7 +141,7 @@ def main() -> int:
     args = parser.parse_args()
 
     checks = [check_python, check_imports, check_configs, check_anchors,
-              check_fred, check_gdelt]
+              check_fred, check_institutional_ingestor]
     if not args.skip_embedding:
         checks.append(check_embedding)
 

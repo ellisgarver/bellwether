@@ -43,7 +43,7 @@ Typical usage:
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import TYPE_CHECKING
 
 import pandas as pd

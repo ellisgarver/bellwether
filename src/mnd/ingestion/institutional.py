@@ -48,7 +48,7 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterator
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 from xml.etree import ElementTree as ET
 
 import feedparser
@@ -1547,7 +1547,7 @@ class BrookingsIngestor(Ingestor):
                 post,
                 source_id=self.source_id,
                 section="brookings_economic_studies",
-                tier=3,
+                tier=2,
                 document_type="brookings_post",
                 start=start,
                 end=end,
@@ -1676,7 +1676,7 @@ class PIIEIngestor(Ingestor):
                     body=body,
                     author=author,
                     section="piie_publication",
-                    tier=3,
+                    tier=2,
                     document_type=f"piie_{doc_type}",
                     extra_meta={"listing_only": len(body.split()) < 50},
                 )

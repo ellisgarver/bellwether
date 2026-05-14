@@ -1,9 +1,12 @@
 """Article ingestion sources.
 
-Semantic corpus sources (Tiers 1–2, per ADR-010 / MND_PROJECT_SPEC.md):
-  InstitutionalIngestor — composite: Fed, IMF, BIS, CEA, CBO, Treasury/OFR,
-                          Regional Feds, Jackson Hole, Congressional testimony,
-                          NBER (Phase 6 only), arXiv, VoxEU, Brookings, PIIE, CFR
+Semantic corpus sources (Tiers 1–2, per ADR-010 / ADR-012):
+  InstitutionalIngestor — composite: Federal Reserve (FOMC, speeches incl.
+                          Jackson Hole, Beige Book, FEDS Notes, MPR, FSR),
+                          Regional Feds, IMF, BIS, CBO, Treasury/OFR,
+                          Congressional testimony, VoxEU, Brookings, PIIE, CFR.
+                          NBER and SSRN remain in the codebase for Phase 6
+                          live RSS but are excluded from historical runs.
 
 Dynamics layer (not ingested as text):
   RavenPack via WRDS — see src/mnd/ingestion/ravenpack.py
@@ -11,10 +14,11 @@ Dynamics layer (not ingested as text):
 Detection layer (story counts only, no text):
   Media Cloud — see src/mnd/detection/mediacloud.py
 
-Archived journalism ingestors (removed in ADR-010):
-  scripts/archive/apnews_ingestor.py    (AP News — Wayback CDX)
-  scripts/archive/reuters_ingestor.py   (Reuters — Wayback CDX)
-  MarketWatchIngestor was in apnews_ingestor.py
+Removed sources (do not reinstate without a new ADR):
+  ADR-010: AP News, Reuters, MarketWatch (journalism tier)
+  ADR-012: arXiv (2017-only coverage), separate Jackson Hole ingestor
+           (covered by FederalReserveIngestor)
+  Archived code lives under scripts/archive/.
 """
 
 from mnd.ingestion.base import Article, Ingestor

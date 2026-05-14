@@ -15,7 +15,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-import numpy as np
 import pandas as pd
 
 Stage = Literal["pre_emergence", "early_spread", "peak", "decay", "dormant", "unknown"]

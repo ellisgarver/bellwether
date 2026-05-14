@@ -63,14 +63,14 @@ modify pilot code. Resume instructions below are retained for reference only.
 - WRDS: `WRDS_USERNAME` and `WRDS_PASSWORD` in `.env` for RavenPack dynamics layer queries
 - Media Cloud: `MEDIACLOUD_API_KEY` in `.env` for Layer 2 detection
 
-## Phase 2 corpus architecture (updated 2026-05-07)
+## Phase 2 corpus architecture (updated 2026-05-13, ADR-012)
 
 ### Semantic corpus (text for embedding and clustering)
 
 | Tier | Sources | Retrieval |
 |---|---|---|
-| 1 — Institutional policy | Federal Reserve (all: FOMC, speeches, Beige Book, FEDS Notes, MPR, FSR), Regional Feds (NY/SF/Chicago/Atlanta/Dallas/StLouis/Cleveland), IMF (Blog/WEO/GFSR/WPs), BIS (QR/WPs), CEA, CBO, Treasury/OFR/FSOC, Jackson Hole symposium, Congressional testimony (Treasury Sec) | Direct fetch / institutional RSS |
-| 2 — Academic analytical + policy | arXiv econ/q-fin (abstracts), VoxEU/CEPR (full posts), Brookings, PIIE, CFR | Direct fetch / RSS |
+| 1 — Institutional policy | Federal Reserve (all: FOMC, speeches incl. Jackson Hole, Beige Book, FEDS Notes, MPR, FSR), Regional Feds (NY/SF/Chicago/Atlanta), IMF (Blog/WEO/GFSR/WPs), BIS (QR/WPs), CBO, Treasury/OFR/FSOC, Congressional testimony (Treasury Sec) | Direct fetch / institutional RSS |
+| 2 — Academic analytical + policy | VoxEU/CEPR (full posts), Brookings, PIIE, CFR | Direct fetch / RSS |
 
 **Removed from semantic corpus (ADR-010, 2026-05-11):** AP News, Reuters, MarketWatch. Their journalism propagation signal is captured by RavenPack (Layer 1B, dynamics only). Raw ingested JSONL retained in `data/raw/articles/`; excluded from embedding by `run_pipeline.py filter-pre-embed`.
 
@@ -113,7 +113,7 @@ Removed from prior version: FTX collapse, GameStop short squeeze (out of macro s
 - **Timestamps:** Publication/release date throughout. FOMC minutes = release date.
 - **Document chunking:** Docs >2,000 words split into 600-token chunks, 100-token overlap. Count by document (not chunk) for dynamics.
 - **Volume normalization:** Weekly counts per cluster / total corpus articles that week, before SIR/logistic fitting.
-- **Source-stratified smoothing:** Before fitting, smooth each source tier (institutional / academic / journalism) separately with a centered rolling mean, then sum. Prevents single large institutional publications from masquerading as narrative acceleration. Store both raw and smoothed series in dynamics output. `src/mnd/dynamics/smooth.py`.
+- **Source-stratified smoothing:** Before fitting, smooth each source tier (institutional / academic) separately with a centered rolling mean, then sum. The journalism tier is absent from the semantic corpus (ADR-010); `smooth.py` retains a third "journalism" bucket as a sentinel for unmapped sources only. Prevents single large institutional publications from masquerading as narrative acceleration. Store both raw and smoothed series in dynamics output. `src/mnd/dynamics/smooth.py`.
 - **Economic calendar annotation:** Flag weeks within ±3 days of FOMC decisions, CPI, PCE, GDP advance, NFP, and Fed MPR releases. `calendar_event` (bool) and `calendar_event_label` (str) columns added to weekly series. Do not exclude flagged weeks from fitting — report count of flagged weeks in growth phase as a quality indicator. `src/mnd/dynamics/calendar.py`.
 - **Two-stage dynamics fitting:** Parametric models only when cluster exceeds 3 articles/week avg over 4 weeks AND 50 cumulative articles. Below threshold: descriptive stats only, labeled "pre-fitting".
 - **Source-type contamination check:** Flag clusters >90% one source type for manual review (post-hoc diagnostic only).

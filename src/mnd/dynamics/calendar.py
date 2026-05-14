@@ -51,7 +51,6 @@ from __future__ import annotations
 import os
 from calendar import monthrange
 from datetime import date, timedelta
-from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import pandas as pd
