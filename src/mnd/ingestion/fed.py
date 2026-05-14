@@ -28,7 +28,12 @@ USER_AGENT = "MacroNarrativeDynamics/0.1 (academic research; contact via project
 FOMC_HISTORICAL_BASE = "https://www.federalreserve.gov/monetarypolicy"
 FOMC_CALENDARS_URL = f"{FOMC_HISTORICAL_BASE}/fomccalendars.htm"
 SPEECHES_BASE = "https://www.federalreserve.gov/newsevents/speech"
+# Primary URL pattern works for 2011-present.
+# Pre-2011 uses a different filename (no hyphen, singular "speech"):
+#   2010 → /newsevents/speech/2010speech.htm
+# We try the primary pattern first, then fall back to the legacy pattern.
 SPEECHES_INDEX = f"{SPEECHES_BASE}/{{year}}-speeches.htm"
+SPEECHES_INDEX_LEGACY = f"{SPEECHES_BASE}/{{year}}speech.htm"
 SPEECHES_RSS = "https://www.federalreserve.gov/feeds/speeches.xml"
 
 
@@ -218,23 +223,38 @@ class FederalReserveIngestor(Ingestor):
         """
         for year in range(start.year, end.year + 1):
             index_url = SPEECHES_INDEX.format(year=year)
+            resp = None
             try:
                 resp = _get(index_url)
-            except Exception as exc:
-                current_year = date.today().year
-                if year >= current_year - 1:
-                    # RSS feed only holds recent content — useful for current/last year
-                    log.warning("Speech index %s failed: %s — trying RSS fallback", index_url, exc)
-                    yield from self._fetch_speeches_rss_year(year, start, end)
-                else:
-                    # RSS has no historical content; RSS fallback would silently return 0
-                    # articles, creating an invisible coverage gap. Log error and skip.
-                    log.error(
-                        "Speech index %s failed after %d retries: %s — "
-                        "COVERAGE GAP: speeches for %d will be missing from corpus",
-                        index_url, 8, exc, year,
-                    )
-                continue
+            except Exception as exc_primary:
+                # Pre-2011 the Fed used /newsevents/speech/YYYYspeech.htm instead
+                # of the YYYY-speeches.htm pattern. Try the legacy URL once before
+                # giving up.
+                legacy_url = SPEECHES_INDEX_LEGACY.format(year=year)
+                try:
+                    resp = _get(legacy_url)
+                    log.info("Speech index %d: primary URL failed; legacy URL succeeded (%s)",
+                             year, legacy_url)
+                    index_url = legacy_url
+                except Exception as exc_legacy:
+                    current_year = date.today().year
+                    if year >= current_year - 1:
+                        # RSS feed only holds recent content — useful for current/last year
+                        log.warning(
+                            "Speech index %s failed: %s — trying RSS fallback",
+                            SPEECHES_INDEX.format(year=year), exc_primary,
+                        )
+                        yield from self._fetch_speeches_rss_year(year, start, end)
+                    else:
+                        # RSS has no historical content; RSS fallback would silently return 0
+                        # articles, creating an invisible coverage gap. Log error and skip.
+                        log.error(
+                            "Speech index for %d failed on both URL patterns "
+                            "(primary: %s; legacy: %s) — COVERAGE GAP: speeches for %d "
+                            "will be missing from corpus",
+                            year, exc_primary, exc_legacy, year,
+                        )
+                    continue
             soup = BeautifulSoup(resp.text, "lxml")
             eventlist = soup.select_one(".eventlist")
             if not eventlist:

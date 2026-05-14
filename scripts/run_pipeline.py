@@ -722,9 +722,10 @@ _INST_MIN_COUNTS: dict[str, int] = {
     "federalreserve": 5,
     "fed_regional":   3,
     "congressional":  0,   # sparse; best-effort
-    "imf":            3,
+    # imf:           disabled in InstitutionalIngestor as of 2026-05-14; see
+    #                IMFIngestor docstring for /en/errors/404 issue.
     "bis":            3,
-    "cbo":            1,
+    "cbo":            0,   # known external IP block (whitelist documents this)
     "treasury_ofr":   0,   # sparse; best-effort
     "voxeu":          5,
     "brookings":      2,
@@ -775,18 +776,18 @@ def _sample_check_institutional(
 ) -> None:
     from mnd.ingestion.institutional import (
         BISIngestor, BrookingsIngestor, CBOIngestor, CFRIngestor,
-        CongressionalIngestor, FedRegionalIngestor, IMFIngestor,
+        CongressionalIngestor, FedRegionalIngestor,
         PIIEIngestor, TreasuryOFRIngestor, VoxEUIngestor,
     )
     from mnd.ingestion.fed import FederalReserveIngestor
 
-    # Mirror InstitutionalIngestor._sub_ingestors exactly (no NBER/SSRN — those
-    # are Phase 6 live RSS only and are not part of the historical corpus).
+    # Mirror InstitutionalIngestor._sub_ingestors exactly. IMF is disabled for
+    # historical runs as of 2026-05-14 (all URL paths land on /en/errors/404).
+    # NBER and SSRN are Phase-6 live RSS only.
     sub_ingestors = [
         FederalReserveIngestor(),
         FedRegionalIngestor(),
         CongressionalIngestor(),
-        IMFIngestor(),
         BISIngestor(),
         TreasuryOFRIngestor(),
         CBOIngestor(),

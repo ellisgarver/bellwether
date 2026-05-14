@@ -351,16 +351,36 @@ def _wp_post_to_article(
 class IMFIngestor(Ingestor):
     """IMF WEO and GFSR flagship overview pages (2010-present).
 
-    The IMF website is fully JS-rendered and blocks custom user-agent strings.
-    RSS feeds are defunct post-2024 redesign. WP/Blog coverage requires
-    university-IP access (RCC); WEO/GFSR are fetched via a hardcoded URL
-    table (verified 2026-05-07) since index pages yield no parseable links.
+    STATUS (2026-05-14): TEMPORARILY DISABLED FOR HISTORICAL CORPUS RUNS.
 
-    Each WEO/GFSR page yields ~200-300 words of summary text via trafilatura
-    (the full PDF is not fetched).
+    All previously-verified IMF URL paths (the hardcoded WEO/GFSR/F&D slugs
+    in `_WEO_PATHS` / `_GFSR_PATHS` / `_FANDD_PATHS` below) now 302-redirect
+    to the IMF's `/en/errors/404` page — slug IDs have been rotated. The
+    publications API endpoint `/api/v1/en/publications` and the RSS endpoints
+    (`/en/Blogs/rss`, `/en/feed`, `/external/np/rss/news.aspx`) all return
+    the SPA 404 HTML body even with HTTP 200.
+
+    Confirmed 2026-05-14 by direct curl probes from RCC and residential IPs:
+    both the hardcoded URLs and the JSON API land on
+    `https://www.imf.org/en/errors/404`. The site is fully Next.js SSR and
+    there is no static index that links to current publications.
+
+    Until a working retrieval path is identified (likely options:
+    Next.js `_next/data/<buildId>/...` SSG endpoint, the homepage
+    `__NEXT_DATA__` payload, or accepting Phase-6-only live RSS coverage),
+    `InstitutionalIngestor` skips IMF in the historical composite. The class
+    is retained so reinstating only requires uncommenting it from the
+    sub-ingestors list once a fix lands.
+
+    This is documented as a corpus limitation in the methodology section.
+    The lost Tier-1 coverage is partially absorbed by BIS, Fed (FOMC + FEDS
+    Notes), and Treasury/OFR, which together provide the bulk of the
+    macro-financial institutional discourse signal.
     """
 
     source_id = "imf"
+    # Set to True to opt out of historical runs via composite._sub_ingestors.
+    _HISTORICAL_DISABLED = True
 
     # IMF blocks "MacroNarrativeDynamics/..." UA; plain requests UA returns 200.
     _IMF_HEADERS: dict = {}
@@ -1693,14 +1713,18 @@ class CFRIngestor(Ingestor):
     financial topics: dollar dynamics, sovereign debt, global monetary policy,
     trade, and geopolitical-financial intersections. Tier 2 per ADR-010.
 
-    Retrieval: RSS feed (cfr.org/rss/all) with macro-relevance title filter.
-    Pre-2015 historical archive coverage via Wayback CDX of cfr.org patterns
-    may be incomplete; corpus composition QA will flag this.
+    Retrieval: RSS feed (cfr.org/feed) with macro-relevance title filter.
+    Historical archive depth is limited by what the feed exposes; the RSS
+    practically covers recent items only and will produce thin coverage
+    for years before the current rolling window. This is documented in
+    methodology as a known coverage asymmetry for CFR specifically.
     """
 
     source_id = "cfr"
 
-    _RSS_URL = "https://www.cfr.org/rss/all"
+    # Was https://www.cfr.org/rss/all — 404 as of 2026-05-13.
+    # CFR consolidated their feeds at /feed.
+    _RSS_URL = "https://www.cfr.org/feed"
 
     _MACRO_TERMS = {
         "inflation", "monetary", "interest rate", "federal reserve", "central bank",
@@ -1782,18 +1806,42 @@ class CongressionalIngestor(Ingestor):
         seen: set[str] = set()
         yield from self._fetch_treasury_testimony(start, end, seen)
 
+    # Maximum number of listing pages to scan when paginating backward to a
+    # historical window. Treasury press releases run ~5–10 per day; 2010-2025
+    # covers ~50,000 releases at ~20 per listing page, so 2500 pages is the
+    # theoretical worst case. We cap at 600 (≈12,000 releases ≈ 3-4 years of
+    # Sec-Statements traffic) to avoid runaway loops on misconfigured calls.
+    # Restricting to category=Secretary Statements & Remarks reduces traffic
+    # by ~80%, so 600 pages covers well over a decade of testimony.
+    _MAX_LISTING_PAGES = 600
+    _LISTING_ROW_DATE_RE = re.compile(
+        r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+        r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+        r"\s+\d{1,2},\s+\d{4}\b"
+    )
+
     def _fetch_treasury_testimony(
         self, start: date, end: date, seen: set[str]
     ) -> Iterator[Article]:
-        """Scrape Treasury Secretary Statements & Remarks for testimony items."""
-        page = 0
+        """Scrape Treasury Secretary Statements & Remarks for testimony items.
 
-        while True:
-            params: dict = {
-                "category": "Secretary Statements & Remarks",
-                "date_filter[min]": start.isoformat(),
-                "date_filter[max]": end.isoformat(),
-            }
+        Treasury's Drupal listing IGNORES `date_filter[min]/[max]` query params
+        on the server side as of 2026-05 — supplying them returns the standard
+        newest-first ordering. To reach a historical window we therefore must
+        paginate backward until the rows on a page are older than `start`.
+
+        Per-row dates are present in the listing HTML next to each release
+        title (e.g. "May 11, 2026 Economic Fury Ramps Up..."), so we filter
+        on those before fetching individual article pages — avoiding one HTTP
+        request per out-of-window release.
+        """
+        consecutive_no_match_pages = 0
+        for page in range(self._MAX_LISTING_PAGES):
+            params: dict = {"category": "Secretary Statements & Remarks"}
+            # The date filter params don't filter server-side, but submitting
+            # them is harmless and preserves the intent in the URL.
+            params["date_filter[min]"] = start.isoformat()
+            params["date_filter[max]"] = end.isoformat()
             if page > 0:
                 params["page"] = page
             try:
@@ -1812,7 +1860,6 @@ class CongressionalIngestor(Ingestor):
                 return
 
             soup = BeautifulSoup(resp.text, "lxml")
-            # Links follow /news/press-releases/sb#### pattern
             release_links = [
                 a for a in soup.find_all("a", href=True)
                 if re.match(r"^/news/press-releases/[a-zA-Z]{2}\d+", a["href"])
@@ -1820,10 +1867,21 @@ class CongressionalIngestor(Ingestor):
             ]
 
             if not release_links:
+                log.debug("Treasury listing page %d: no release links — stopping", page)
                 break
 
-            found_new = False
-            for link in release_links:
+            # Resolve each link's date from the surrounding listing row.
+            rows = [self._extract_row_date(link) for link in release_links]
+            valid_dates = [d for d in rows if d is not None]
+            oldest = min(valid_dates) if valid_dates else None
+            newest = max(valid_dates) if valid_dates else None
+
+            page_matches = 0
+            for link, row_date in zip(release_links, rows):
+                if row_date is None:
+                    continue
+                if row_date < start or row_date > end:
+                    continue
                 href = link["href"]
                 url = self._TREASURY_BASE + href
                 if url in seen:
@@ -1833,17 +1891,20 @@ class CongressionalIngestor(Ingestor):
                     continue
 
                 seen.add(url)
-                found_new = True
                 body, fetched_title, author, page_date = _fetch_page_full(url, min_words=30)
                 if not body or len(body.split()) < 20:
                     continue
-                if not page_date or page_date < start or page_date > end:
+                # Prefer the article-page date (more precise) but fall back to
+                # the listing-row date when the page omits it.
+                published = page_date or row_date
+                if published < start or published > end:
                     continue
+                page_matches += 1
 
                 yield _make_article(
                     source_id=self.source_id,
                     url=url,
-                    published_at=page_date.isoformat() + "T00:00:00Z",
+                    published_at=published.isoformat() + "T00:00:00Z",
                     title=fetched_title or title or "Treasury Secretary Testimony",
                     body=body,
                     author=author,
@@ -1853,25 +1914,94 @@ class CongressionalIngestor(Ingestor):
                 )
                 time.sleep(1.0)
 
-            # Check for next page link
-            next_link = soup.select_one("a[title='Next page'], .pager__item--next a")
-            if not next_link or not found_new:
+            # Stop once we've paginated past the requested window.
+            if oldest is not None and oldest < start:
+                log.info("Treasury listing: reached page %d with oldest date %s < start %s — stopping",
+                         page, oldest, start)
                 break
-            page += 1
+
+            # Safety: if we drift far past the window without finding anything
+            # for many pages in a row, bail out instead of grinding to MAX_PAGES.
+            if page_matches == 0:
+                consecutive_no_match_pages += 1
+                # When we're still future-of-window (newest > end), keep paging
+                # back. When we're past-of-window (oldest < start) we would
+                # have already broken above. The remaining case is "fully
+                # inside window but nothing matched relevance filter" — give
+                # it 50 pages of slack before giving up.
+                if (newest is not None and newest <= end
+                        and consecutive_no_match_pages >= 50):
+                    log.info("Treasury listing: 50 consecutive in-window pages with no "
+                             "relevant matches at page %d — stopping early", page)
+                    break
+            else:
+                consecutive_no_match_pages = 0
+
+            # Defer to Drupal's own "next page" link as the canonical stop
+            # signal if present.
+            next_link = soup.select_one("a[title='Next page'], .pager__item--next a")
+            if not next_link:
+                log.debug("Treasury listing page %d: no next page — stopping", page)
+                break
             time.sleep(0.5)
+        else:
+            log.warning("Treasury listing: hit MAX_LISTING_PAGES=%d before crossing start=%s",
+                        self._MAX_LISTING_PAGES, start)
+
+    def _extract_row_date(self, link) -> date | None:
+        """Find the date string nearest to a release link in the listing HTML.
+
+        Listing rows look like:
+            <some container>
+              <time/date span> May 11, 2026 </>
+              <a href="/news/press-releases/sb0498"> Title... </a>
+            </>
+        We walk up at most 4 ancestors looking for a Month D, YYYY string,
+        which is the per-row date Treasury renders.
+        """
+        node = link
+        for _ in range(4):
+            node = node.parent if node else None
+            if node is None:
+                break
+            text = node.get_text(" ", strip=True)
+            m = self._LISTING_ROW_DATE_RE.search(text)
+            if m:
+                parsed = _parse_date_flexible(m.group(0))
+                if parsed:
+                    return parsed
+        return None
 
     def _is_relevant(self, title: str) -> bool:
-        """Keep Secretary-level testimony and Congressional statements."""
+        """Keep Secretary-level testimony, congressional statements, and the
+        broader macro-relevant secretary remarks (FOMC events, fiscal/debt,
+        confirmation hearings, Treasury-led economic conferences).
+
+        Treasury's Secretary Statements & Remarks category mixes congressional
+        testimony with conference remarks. We previously matched only the
+        narrow testimony vocabulary; the broader filter below keeps the
+        narrative-relevant content while still excluding pure sanctions
+        announcements and lower-level official press releases.
+        """
         tl = title.lower()
-        testimony_terms = (
+        # Exclude lower-level officials — Tier-1 ingestion is Secretary-level
+        if re.search(r"\bunder ?secretary\b|\bassistant secretary\b|\bdeputy\b", tl):
+            return False
+        # Exclude pure sanctions announcements ("Treasury Sanctions...")
+        # which are policy actions, not narrative-formation discourse.
+        if re.search(r"\btreasury sanctions\b|\beconomic fury\b", tl):
+            return False
+        relevant_terms = (
+            # Testimony / congressional appearances
             "testimony", "before the", "subcommittee", "senate banking",
             "house financial services", "appropriations", "ways and means",
             "joint economic committee", "committee on finance",
+            # Secretary remarks of macro relevance
+            "remarks by", "statement by", "secretary",
+            "monetary policy", "inflation", "fiscal", "debt", "economy",
+            "economic outlook", "treasury market", "financial stability",
         )
-        # Exclude lower-level officials
-        if re.search(r"\bunder ?secretary\b|\bassistant secretary\b|\bdeputy\b", tl):
-            return False
-        return any(term in tl for term in testimony_terms)
+        return any(term in tl for term in relevant_terms)
 
 
 # ---------------------------------------------------------------------------
@@ -1901,7 +2031,12 @@ class InstitutionalIngestor(Ingestor):
             FederalReserveIngestor(),
             FedRegionalIngestor(),
             CongressionalIngestor(),
-            IMFIngestor(),
+            # IMFIngestor disabled for historical runs as of 2026-05-14:
+            # all hardcoded URLs and API endpoints land on /en/errors/404.
+            # See IMFIngestor docstring for diagnostic notes. Reinstate once
+            # a working retrieval path (Next.js _next/data SSG or homepage
+            # __NEXT_DATA__ scrape) is implemented.
+            # IMFIngestor(),
             BISIngestor(),
             TreasuryOFRIngestor(),
             CBOIngestor(),
