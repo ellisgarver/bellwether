@@ -387,11 +387,14 @@ class IMFIngestor(Ingestor):
     # IMFIngestor — uncomment if RCC IP is later unblocked.
     _HISTORICAL_DISABLED = True
 
-    # IMF's Cloudflare WAF blocks the project's MacroNarrativeDynamics/...
-    # branded UA (403). It also rejects empty/default python-requests UAs in
-    # some regions. A standard browser UA gets through where the others fail.
-    # If RCC's IP is rate-limited under the browser UA we fall back to the
-    # legacy empty-headers behavior the WP API previously used.
+    # imf.org sits behind Akamai (NOT Cloudflare — server: AkamaiGHost).
+    # Akamai Bot Manager 403s requests that present only the basic browser UA
+    # without the modern client-hint fingerprint (Sec-Fetch-*, Sec-Ch-Ua-*,
+    # Upgrade-Insecure-Requests). Sending the full Chrome navigation header
+    # set passes the bot filter from residential, mobile, and university IPs
+    # (verified 2026-05-17, T-Mobile cellular AS21928). The previous
+    # diagnosis of "Cloudflare WAF IP block" in ADR-013 was a misread —
+    # this is a header-fingerprint check at Akamai's edge.
     _IMF_HEADERS: dict = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -400,10 +403,48 @@ class IMFIngestor(Ingestor):
         ),
         "Accept": (
             "text/html,application/xhtml+xml,application/xml;q=0.9,"
-            "application/json;q=0.8,*/*;q=0.7"
+            "image/avif,image/webp,*/*;q=0.8"
         ),
         "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Sec-Ch-Ua": (
+            '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"'
+        ),
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"macOS"',
     }
+
+    @classmethod
+    def _imf_get(cls, url: str, **kwargs):
+        """HTTP GET for imf.org URLs, impersonating Chrome's TLS+HTTP/2 fingerprint.
+
+        Akamai Bot Manager 403s stdlib `requests` because urllib3's OpenSSL
+        TLS handshake fingerprint (JA3/JA4) doesn't match a real browser, even
+        when the HTTP headers do. `curl_cffi` wraps curl-impersonate, which
+        replicates Chrome's cipher order, TLS extensions, and HTTP/2 settings
+        verbatim. Verified 2026-05-17 (mobile + university IPs both succeed
+        with impersonation; both 403 without it).
+
+        Falls back to stdlib `requests` if `curl_cffi` is not installed, which
+        will reliably 403 — this is intentional so the failure surfaces loudly
+        rather than silently degrading. See ADR-014 / requirements.txt.
+        """
+        try:
+            from curl_cffi import requests as cffi_requests
+            kwargs.setdefault("impersonate", "chrome131")
+            kwargs.setdefault("headers", cls._IMF_HEADERS)
+            return cffi_requests.get(url, **kwargs)
+        except ImportError:
+            log.error(
+                "curl_cffi not installed; IMF fetches will 403. "
+                "Install with `pip install curl_cffi` (see requirements.txt / ADR-014)."
+            )
+            return requests.get(url, **kwargs)
 
     # Next.js publications-index pages where __NEXT_DATA__ can be harvested
     # for a recent buildId + publication listing.
@@ -612,7 +653,7 @@ class IMFIngestor(Ingestor):
         headers = self._IMF_HEADERS
         for index_url in self._NEXT_INDEX_PAGES:
             try:
-                resp = requests.get(index_url, headers=headers, timeout=30.0,
+                resp = self._imf_get(index_url, headers=headers, timeout=30.0,
                                      allow_redirects=True)
                 if resp.status_code != 200:
                     log.info("IMF index %s: HTTP %d", index_url, resp.status_code)
@@ -731,7 +772,7 @@ class IMFIngestor(Ingestor):
             path = full_url.split("imf.org", 1)[-1]
             ssg_url = f"https://www.imf.org/_next/data/{build_id}{path}.json"
             try:
-                r = requests.get(ssg_url, headers=headers, timeout=30.0)
+                r = self._imf_get(ssg_url, headers=headers, timeout=30.0)
                 if r.status_code == 200:
                     try:
                         ssg = r.json()
@@ -765,7 +806,7 @@ class IMFIngestor(Ingestor):
 
         while True:
             try:
-                resp = requests.get(
+                resp = self._imf_get(
                     self._WP_API,
                     params={
                         "type": "WP",
@@ -856,7 +897,7 @@ class IMFIngestor(Ingestor):
                 continue
             seen.add(url)
             try:
-                resp = requests.get(url, headers=self._IMF_HEADERS, timeout=20.0)
+                resp = self._imf_get(url, headers=self._IMF_HEADERS, timeout=20.0)
                 resp.raise_for_status()
             except Exception as exc:
                 log.debug("IMF %s fetch failed %s: %s", doc_type.upper(), url, exc)
@@ -2601,13 +2642,16 @@ class InstitutionalIngestor(Ingestor):
             FederalReserveIngestor(),
             FedRegionalIngestor(),
             CongressionalIngestor(),
-            # IMFIngestor disabled again 2026-05-17 (ADR-013 amendment):
-            # RCC verification showed Cloudflare WAF returns HTTP 403 to RCC's
-            # IP space for all IMF URLs, regardless of User-Agent (verified
-            # with curl + browser UA from a Midway3 login node). The Next.js
-            # path implemented earlier today is correct but inaccessible from
-            # RCC. Re-enable if IMF later allows RCC traffic OR if a proxy /
-            # Wayback Machine snapshot retrieval path is implemented.
+            # IMFIngestor stays out of the composite pending a parser rewrite.
+            # The network layer is now unblocked via curl_cffi Chrome impersonation
+            # in self._imf_get (the original "Cloudflare WAF IP block" diagnosis
+            # in ADR-013 was a misread — imf.org sits behind Akamai and rejects
+            # stdlib `requests` on TLS fingerprint, not IP). But IMF migrated to
+            # Sitecore JSS and the GUID-keyed `componentProps.<...>` page structure
+            # no longer matches `_walk_publications`, so the ingestor yields 0
+            # articles even though the index fetches return 200. Re-enable once
+            # the parser is rewritten against the current Sitecore schema and a
+            # small-window run confirms non-zero yield.
             # IMFIngestor(),
             BISIngestor(),
             TreasuryOFRIngestor(),
