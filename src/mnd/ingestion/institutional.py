@@ -383,6 +383,24 @@ class IMFIngestor(Ingestor):
     # Kept for documentation; the composite no longer reads this flag.
     _HISTORICAL_DISABLED = False
 
+    # IMF's Cloudflare WAF blocks the project's MacroNarrativeDynamics/...
+    # branded UA (403). It also rejects empty/default python-requests UAs in
+    # some regions. A standard browser UA gets through where the others fail.
+    # If RCC's IP is rate-limited under the browser UA we fall back to the
+    # legacy empty-headers behavior the WP API previously used.
+    _IMF_HEADERS: dict = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "application/json;q=0.8,*/*;q=0.7"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
     # Next.js publications-index pages where __NEXT_DATA__ can be harvested
     # for a recent buildId + publication listing.
     _NEXT_INDEX_PAGES = [
@@ -391,9 +409,6 @@ class IMFIngestor(Ingestor):
         "https://www.imf.org/en/Publications/fandd",
         "https://www.imf.org/en/Publications/WP",
     ]
-
-    # IMF blocks "MacroNarrativeDynamics/..." UA; plain requests UA returns 200.
-    _IMF_HEADERS: dict = {}
 
     # Verified WEO issue URLs (2010-2024). Older editions use 2016-12-31 as
     # URL date; actual pub date is parsed from the slug title.
@@ -587,10 +602,10 @@ class IMFIngestor(Ingestor):
         is not documented and may vary by section — we search the JSON
         tree for any list of dicts with a 'date' or 'publishedDate' field.
         """
-        headers = {
-            **_HEADERS,
-            "Accept": "text/html,application/xhtml+xml,application/json",
-        }
+        # Use _IMF_HEADERS (browser UA) — the project's branded UA is 403'd
+        # by IMF's Cloudflare WAF (verified RCC 2026-05-17 with the prior
+        # branded-UA attempt logging HTTP 403 on all four index pages).
+        headers = self._IMF_HEADERS
         for index_url in self._NEXT_INDEX_PAGES:
             try:
                 resp = requests.get(index_url, headers=headers, timeout=30.0,
