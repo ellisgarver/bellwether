@@ -726,7 +726,10 @@ Local smoke tests (residential, 30-day windows):
 - CBO: sitemap enumeration yields 500+ in-window-with-slop candidates ✓ (page fetches RCC-only)
 - IMF: Next.js + legacy paths execute cleanly with proper 403 handling; 0 yielded from residential (expected)
 
-Full validation requires the next RCC ingest run.
+RCC verification (2026-05-17, Midway3 login node):
+- **IMF**: Cloudflare WAF returns HTTP 403 to all `imf.org` URLs from RCC IP space regardless of User-Agent (confirmed with browser UA via both `requests` and `curl`). The Next.js retrieval path is correct but inaccessible from RCC. **`IMFIngestor` re-disabled in the composite list** — re-enable if RCC IP is later unblocked or if a proxy/Wayback retrieval path is implemented. Documented as a corpus limitation in CLAUDE.md.
+
+Other ingestors validated on the next full RCC ingest run.
 
 ---
 

@@ -380,8 +380,12 @@ class IMFIngestor(Ingestor):
     """
 
     source_id = "imf"
-    # Kept for documentation; the composite no longer reads this flag.
-    _HISTORICAL_DISABLED = False
+    # Re-set True 2026-05-17 (ADR-013 amendment): Cloudflare WAF blocks
+    # RCC's IP space for all IMF URLs regardless of UA. The Next.js
+    # __NEXT_DATA__ + _next/data retrieval path below is fully implemented
+    # and would work from an unblocked IP. Composite list re-comments
+    # IMFIngestor — uncomment if RCC IP is later unblocked.
+    _HISTORICAL_DISABLED = True
 
     # IMF's Cloudflare WAF blocks the project's MacroNarrativeDynamics/...
     # branded UA (403). It also rejects empty/default python-requests UAs in
@@ -2597,12 +2601,14 @@ class InstitutionalIngestor(Ingestor):
             FederalReserveIngestor(),
             FedRegionalIngestor(),
             CongressionalIngestor(),
-            # IMFIngestor re-enabled 2026-05-17 with experimental Next.js
-            # __NEXT_DATA__ + _next/data retrieval path. The static URL
-            # tables in IMFIngestor are kept as a fallback. If both paths
-            # return 0 articles on RCC, the composite ingestor marks IMF as
-            # failed and continues — no chain breakage.
-            IMFIngestor(),
+            # IMFIngestor disabled again 2026-05-17 (ADR-013 amendment):
+            # RCC verification showed Cloudflare WAF returns HTTP 403 to RCC's
+            # IP space for all IMF URLs, regardless of User-Agent (verified
+            # with curl + browser UA from a Midway3 login node). The Next.js
+            # path implemented earlier today is correct but inaccessible from
+            # RCC. Re-enable if IMF later allows RCC traffic OR if a proxy /
+            # Wayback Machine snapshot retrieval path is implemented.
+            # IMFIngestor(),
             BISIngestor(),
             TreasuryOFRIngestor(),
             CBOIngestor(),
