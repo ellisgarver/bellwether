@@ -46,16 +46,15 @@ embedding:
     model: "Qwen/Qwen3-Embedding-0.6B"
     revision: "main"               # Pin to specific commit hash before Phase 2
     dimensions: 1024
-    # max_seq_len was 32768 (the model's native max). Reduced to 2048 because:
-    #   (a) processing/chunker.py already splits long docs into 600-BPE-token chunks
-    #       before embedding, so we never feed sequences > ~600 tokens in practice;
-    #   (b) the SDPA causal mask scales as O(seq_len^2 * batch_size). At 32768 x 32
-    #       this allocates ~16 GB just for the mask — OOMs the V100-16GB that RCC
-    #       hands out under --constraint=v100 (job 49622334 died this way 2026-05-13);
-    #   (c) at 2048 the mask is ~540 MB and the full forward pass fits comfortably.
-    # 2048 still gives 3.4x headroom over the 600-token chunk size, so any future
-    # tokenizer mismatch or BPE expansion is absorbed without re-truncation.
-    max_seq_len: 2048
+    # max_seq_len was 32768 (the model's native max), reduced to 2048, and
+    # further reduced to 1024 after job 49622334 (2026-05-13) OOMed on V100-16GB
+    # at batch=32 + seq=2048. Cause: the Qwen3 transformers code clones the SDPA
+    # causal mask per-layer; combined with KV-cache + activations, the working
+    # set at (batch=32, seq=2048, fp16) blew past 16 GB. At (batch=8, seq=1024,
+    # fp16) the working set is ~1/16 of the prior config and fits comfortably.
+    # 1024 still gives 1.7× headroom over the 600-BPE-token chunker output
+    # (processing/chunker.py), so no truncation in practice.
+    max_seq_len: 1024
     instruction_aware: true
     instruction_prefix: "Instruct: Represent this financial policy document for narrative clustering\nQuery: "
     upgrade_path: "Qwen/Qwen3-Embedding-4B"  # If RCC capacity allows; identical interface
@@ -199,7 +198,11 @@ reproducibility:
 # Compute & I/O
 # -----------------------------------------------------------------------------
 compute:
-  embedding_batch_size: 32         # Adjust per device VRAM
+  # embedding_batch_size dropped 32 → 8 after job 49622334 OOMed on V100-16GB
+  # (2026-05-13). Inference batch size has zero quality impact — same vectors
+  # come out — it's purely a perf/VRAM tradeoff. At seq=1024+fp16, batch=8 is
+  # safe headroom on V100 16GB; raise back to 16 or 32 on A100 partitions.
+  embedding_batch_size: 8
   embedding_device: "auto"         # auto | cuda | cuda:0 | cpu | mps
   embedding_fp16: true             # Use half precision where supported
   ingestion_max_workers: 4

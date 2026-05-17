@@ -2,10 +2,14 @@
 # =============================================================================
 # Macro Narrative Dynamics — full Midway3 pipeline submission
 # =============================================================================
-# Submits the full Phase 2/3 chain as five chained SLURM jobs:
+# Submits the full Phase 2/3 chain as six chained SLURM jobs:
 #
-#   ingest_institutional → filter → embed (primary) → cluster → stability
-#                                 └→ embed (comparator)        (parallel, optional)
+#   ingest_institutional → filter-pre-embed → filter → embed (primary) → cluster
+#                                                    └→ embed (comparator) (parallel, optional)
+#
+# filter-pre-embed added 2026-05-17 — applies ADR-010/012 archived-source
+# exclusion at the pipeline level (writes corpus_for_embedding.jsonl).
+# Prior runs skipped this and the filter stage logged a fallback WARNING.
 #
 # Each job is `afterok:` chained, so a failure halts the chain cleanly.
 #
@@ -117,9 +121,15 @@ INGEST=$(sbatch --parsable \
     scripts/rcc/ingest_institutional_rcc.sh)
 echo "   ingest job:           $INGEST"
 
-echo ">> Submitting filter (afterok:$INGEST) ..."
-FILTER=$(sbatch --parsable \
+echo ">> Submitting filter-pre-embed (afterok:$INGEST) ..."
+FILTER_PRE=$(sbatch --parsable \
     --dependency=afterok:$INGEST \
+    scripts/rcc/filter_pre_embed_rcc.sh)
+echo "   filter-pre-embed job: $FILTER_PRE"
+
+echo ">> Submitting filter (afterok:$FILTER_PRE) ..."
+FILTER=$(sbatch --parsable \
+    --dependency=afterok:$FILTER_PRE \
     scripts/rcc/filter_rcc.sh)
 echo "   filter job:           $FILTER"
 
@@ -155,13 +165,14 @@ cat <<EOF
 Submission complete.
 
 Job IDs (use squeue -u \$USER to monitor):
-  ingest:     $INGEST
-  filter:     $FILTER
-  embed prim: $EMBED_PRIMARY
-$( [[ "$COMPARATOR" == "1" ]] && echo "  embed comp: $EMBED_COMPARATOR" )
-  cluster:    $CLUSTER
+  ingest:           $INGEST
+  filter-pre-embed: $FILTER_PRE
+  filter:           $FILTER
+  embed prim:       $EMBED_PRIMARY
+$( [[ "$COMPARATOR" == "1" ]] && echo "  embed comp:       $EMBED_COMPARATOR" )
+  cluster:          $CLUSTER
 
-Logs:        logs/{ingest_institutional,filter,embed,cluster}_rcc_<jobid>.log
+Logs:        logs/{ingest_institutional,filter_pre_embed,filter,embed,cluster}_rcc_<jobid>.log
 Outputs:     data/raw/articles/, data/processed/
 
 After cluster completes, run interactively on a login node (NMI/ARI is fast):

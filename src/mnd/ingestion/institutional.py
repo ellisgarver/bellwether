@@ -349,38 +349,48 @@ def _wp_post_to_article(
 
 
 class IMFIngestor(Ingestor):
-    """IMF WEO and GFSR flagship overview pages (2010-present).
+    """IMF WEO, GFSR, F&D, and Working Papers (2010-present).
 
-    STATUS (2026-05-14): TEMPORARILY DISABLED FOR HISTORICAL CORPUS RUNS.
+    STATUS (2026-05-17): EXPERIMENTAL — RE-ENABLED IN COMPOSITE.
 
-    All previously-verified IMF URL paths (the hardcoded WEO/GFSR/F&D slugs
-    in `_WEO_PATHS` / `_GFSR_PATHS` / `_FANDD_PATHS` below) now 302-redirect
-    to the IMF's `/en/errors/404` page — slug IDs have been rotated. The
-    publications API endpoint `/api/v1/en/publications` and the RSS endpoints
-    (`/en/Blogs/rss`, `/en/feed`, `/external/np/rss/news.aspx`) all return
-    the SPA 404 HTML body even with HTTP 200.
+    The hardcoded URL tables below (`_WEO_PATHS` / `_GFSR_PATHS` /
+    `_FANDD_PATHS`) all 302-redirect to `/en/errors/404` as of 2026-05-14
+    because IMF rotated slug IDs and migrated fully to Next.js SSR. New
+    retrieval path implemented 2026-05-17:
 
-    Confirmed 2026-05-14 by direct curl probes from RCC and residential IPs:
-    both the hardcoded URLs and the JSON API land on
-    `https://www.imf.org/en/errors/404`. The site is fully Next.js SSR and
-    there is no static index that links to current publications.
+      1. Fetch a publications-index page (e.g. /en/Publications/WEO) to
+         extract Next.js `__NEXT_DATA__` payload and parse out:
+         - `buildId` for `_next/data` SSG endpoint construction
+         - `props.pageProps.publications` (or similar) listing of recent
+           publication slugs with publication dates
+      2. For each in-window publication, fetch
+         `/_next/data/<buildId>/en/Publications/<type>/Issues/<slug>.json`
+         which returns the same data as the SSR page in JSON form (no
+         HTML scraping required).
+      3. Extract title/body/date from the JSON props.
 
-    Until a working retrieval path is identified (likely options:
-    Next.js `_next/data/<buildId>/...` SSG endpoint, the homepage
-    `__NEXT_DATA__` payload, or accepting Phase-6-only live RSS coverage),
-    `InstitutionalIngestor` skips IMF in the historical composite. The class
-    is retained so reinstating only requires uncommenting it from the
-    sub-ingestors list once a fix lands.
+    Static URL table retained as final fallback in case Next.js paths
+    further evolve. If both paths return 0, the composite ingestor
+    gracefully marks IMF as failed and continues.
 
-    This is documented as a corpus limitation in the methodology section.
-    The lost Tier-1 coverage is partially absorbed by BIS, Fed (FOMC + FEDS
-    Notes), and Treasury/OFR, which together provide the bulk of the
-    macro-financial institutional discourse signal.
+    Note: IMF blocks scrapers identifying as MacroNarrativeDynamics/... with
+    HTTP 403 from residential IPs (Cloudflare WAF). Plain requests UA may
+    pass on university IPs; we use the default `_HEADERS` and add an
+    `Accept` header hint for JSON endpoints.
     """
 
     source_id = "imf"
-    # Set to True to opt out of historical runs via composite._sub_ingestors.
-    _HISTORICAL_DISABLED = True
+    # Kept for documentation; the composite no longer reads this flag.
+    _HISTORICAL_DISABLED = False
+
+    # Next.js publications-index pages where __NEXT_DATA__ can be harvested
+    # for a recent buildId + publication listing.
+    _NEXT_INDEX_PAGES = [
+        "https://www.imf.org/en/Publications/WEO",
+        "https://www.imf.org/en/Publications/GFSR",
+        "https://www.imf.org/en/Publications/fandd",
+        "https://www.imf.org/en/Publications/WP",
+    ]
 
     # IMF blocks "MacroNarrativeDynamics/..." UA; plain requests UA returns 200.
     _IMF_HEADERS: dict = {}
@@ -524,10 +534,204 @@ class IMFIngestor(Ingestor):
     _WP_API = "https://www.imf.org/api/v1/en/publications"
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
-        yield from self._fetch_flagships(start, end, self._WEO_PATHS, "weo")
-        yield from self._fetch_flagships(start, end, self._GFSR_PATHS, "gfsr")
-        yield from self._fetch_flagships(start, end, self._FANDD_PATHS, "fandd")
-        yield from self._fetch_working_papers(start, end)
+        # Primary: Next.js __NEXT_DATA__ + _next/data SSG endpoint (2026-05-17)
+        yielded_via_next_data = 0
+        try:
+            for article in self._fetch_via_next_data(start, end):
+                yield article
+                yielded_via_next_data += 1
+        except Exception as exc:
+            log.warning("IMF Next.js path raised: %s — falling back to static URLs", exc)
+        log.info("IMF: Next.js path yielded %d articles", yielded_via_next_data)
+
+        # Secondary: legacy hardcoded URL tables. Most/all of these 404 as of
+        # 2026-05 but kept in case IMF restores a redirect map.
+        legacy_yielded = 0
+        for article in self._fetch_flagships(start, end, self._WEO_PATHS, "weo"):
+            yield article; legacy_yielded += 1
+        for article in self._fetch_flagships(start, end, self._GFSR_PATHS, "gfsr"):
+            yield article; legacy_yielded += 1
+        for article in self._fetch_flagships(start, end, self._FANDD_PATHS, "fandd"):
+            yield article; legacy_yielded += 1
+        for article in self._fetch_working_papers(start, end):
+            yield article; legacy_yielded += 1
+        log.info("IMF: legacy fallback paths yielded %d articles", legacy_yielded)
+
+    # -----------------------------------------------------------------------
+    # Next.js retrieval path (2026-05-17 attempt — needs RCC verification)
+    # -----------------------------------------------------------------------
+
+    _NEXT_DATA_SCRIPT_RE = re.compile(
+        r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL
+    )
+
+    def _extract_next_data(self, html: str) -> dict | None:
+        """Extract the __NEXT_DATA__ JSON payload from a Next.js page."""
+        m = self._NEXT_DATA_SCRIPT_RE.search(html)
+        if not m:
+            return None
+        try:
+            return json.loads(m.group(1))
+        except json.JSONDecodeError as exc:
+            log.debug("IMF __NEXT_DATA__ JSON parse: %s", exc)
+            return None
+
+    def _fetch_via_next_data(
+        self, start: date, end: date
+    ) -> Iterator[Article]:
+        """Enumerate IMF publications via Next.js __NEXT_DATA__ payloads.
+
+        For each known index page (WEO/GFSR/F&D/WP), pull __NEXT_DATA__,
+        find the publication listing inside the props tree, filter to the
+        requested window, and yield articles. The shape of __NEXT_DATA__
+        is not documented and may vary by section — we search the JSON
+        tree for any list of dicts with a 'date' or 'publishedDate' field.
+        """
+        headers = {
+            **_HEADERS,
+            "Accept": "text/html,application/xhtml+xml,application/json",
+        }
+        for index_url in self._NEXT_INDEX_PAGES:
+            try:
+                resp = requests.get(index_url, headers=headers, timeout=30.0,
+                                     allow_redirects=True)
+                if resp.status_code != 200:
+                    log.info("IMF index %s: HTTP %d", index_url, resp.status_code)
+                    continue
+            except Exception as exc:
+                log.warning("IMF index fetch %s: %s", index_url, exc)
+                continue
+
+            # Detect the SPA 404 page (HTML body has title=404)
+            if "errors/404" in resp.url or '<title>Page Not Found' in resp.text[:2000]:
+                log.info("IMF index %s redirected to 404 page", index_url)
+                continue
+
+            data = self._extract_next_data(resp.text)
+            if not data:
+                log.info("IMF index %s: no __NEXT_DATA__ payload", index_url)
+                continue
+
+            build_id = data.get("buildId")
+            page_props = (data.get("props") or {}).get("pageProps") or {}
+            log.info("IMF index %s: buildId=%s pageProps keys=%s",
+                     index_url, build_id, sorted(page_props.keys())[:10])
+
+            for pub in self._walk_publications(page_props):
+                pub_date = pub.get("_date")
+                slug_url = pub.get("_url")
+                title = pub.get("_title") or "IMF Publication"
+                if not pub_date or pub_date < start or pub_date > end:
+                    continue
+                if not slug_url:
+                    continue
+                full_url = (
+                    slug_url if slug_url.startswith("http")
+                    else "https://www.imf.org" + slug_url
+                )
+                # Fetch the page itself (or _next/data JSON) for body text.
+                body = self._fetch_publication_body(full_url, build_id, headers)
+                if not body or len(body.split()) < 50:
+                    continue
+                yield _make_article(
+                    source_id=self.source_id,
+                    url=full_url,
+                    published_at=pub_date.isoformat() + "T00:00:00Z",
+                    title=title,
+                    body=body,
+                    author="IMF",
+                    section=pub.get("_section", "imf_publication"),
+                    tier=1,
+                    document_type=pub.get("_section", "imf_publication"),
+                )
+                time.sleep(1.0)
+            time.sleep(0.5)
+
+    def _walk_publications(self, props: dict) -> Iterator[dict]:
+        """Walk a __NEXT_DATA__ pageProps tree, yielding publication-shaped dicts.
+
+        IMF's exact shape isn't documented and changes between sections. We
+        recursively walk anything dict-like, treating any object with both a
+        date-like field and a url-like field as a candidate publication.
+        Normalize keys into a flat _date / _url / _title / _section.
+        """
+        date_keys = ("date", "publishedDate", "publicationDate", "pubDate", "publishDate")
+        url_keys = ("url", "link", "href", "path", "slug")
+        title_keys = ("title", "name", "displayTitle", "headline")
+
+        def _normalize(obj: dict) -> dict | None:
+            d = None
+            for k in date_keys:
+                if k in obj and isinstance(obj[k], str):
+                    try:
+                        d = _parse_date_flexible(obj[k]) or date.fromisoformat(obj[k][:10])
+                        break
+                    except (ValueError, TypeError):
+                        continue
+            u = None
+            for k in url_keys:
+                v = obj.get(k)
+                if isinstance(v, str) and ("/Publications/" in v or "/en/Publications/" in v):
+                    u = v
+                    break
+            t = None
+            for k in title_keys:
+                v = obj.get(k)
+                if isinstance(v, str) and v.strip():
+                    t = v.strip()
+                    break
+            if d and u:
+                return {"_date": d, "_url": u, "_title": t,
+                        "_section": obj.get("type") or obj.get("publicationType")}
+            return None
+
+        def _walk(node):
+            if isinstance(node, dict):
+                norm = _normalize(node)
+                if norm:
+                    yield norm
+                for v in node.values():
+                    yield from _walk(v)
+            elif isinstance(node, list):
+                for item in node:
+                    yield from _walk(item)
+
+        yield from _walk(props)
+
+    def _fetch_publication_body(
+        self, full_url: str, build_id: str | None, headers: dict
+    ) -> str | None:
+        """Fetch the body text for an IMF publication URL.
+
+        Tries the _next/data SSG endpoint first when buildId is known (no
+        HTML parsing required), then falls back to HTML scraping with
+        trafilatura.
+        """
+        if build_id and "/en/Publications/" in full_url:
+            # Convert /en/Publications/<...> → /_next/data/<buildId>/en/Publications/<...>.json
+            path = full_url.split("imf.org", 1)[-1]
+            ssg_url = f"https://www.imf.org/_next/data/{build_id}{path}.json"
+            try:
+                r = requests.get(ssg_url, headers=headers, timeout=30.0)
+                if r.status_code == 200:
+                    try:
+                        ssg = r.json()
+                        props = (ssg.get("pageProps") or {})
+                        # Try common body fields
+                        for k in ("body", "content", "html", "abstract", "summary"):
+                            v = props.get(k)
+                            if isinstance(v, str) and len(v) > 200:
+                                # Strip HTML tags if present
+                                text = BeautifulSoup(v, "lxml").get_text(" ", strip=True)
+                                if text and len(text.split()) >= 50:
+                                    return text
+                    except json.JSONDecodeError:
+                        pass
+            except Exception as exc:
+                log.debug("IMF _next/data %s: %s", ssg_url, exc)
+
+        # HTML fallback
+        return _extract_body(full_url, min_words=50)
 
     def _fetch_working_papers(self, start: date, end: date) -> Iterator[Article]:
         """Fetch IMF Working Papers via the publications JSON API.
@@ -922,40 +1126,176 @@ class FedRegionalIngestor(Ingestor):
 class CBOIngestor(Ingestor):
     """Congressional Budget Office publications.
 
-    Historical archive: scrapes cbo.gov/publications (paginated HTML).
-    Note: cbo.gov returns HTTP 403 from residential IPs due to bot protection.
-    This scraper is expected to work from university networks (e.g., RCC Midway3).
-    Falls back to RSS for recent content if the archive is blocked.
+    Pre-fix bug (2026-05-13 dry run, 0 articles): the listing scraper at
+    cbo.gov/publications relied on Drupal-CSS selectors (.views-row etc.)
+    that were stale, and the listing endpoint is now behind DataDome bot
+    protection (returns a 403 + JS-challenge HTML to any non-browser UA).
+    The RSS fallback hits the same bot wall.
+
+    Post-fix path: cbo.gov's sitemap.xml is NOT bot-protected (returns 200
+    from any UA). It indexes every publication URL with a `<lastmod>` date.
+    We walk the sitemap index to enumerate candidate publication URLs in
+    the requested window, then fetch each publication page directly. The
+    publication detail pages are accessible from RCC (university IP); on
+    residential IPs they 403, so this ingestor is RCC-only for historical
+    runs.
+
+    `lastmod` is the last-edit date, not publication date — CBO occasionally
+    edits prior publications. We add a ±180-day slop to the window when
+    filtering by lastmod, then re-validate the publication date extracted
+    from the page itself (which is the source of truth for `published_at`).
     """
 
     source_id = "cbo"
 
+    _SITEMAP_INDEX = "https://www.cbo.gov/sitemap.xml"
     _LIST_URL = "https://www.cbo.gov/publications"
     _RSS_URL = "https://www.cbo.gov/publication/rss"
+    _CBO_BASE = "https://www.cbo.gov"
 
     _KEEP_KEYWORDS = {
         "budget and economic outlook", "economic outlook", "working paper",
         "budget outlook", "long-term budget", "monthly budget review",
         "economic effects", "labor market", "inflation", "fiscal", "recession",
+        "interest rate", "deficit", "debt", "gdp", "growth", "monetary",
+        "macroeconomic", "tax", "tariff",
     }
+
+    # Slop applied to lastmod window — CBO edits older publications, and
+    # they appear to do periodic sitemap-wide rebuilds (~6000 items show
+    # lastmod=2019 from one such event). 365 days catches edited pubs from
+    # neighboring years; the page-date filter inside fetch() is the final
+    # truth. For a full 2010-2026 historical run the slop is moot.
+    _LASTMOD_SLOP_DAYS = 365
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
-        yielded = False
-        for article in self._fetch_archive(start, end, seen):
-            yield article
-            yielded = True
-        if not yielded:
-            log.info(
-                "CBO archive unavailable (likely residential IP block); "
-                "falling back to RSS (recent content only)"
+        yielded = 0
+        candidates = list(self._enumerate_sitemap_candidates(start, end))
+        log.info(
+            "CBO: sitemap enumeration found %d candidate publication URLs "
+            "with lastmod in [%s ± %dd]",
+            len(candidates), f"{start}..{end}", self._LASTMOD_SLOP_DAYS,
+        )
+        for url, _lastmod in candidates:
+            if url in seen:
+                continue
+            seen.add(url)
+            try:
+                resp = requests.get(url, headers=_HEADERS, timeout=30.0)
+                if resp.status_code in (403, 404):
+                    log.debug("CBO %s: HTTP %d — skipping", url, resp.status_code)
+                    continue
+                resp.raise_for_status()
+            except Exception as exc:
+                log.debug("CBO %s: %s", url, exc)
+                continue
+
+            body, fetched_title, _author, page_date = _fetch_page_full(
+                url, min_words=50
             )
-            yield from self._fetch_rss(start, end, seen)
+            # Fall back to lastmod ONLY if page date missing — better than dropping
+            published = page_date or _lastmod
+            if not published or published < start or published > end:
+                continue
+            title = fetched_title or ""
+            if not title or not self._is_relevant(title):
+                continue
+            if not body or len(body.split()) < 50:
+                continue
+            yield _make_article(
+                source_id=self.source_id,
+                url=url,
+                published_at=published.isoformat() + "T00:00:00Z",
+                title=title,
+                body=body,
+                author="CBO",
+                section="cbo_publication",
+                tier=1,
+                document_type="cbo_publication",
+            )
+            yielded += 1
+            time.sleep(0.5)
+
+        if yielded == 0:
+            log.info(
+                "CBO: 0 publications yielded from sitemap path (likely "
+                "residential IP block on publication pages). Falling back "
+                "to legacy archive scrape + RSS — recent content only."
+            )
+            for article in self._fetch_archive(start, end, seen):
+                yield article
+                yielded += 1
+            if yielded == 0:
+                yield from self._fetch_rss(start, end, seen)
+
+    def _enumerate_sitemap_candidates(
+        self, start: date, end: date
+    ) -> Iterator[tuple[str, date | None]]:
+        """Walk the sitemap index, return (url, lastmod) for in-window publications.
+
+        Yields URLs whose lastmod is within [start - SLOP, end + SLOP]. Final
+        date validation happens via the publication page itself.
+        """
+        slop = timedelta(days=self._LASTMOD_SLOP_DAYS)
+        lo, hi = start - slop, end + slop
+        try:
+            resp = requests.get(self._SITEMAP_INDEX, headers=_HEADERS, timeout=30.0)
+            resp.raise_for_status()
+        except Exception as exc:
+            log.warning("CBO sitemap index fetch failed: %s", exc)
+            return
+
+        try:
+            # Strip default-namespace so xpath-like access is simpler
+            index_xml = re.sub(r' xmlns="[^"]+"', "", resp.text, count=1)
+            root = ET.fromstring(index_xml)
+        except ET.ParseError as exc:
+            log.warning("CBO sitemap index parse failed: %s", exc)
+            return
+
+        sub_sitemaps = [sm.findtext("loc", "").strip() for sm in root.findall("sitemap")]
+        sub_sitemaps = [s for s in sub_sitemaps if s]
+        log.info("CBO sitemap index lists %d sub-sitemaps", len(sub_sitemaps))
+
+        for sm_url in sub_sitemaps:
+            try:
+                sm_resp = requests.get(sm_url, headers=_HEADERS, timeout=30.0)
+                sm_resp.raise_for_status()
+            except Exception as exc:
+                log.debug("CBO sub-sitemap %s: %s", sm_url, exc)
+                continue
+            try:
+                sm_xml = re.sub(r' xmlns="[^"]+"', "", sm_resp.text, count=1)
+                sm_root = ET.fromstring(sm_xml)
+            except ET.ParseError as exc:
+                log.debug("CBO sub-sitemap %s parse: %s", sm_url, exc)
+                continue
+            for url_el in sm_root.findall("url"):
+                loc = (url_el.findtext("loc") or "").strip()
+                lastmod_str = (url_el.findtext("lastmod") or "").strip()
+                if not loc or "/publication/" not in loc:
+                    continue
+                # Normalize: drop trailing /html so we hit the canonical URL
+                if loc.endswith("/html"):
+                    loc = loc[:-5]
+                lastmod = None
+                if lastmod_str:
+                    try:
+                        lastmod = date.fromisoformat(lastmod_str[:10])
+                    except ValueError:
+                        pass
+                if lastmod is None or lo <= lastmod <= hi:
+                    yield loc, lastmod
+            time.sleep(0.2)
 
     def _fetch_archive(
         self, start: date, end: date, seen: set[str]
     ) -> Iterator[Article]:
-        """Scrape cbo.gov/publications paginated listing."""
+        """Legacy archive scrape — Drupal listing at cbo.gov/publications.
+
+        Kept as a fallback; expected to fail under DataDome bot protection.
+        """
         page = 0
         past_window = False
         while not past_window:
@@ -975,7 +1315,6 @@ class CBOIngestor(Ingestor):
                 return
 
             soup = BeautifulSoup(resp.text, "lxml")
-            # CBO Drupal listing: items inside .views-row or similar
             rows = (
                 soup.select(".views-row")
                 or soup.select("li.views-row")
@@ -990,14 +1329,13 @@ class CBOIngestor(Ingestor):
                 if not link:
                     continue
                 href = link["href"]
-                url = urljoin("https://www.cbo.gov", href)
+                url = urljoin(self._CBO_BASE, href)
                 title = link.get_text(strip=True)
 
                 date_el = row.find("time") or row.find(class_=lambda c: c and "date" in c.lower() if c else False)
                 date_text = date_el.get("datetime", "") or (date_el.get_text(strip=True) if date_el else "")
                 pub_date = _parse_date_flexible(date_text)
                 if not pub_date:
-                    # try to find year in row text
                     pub_date = _parse_year_from_text(row.get_text(" ", strip=True), start, end)
                 if not pub_date:
                     continue
@@ -1707,23 +2045,31 @@ class PIIEIngestor(Ingestor):
 
 
 class CFRIngestor(Ingestor):
-    """Council on Foreign Relations: RSS-based retrieval.
+    """Council on Foreign Relations: sitemap-based historical retrieval.
 
     CFR publishes reports, backgrounders, and expert briefs on global macro-
     financial topics: dollar dynamics, sovereign debt, global monetary policy,
     trade, and geopolitical-financial intersections. Tier 2 per ADR-010.
 
-    Retrieval: RSS feed (cfr.org/feed) with macro-relevance title filter.
-    Historical archive depth is limited by what the feed exposes; the RSS
-    practically covers recent items only and will produce thin coverage
-    for years before the current rolling window. This is documented in
-    methodology as a known coverage asymmetry for CFR specifically.
+    Pre-fix bug (2026-05-13 dry run, 0 articles): the RSS feed at
+    cfr.org/feed exposes only the most recent ~24 items, giving zero
+    coverage for any historical window. Fixed by switching to sitemap-based
+    enumeration of /articles, /backgrounders, /reports — each sitemap is
+    public and lists every URL with a `<lastmod>` date.
+
+    Coverage: sitemaps return ~22,000 articles + ~1,000 backgrounders +
+    ~700 reports as of 2026-05. URL-slug pre-filter on macro keywords
+    avoids fetching every irrelevant article. RSS is retained as a final
+    fallback.
     """
 
     source_id = "cfr"
 
-    # Was https://www.cfr.org/rss/all — 404 as of 2026-05-13.
-    # CFR consolidated their feeds at /feed.
+    _SITEMAP_INDEX = "https://www.cfr.org/sitemap.xml"
+    # CFR-content sitemap sections we ingest. Skipping experts/, events/,
+    # podcasts/, custom-links/, interactive/, explainer-videos/ — these are
+    # not the long-form policy text we embed.
+    _RELEVANT_SECTIONS = ("articles", "backgrounders", "reports")
     _RSS_URL = "https://www.cfr.org/feed"
 
     _MACRO_TERMS = {
@@ -1731,12 +2077,130 @@ class CFRIngestor(Ingestor):
         "exchange rate", "gdp", "recession", "unemployment", "credit", "fiscal",
         "financial", "dollar", "debt", "trade", "currency", "bond", "yield",
         "growth", "economy", "economics", "market", "policy", "capital",
-        "banking", "banking crisis", "treasury", "fed", "global economy",
-        "emerging market", "imf", "world bank", "g20", "g7",
+        "banking", "treasury", "fed", "imf",
+        "tariff", "tax", "stimulus", "deficit", "stagflation", "deflation",
+    }
+
+    # URL slugs are hyphenated lowercase — use a hyphen-aware substring set
+    # so we don't accidentally match too-short tokens. Sourced from the title-
+    # level terms above and trimmed of words with too many false positives
+    # (e.g. bare "market" matches every market-anything slug).
+    _URL_MACRO_TOKENS = {
+        "inflation", "monetary", "interest-rate", "federal-reserve",
+        "central-bank", "exchange-rate", "recession", "unemployment",
+        "fiscal", "dollar", "debt", "currency", "bond", "yield", "economy",
+        "economic", "banking", "treasury", "imf", "tariff", "stimulus",
+        "deficit", "stagflation", "deflation", "trade-war", "trade-deal",
+        "monetary-policy", "world-bank", "g20", "g7", "stocks", "equities",
+        "credit", "mortgage", "housing-market",
     }
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
+        candidates = list(self._enumerate_sitemap_candidates(start, end))
+        log.info("CFR: sitemap enumeration returned %d in-window candidates "
+                 "after URL-slug pre-filter", len(candidates))
+        yielded = 0
+        for url, pub_date in candidates:
+            if url in seen:
+                continue
+            seen.add(url)
+            body, fetched_title, author, page_date = _fetch_page_full(
+                url, min_words=50
+            )
+            published = page_date or pub_date
+            if not published or published < start or published > end:
+                continue
+            title = fetched_title or ""
+            if not title or not self._is_macro_relevant(title):
+                continue
+            if not body or len(body.split()) < 50:
+                continue
+            yield _make_article(
+                source_id=self.source_id,
+                url=url,
+                published_at=published.isoformat() + "T00:00:00Z",
+                title=title,
+                body=body,
+                author=author,
+                section="cfr_publication",
+                tier=2,
+                document_type="cfr_brief",
+            )
+            yielded += 1
+            time.sleep(0.5)
+
+        if yielded == 0:
+            log.info("CFR: 0 articles from sitemap path — falling back to RSS")
+            yield from self._fetch_rss(start, end, seen)
+
+    def _enumerate_sitemap_candidates(
+        self, start: date, end: date
+    ) -> Iterator[tuple[str, date | None]]:
+        """Walk the CFR sitemap index, yielding (url, lastmod) for URLs in
+        relevant sections with a macro-keyword in the slug and lastmod in
+        the requested window.
+        """
+        try:
+            resp = requests.get(self._SITEMAP_INDEX, headers=_HEADERS, timeout=30.0)
+            resp.raise_for_status()
+        except Exception as exc:
+            log.warning("CFR sitemap index fetch failed: %s", exc)
+            return
+
+        try:
+            index_xml = re.sub(r' xmlns="[^"]+"', "", resp.text, count=1)
+            root = ET.fromstring(index_xml)
+        except ET.ParseError as exc:
+            log.warning("CFR sitemap index parse failed: %s", exc)
+            return
+
+        sub_sitemaps = [sm.findtext("loc", "").strip() for sm in root.findall("sitemap")]
+        relevant = [
+            s for s in sub_sitemaps
+            if any(f"/{section}/" in s for section in self._RELEVANT_SECTIONS)
+        ]
+        log.info("CFR sitemap index lists %d sub-sitemaps; %d relevant",
+                 len(sub_sitemaps), len(relevant))
+
+        for sm_url in relevant:
+            try:
+                sm_resp = requests.get(sm_url, headers=_HEADERS, timeout=30.0)
+                sm_resp.raise_for_status()
+            except Exception as exc:
+                log.debug("CFR sub-sitemap %s: %s", sm_url, exc)
+                continue
+            try:
+                sm_xml = re.sub(r' xmlns="[^"]+"', "", sm_resp.text, count=1)
+                sm_root = ET.fromstring(sm_xml)
+            except ET.ParseError as exc:
+                log.debug("CFR sub-sitemap %s parse: %s", sm_url, exc)
+                continue
+            section_count = 0
+            section_yielded = 0
+            for url_el in sm_root.findall("url"):
+                section_count += 1
+                loc = (url_el.findtext("loc") or "").strip()
+                if not loc:
+                    continue
+                # NOTE: CFR's sitemap lastmod is the sitemap-build date (all
+                # 2026-XX-XX as of 2026-05) — not the publication date. We
+                # drop the lastmod window check and rely on the page-level
+                # date extracted by _fetch_page_full to filter into window.
+                # The URL-slug pre-filter does the heavy lifting (drops ~92%
+                # of articles before fetch).
+                slug = loc.rsplit("/", 1)[-1].lower()
+                if not any(tok in slug for tok in self._URL_MACRO_TOKENS):
+                    continue
+                section_yielded += 1
+                yield loc, None
+            log.info("CFR sitemap %s: scanned %d urls, %d macro-slug candidates",
+                     sm_url.rsplit("/", 2)[-2], section_count, section_yielded)
+            time.sleep(0.3)
+
+    def _fetch_rss(
+        self, start: date, end: date, seen: set[str]
+    ) -> Iterator[Article]:
         for entry in _parse_rss(self._RSS_URL):
             pub_date = _entry_date(entry)
             if not pub_date or pub_date < start or pub_date > end:
@@ -1809,15 +2273,28 @@ class CongressionalIngestor(Ingestor):
     # Maximum number of listing pages to scan when paginating backward to a
     # historical window. Treasury press releases run ~5–10 per day; 2010-2025
     # covers ~50,000 releases at ~20 per listing page, so 2500 pages is the
-    # theoretical worst case. We cap at 600 (≈12,000 releases ≈ 3-4 years of
-    # Sec-Statements traffic) to avoid runaway loops on misconfigured calls.
-    # Restricting to category=Secretary Statements & Remarks reduces traffic
-    # by ~80%, so 600 pages covers well over a decade of testimony.
-    _MAX_LISTING_PAGES = 600
+    # theoretical worst case. We cap at 1200 (≈19,000 releases) to give
+    # comfortable headroom for a full 2010-present sweep while still bounding
+    # runaway loops on misconfigured calls. Restricting to
+    # category=Secretary Statements & Remarks reduces traffic significantly.
+    _MAX_LISTING_PAGES = 1200
     _LISTING_ROW_DATE_RE = re.compile(
         r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
         r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
         r"\s+\d{1,2},\s+\d{4}\b"
+    )
+
+    # Match both the legacy short-slug pattern (sb0498, jy0001) and the modern
+    # slug-path patterns Treasury introduced for statements / testimonies /
+    # readouts in 2024+.
+    _PRESS_RELEASE_HREF_RE = re.compile(
+        r"^/news/press-releases/("
+        r"[a-zA-Z]{2}\d+"                              # sb0498, jy0001 (legacy)
+        r"|statements/[a-zA-Z0-9-]+"                   # /statements/<slug>
+        r"|testimonies/[a-zA-Z0-9-]+"                  # /testimonies/<slug>
+        r"|readouts/[a-zA-Z0-9-]+"                     # /readouts/<slug>
+        r"|remarks/[a-zA-Z0-9-]+"                      # /remarks/<slug>
+        r")"
     )
 
     def _fetch_treasury_testimony(
@@ -1830,12 +2307,22 @@ class CongressionalIngestor(Ingestor):
         newest-first ordering. To reach a historical window we therefore must
         paginate backward until the rows on a page are older than `start`.
 
-        Per-row dates are present in the listing HTML next to each release
-        title (e.g. "May 11, 2026 Economic Fury Ramps Up..."), so we filter
-        on those before fetching individual article pages — avoiding one HTTP
-        request per out-of-window release.
+        Per-row dates come from the `<time datetime=...>` element rendered next
+        to each release title — preferred when present, with a text-regex
+        fallback for older listing layouts. We filter on these before fetching
+        individual article pages — avoiding one HTTP request per out-of-window
+        release.
+
+        Pre-fix bug (2026-05-13 dry run, 0 articles for 2024 window): the
+        regex only matched `[a-zA-Z]{2}\\d+` slugs (e.g. sb0498), missing
+        modern `/statements/<slug>`, `/testimonies/<slug>`, `/readouts/<slug>`
+        URL forms. The relevance filter additionally hardcoded the Bessent-era
+        "Economic Fury" branding as an exclusion, which dropped legitimate
+        macro-financial Secretary remarks. Both fixed below.
         """
         consecutive_no_match_pages = 0
+        total_yielded = 0
+        page_one_links = 0
         for page in range(self._MAX_LISTING_PAGES):
             params: dict = {"category": "Secretary Statements & Remarks"}
             # The date filter params don't filter server-side, but submitting
@@ -1852,29 +2339,51 @@ class CongressionalIngestor(Ingestor):
                     timeout=30.0,
                 )
                 if resp.status_code in (403, 404):
-                    log.debug("Treasury listing page %d: HTTP %d", page, resp.status_code)
+                    log.error("Treasury listing page %d: HTTP %d — aborting", page, resp.status_code)
                     return
                 resp.raise_for_status()
             except Exception as exc:
-                log.warning("Treasury listing page %d: %s", page, exc)
+                log.error("Treasury listing page %d: %s — aborting", page, exc)
                 return
 
             soup = BeautifulSoup(resp.text, "lxml")
             release_links = [
                 a for a in soup.find_all("a", href=True)
-                if re.match(r"^/news/press-releases/[a-zA-Z]{2}\d+", a["href"])
+                if self._PRESS_RELEASE_HREF_RE.match(a["href"])
                 and len(a.get_text(strip=True)) > 15
             ]
 
+            if page == 0:
+                page_one_links = len(release_links)
+                if page_one_links == 0:
+                    # Layout shift: regex no longer matches anything. Fail
+                    # loudly rather than silently returning 0 articles.
+                    log.error(
+                        "Treasury listing page 0: 0 release links matched "
+                        "_PRESS_RELEASE_HREF_RE. Treasury layout may have "
+                        "changed — broken silently on prior dry runs."
+                    )
+                    return
+                log.info("Treasury listing: page 0 = %d release links", page_one_links)
+
             if not release_links:
-                log.debug("Treasury listing page %d: no release links — stopping", page)
+                log.info("Treasury listing page %d: no release links — stopping", page)
                 break
 
-            # Resolve each link's date from the surrounding listing row.
+            # Resolve each link's date — prefer <time datetime=...>, fall back
+            # to the surrounding-text regex for older listings.
             rows = [self._extract_row_date(link) for link in release_links]
             valid_dates = [d for d in rows if d is not None]
             oldest = min(valid_dates) if valid_dates else None
             newest = max(valid_dates) if valid_dates else None
+
+            if page == 0 and not valid_dates:
+                log.error(
+                    "Treasury listing page 0: 0 dates extracted from %d "
+                    "release rows. Date selector broken — aborting.",
+                    page_one_links,
+                )
+                return
 
             page_matches = 0
             for link, row_date in zip(release_links, rows):
@@ -1900,6 +2409,7 @@ class CongressionalIngestor(Ingestor):
                 if published < start or published > end:
                     continue
                 page_matches += 1
+                total_yielded += 1
 
                 yield _make_article(
                     source_id=self.source_id,
@@ -1913,6 +2423,14 @@ class CongressionalIngestor(Ingestor):
                     document_type="congressional_testimony",
                 )
                 time.sleep(1.0)
+
+            log.info(
+                "Treasury listing page %d: links=%d in-window=%d yielded=%d "
+                "(rows: oldest=%s newest=%s)",
+                page, len(release_links),
+                sum(1 for d in rows if d is not None and start <= d <= end),
+                page_matches, oldest, newest,
+            )
 
             # Stop once we've paginated past the requested window.
             if oldest is not None and oldest < start:
@@ -1938,32 +2456,47 @@ class CongressionalIngestor(Ingestor):
                 consecutive_no_match_pages = 0
 
             # Defer to Drupal's own "next page" link as the canonical stop
-            # signal if present.
-            next_link = soup.select_one("a[title='Next page'], .pager__item--next a")
+            # signal. Treasury renders title="Go to next page" (not "Next
+            # page" — that was the historical Drupal default), so we check
+            # both plus rel="next" as a final fallback.
+            next_link = soup.select_one(
+                "a[rel='next'], a[title='Go to next page'], "
+                ".pager__item--next a, a[title='Next page']"
+            )
             if not next_link:
-                log.debug("Treasury listing page %d: no next page — stopping", page)
+                log.info("Treasury listing page %d: no next page link — stopping", page)
                 break
             time.sleep(0.5)
         else:
             log.warning("Treasury listing: hit MAX_LISTING_PAGES=%d before crossing start=%s",
                         self._MAX_LISTING_PAGES, start)
 
-    def _extract_row_date(self, link) -> date | None:
-        """Find the date string nearest to a release link in the listing HTML.
+        log.info("Treasury listing: total yielded = %d", total_yielded)
 
-        Listing rows look like:
-            <some container>
-              <time/date span> May 11, 2026 </>
-              <a href="/news/press-releases/sb0498"> Title... </a>
-            </>
-        We walk up at most 4 ancestors looking for a Month D, YYYY string,
-        which is the per-row date Treasury renders.
+    def _extract_row_date(self, link) -> date | None:
+        """Find the publication date for a release link in the listing HTML.
+
+        Modern listings (2024+) render a `<time datetime="2026-05-11T...">`
+        element next to each release. We prefer that when present (most
+        reliable), falling back to a text-regex over up to 4 ancestor nodes
+        for older layouts.
         """
+        # Walk up to 4 ancestors looking for a sibling/child <time> element.
         node = link
         for _ in range(4):
             node = node.parent if node else None
             if node is None:
                 break
+            time_el = node.find("time", attrs={"datetime": True})
+            if time_el:
+                dt_str = time_el.get("datetime", "")
+                # ISO-8601: YYYY-MM-DDTHH:MM:SSZ — date.fromisoformat handles
+                # the date prefix even if a 'T...' suffix follows in newer pys,
+                # but we slice to be defensive across Python versions.
+                try:
+                    return date.fromisoformat(dt_str[:10])
+                except ValueError:
+                    pass
             text = node.get_text(" ", strip=True)
             m = self._LISTING_ROW_DATE_RE.search(text)
             if m:
@@ -1978,18 +2511,33 @@ class CongressionalIngestor(Ingestor):
         confirmation hearings, Treasury-led economic conferences).
 
         Treasury's Secretary Statements & Remarks category mixes congressional
-        testimony with conference remarks. We previously matched only the
-        narrow testimony vocabulary; the broader filter below keeps the
-        narrative-relevant content while still excluding pure sanctions
-        announcements and lower-level official press releases.
+        testimony with conference remarks. The filter keeps the
+        narrative-relevant content while excluding lower-level official press
+        releases and pure foreign-actor sanctions announcements.
+
+        Pre-fix bug (2026-05-13): the filter hardcoded "economic fury" as an
+        exclusion. "Economic Fury" is Treasury's policy-branding label under
+        Bessent (2025+) — it appears on releases that ARE macro-financial
+        discourse (Iran oil sanctions framing, banking penalties, etc.). The
+        narrower sanctions-only filter below preserves the foreign-policy
+        actor-targeting exclusion while keeping the macro framing content.
         """
         tl = title.lower()
         # Exclude lower-level officials — Tier-1 ingestion is Secretary-level
         if re.search(r"\bunder ?secretary\b|\bassistant secretary\b|\bdeputy\b", tl):
             return False
-        # Exclude pure sanctions announcements ("Treasury Sanctions...")
-        # which are policy actions, not narrative-formation discourse.
-        if re.search(r"\btreasury sanctions\b|\beconomic fury\b", tl):
+        # Exclude foreign-actor sanctions announcements only when no other
+        # macro-financial term is present — keeps "Sanctions Test Iran Oil
+        # Market Outlook" but drops "Treasury Sanctions Five IRGC Operatives".
+        is_sanctions = bool(
+            re.search(r"\btreasury sanctions\b|\bsanctions\b|\bdisrupts\b", tl)
+        )
+        macro_signal_terms = (
+            "monetary policy", "inflation", "fiscal", "debt", "economy",
+            "economic outlook", "treasury market", "financial stability",
+            "interest rate", "recession", "growth", "gdp", "banking",
+        )
+        if is_sanctions and not any(t in tl for t in macro_signal_terms):
             return False
         relevant_terms = (
             # Testimony / congressional appearances
@@ -2000,6 +2548,9 @@ class CongressionalIngestor(Ingestor):
             "remarks by", "statement by", "secretary",
             "monetary policy", "inflation", "fiscal", "debt", "economy",
             "economic outlook", "treasury market", "financial stability",
+            # Broader macro-financial discourse (Bessent era + earlier)
+            "interest rate", "recession", "growth", "banking", "credit",
+            "tariff", "trade", "currency", "dollar", "tax",
         )
         return any(term in tl for term in relevant_terms)
 
@@ -2031,12 +2582,12 @@ class InstitutionalIngestor(Ingestor):
             FederalReserveIngestor(),
             FedRegionalIngestor(),
             CongressionalIngestor(),
-            # IMFIngestor disabled for historical runs as of 2026-05-14:
-            # all hardcoded URLs and API endpoints land on /en/errors/404.
-            # See IMFIngestor docstring for diagnostic notes. Reinstate once
-            # a working retrieval path (Next.js _next/data SSG or homepage
-            # __NEXT_DATA__ scrape) is implemented.
-            # IMFIngestor(),
+            # IMFIngestor re-enabled 2026-05-17 with experimental Next.js
+            # __NEXT_DATA__ + _next/data retrieval path. The static URL
+            # tables in IMFIngestor are kept as a fallback. If both paths
+            # return 0 articles on RCC, the composite ingestor marks IMF as
+            # failed and continues — no chain breakage.
+            IMFIngestor(),
             BISIngestor(),
             TreasuryOFRIngestor(),
             CBOIngestor(),

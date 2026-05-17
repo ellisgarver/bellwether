@@ -32,11 +32,14 @@
 #
 # Resource spec:
 #   Account:   pi-dachxiu
-#   GPU:       1x V100 (constraint=v100)
-#              Qwen3-0.6B at 32,768 tokens: ~16-32 GB per batch — fits V100 (32 GB)
+#   GPU:       1x V100 16GB (constraint=v100)
+#              Qwen3-0.6B at max_seq_len=1024, batch=8, fp16: < 6 GB working set
 #              all-mpnet-base-v2 at 384 tokens: < 2 GB — trivially fits
+#              (Job 49622334 OOMed on 2026-05-13 at the prior config of seq=2048 +
+#              batch=32: caused 16 GB causal-mask + KV-cache allocation. Config is
+#              now batch=8 + seq=1024; see config/config.yaml comments.)
 #   CPUs:      8
-#   RAM:       32 GB  (bumped from 16 for Qwen3 full-context batching)
+#   RAM:       32 GB
 #   Time:      12 h   (Qwen3 primary ~5-8 h; mpnet comparator ~2 h on V100)
 #
 # All output in /scratch/midway3/ehgarver/ — never in PI project folder.
@@ -72,8 +75,10 @@ echo "Python: $PYTHON_USED"
 export USE_TF=0
 export KERAS_BACKEND=torch
 export MND_EMBEDDING_DEVICE=cuda
-# MND_MAX_SEQ_LEN not set → config default (32768 for Qwen3 on CUDA)
-# mpnet comparator uses its own max_seq_len (384) regardless of this variable
+# Reduce VRAM fragmentation. The torch hint from the prior OOM error.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# MND_MAX_SEQ_LEN not set → config default (1024 for Qwen3, lowered from 2048
+# after 2026-05-13 OOM). mpnet comparator uses its own max_seq_len (384).
 
 ROLE="${ROLE:-primary}"
 
