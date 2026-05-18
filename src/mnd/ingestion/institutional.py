@@ -195,11 +195,17 @@ def _parse_date_flexible(text: str) -> date | None:
 
 
 def _fetch_page_full(
-    url: str, *, min_words: int = 30
+    url: str, *, min_words: int = 30, getter=None,
 ) -> tuple[str, str, str | None, date | None]:
-    """Fetch url; return (body_text, title, author, pub_date). Empty/None on failure."""
+    """Fetch url; return (body_text, title, author, pub_date). Empty/None on failure.
+
+    ``getter`` defaults to module-level _get (stdlib requests + retries). Pass a
+    custom callable for sources behind TLS-fingerprint bot protection (e.g.
+    CBO behind DataDome — see CBOIngestor._cbo_get).
+    """
+    fetch = getter if getter is not None else _get
     try:
-        resp = _get(url, timeout=30.0)
+        resp = fetch(url, timeout=30.0)
     except Exception as exc:
         log.debug("Fetch failed %s: %s", url, exc)
         return "", "", None, None
@@ -923,9 +929,13 @@ class FedRegionalIngestor(Ingestor):
             if not body or len(body.split()) < 50:
                 continue
 
-            # Prefer trafilatura's parsed date; fall back to year-start
-            pub_date = date(year, 1, 1)
-            if meta_date and start <= meta_date <= end:
+            # URL year is reliable (Chicago Fed Letter is letter-numbered by year).
+            # trafilatura's meta_date sometimes returns the page-modified date
+            # (today) instead of publication date — accept it only when it
+            # agrees with the URL year, otherwise mid-year is a safer fallback
+            # than Jan 1 for weekly aggregation.
+            pub_date = date(year, 6, 15)
+            if meta_date and meta_date.year == year:
                 pub_date = meta_date
 
             if pub_date < start or pub_date > end:
@@ -989,22 +999,22 @@ class FedRegionalIngestor(Ingestor):
 class CBOIngestor(Ingestor):
     """Congressional Budget Office publications.
 
-    Pre-fix bug (2026-05-13 dry run, 0 articles): the listing scraper at
-    cbo.gov/publications relied on Drupal-CSS selectors (.views-row etc.)
-    that were stale, and the listing endpoint is now behind DataDome bot
-    protection (returns a 403 + JS-challenge HTML to any non-browser UA).
-    The RSS fallback hits the same bot wall.
+    Network: every cbo.gov publication-page fetch goes through
+    ``curl_cffi.requests`` with ``impersonate='chrome131'``. cbo.gov sits
+    behind DataDome bot protection that fingerprints TLS (JA3/JA4) and 403s
+    stdlib `requests` regardless of UA — the same class of issue ADR-014
+    solved for imf.org behind Akamai. The 2026-05-18 production run with
+    stdlib requests yielded 0 publications out of 25,403 candidate URLs
+    (every fetch 403'd from the RCC IP range, despite an earlier dry-run
+    succeeding before DataDome tightened its policy).
 
-    Post-fix path: cbo.gov's sitemap.xml is NOT bot-protected (returns 200
-    from any UA). It indexes every publication URL with a `<lastmod>` date.
-    We walk the sitemap index to enumerate candidate publication URLs in
-    the requested window, then fetch each publication page directly. The
-    publication detail pages are accessible from RCC (university IP); on
-    residential IPs they 403, so this ingestor is RCC-only for historical
-    runs.
+    Listing path: cbo.gov's sitemap.xml is NOT bot-protected and returns
+    200 from any UA. We walk the sitemap index to enumerate candidate
+    publication URLs in the requested window, then fetch each publication
+    page via curl_cffi.
 
     `lastmod` is the last-edit date, not publication date — CBO occasionally
-    edits prior publications. We add a ±180-day slop to the window when
+    edits prior publications. We add a ±365-day slop to the window when
     filtering by lastmod, then re-validate the publication date extracted
     from the page itself (which is the source of truth for `published_at`).
     """
@@ -1015,6 +1025,51 @@ class CBOIngestor(Ingestor):
     _LIST_URL = "https://www.cbo.gov/publications"
     _RSS_URL = "https://www.cbo.gov/publication/rss"
     _CBO_BASE = "https://www.cbo.gov"
+
+    # Full Chrome navigation header set + curl_cffi TLS fingerprint together
+    # defeat DataDome's bot filter. UA alone or TLS alone is rejected.
+    _CBO_HEADERS: dict = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/avif,image/webp,image/apng,*/*;q=0.8"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"macOS"',
+    }
+
+    @classmethod
+    def _cbo_get(cls, url: str, **kwargs):
+        """HTTP GET impersonating Chrome's TLS+HTTP/2 fingerprint for cbo.gov.
+
+        Falls back to stdlib requests if curl_cffi isn't installed; that fallback
+        will reliably 403 from RCC, which is intentional — the failure surfaces
+        loudly rather than producing another silent 0-yield run.
+        """
+        try:
+            from curl_cffi import requests as cffi_requests
+            kwargs.setdefault("impersonate", "chrome131")
+            kwargs.setdefault("headers", cls._CBO_HEADERS)
+            return cffi_requests.get(url, **kwargs)
+        except ImportError:
+            log.error(
+                "curl_cffi not installed; CBO fetches will 403 from DataDome. "
+                "Install with `pip install curl_cffi` (see requirements.txt)."
+            )
+            kwargs.setdefault("headers", cls._CBO_HEADERS)
+            return requests.get(url, **kwargs)
 
     _KEEP_KEYWORDS = {
         "budget and economic outlook", "economic outlook", "working paper",
@@ -1045,7 +1100,7 @@ class CBOIngestor(Ingestor):
                 continue
             seen.add(url)
             try:
-                resp = requests.get(url, headers=_HEADERS, timeout=30.0)
+                resp = self._cbo_get(url, timeout=30.0)
                 if resp.status_code in (403, 404):
                     log.debug("CBO %s: HTTP %d — skipping", url, resp.status_code)
                     continue
@@ -1055,7 +1110,7 @@ class CBOIngestor(Ingestor):
                 continue
 
             body, fetched_title, _author, page_date = _fetch_page_full(
-                url, min_words=50
+                url, min_words=50, getter=self._cbo_get,
             )
             # Fall back to lastmod ONLY if page date missing — better than dropping
             published = page_date or _lastmod
@@ -1103,7 +1158,7 @@ class CBOIngestor(Ingestor):
         slop = timedelta(days=self._LASTMOD_SLOP_DAYS)
         lo, hi = start - slop, end + slop
         try:
-            resp = requests.get(self._SITEMAP_INDEX, headers=_HEADERS, timeout=30.0)
+            resp = self._cbo_get(self._SITEMAP_INDEX, timeout=30.0)
             resp.raise_for_status()
         except Exception as exc:
             log.warning("CBO sitemap index fetch failed: %s", exc)
@@ -1123,7 +1178,7 @@ class CBOIngestor(Ingestor):
 
         for sm_url in sub_sitemaps:
             try:
-                sm_resp = requests.get(sm_url, headers=_HEADERS, timeout=30.0)
+                sm_resp = self._cbo_get(sm_url, timeout=30.0)
                 sm_resp.raise_for_status()
             except Exception as exc:
                 log.debug("CBO sub-sitemap %s: %s", sm_url, exc)
@@ -1163,10 +1218,9 @@ class CBOIngestor(Ingestor):
         past_window = False
         while not past_window:
             try:
-                resp = requests.get(
+                resp = self._cbo_get(
                     self._LIST_URL,
                     params={"page": page},
-                    headers=_HEADERS,
                     timeout=30.0,
                 )
                 if resp.status_code == 403:
@@ -1597,19 +1651,24 @@ class SSRNIngestor(Ingestor):
 
 
 class VoxEUIngestor(Ingestor):
-    """VoxEU / CEPR columns: date-filtered archive search.
+    """VoxEU / CEPR columns: date-filtered archive search, sharded by year.
 
-    Uses the date-range filter on ``cepr.org/voxeu/search-all-columns``
-    (``date[min]``/``date[max]`` GET params in YYYY-MM-DD format).  This gives
-    access to the full archive from 2007 to present, not just the recent RSS
-    window.  Each result page returns 12 articles; we paginate until all pages
-    are consumed.
+    Hits the date-range filter on ``cepr.org/voxeu/search-all-columns``
+    (``date[min]``/``date[max]`` GET params in YYYY-MM-DD format). The search
+    sorts newest-first; for the full 2010-present window a single date range
+    produces hundreds of pages and reliably times out somewhere past page ~400.
+    The prior implementation swallowed that timeout and reported the source
+    "completed" with only the 2019-present columns captured (9 years lost).
+
+    Fix: shard the search by year. Each year has ~250-500 columns → ~30-50
+    pages, well under the timeout threshold. Recovers the historical archive.
     """
 
     source_id = "voxeu"
 
     _SEARCH_URL = "https://cepr.org/voxeu/search-all-columns"
     _BASE = "https://cepr.org"
+    _PAGE_TIMEOUT = 60.0
 
     # Macro-relevance terms for VoxEU pre-filter (loose — most VoxEU columns
     # are economics; this just excludes pure health/education posts)
@@ -1623,6 +1682,16 @@ class VoxEUIngestor(Ingestor):
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
+        for year in range(start.year, end.year + 1):
+            year_start = max(start, date(year, 1, 1))
+            year_end = min(end, date(year, 12, 31))
+            if year_start > year_end:
+                continue
+            yield from self._fetch_year(year_start, year_end, seen)
+
+    def _fetch_year(
+        self, start: date, end: date, seen: set[str]
+    ) -> Iterator[Article]:
         page = 0
         while True:
             params = {
@@ -1631,16 +1700,22 @@ class VoxEUIngestor(Ingestor):
                 "page": page,
             }
             try:
-                resp = requests.get(self._SEARCH_URL, params=params, headers=_HEADERS, timeout=30.0)
+                resp = requests.get(
+                    self._SEARCH_URL, params=params, headers=_HEADERS,
+                    timeout=self._PAGE_TIMEOUT,
+                )
                 resp.raise_for_status()
             except Exception as exc:
-                log.warning("VoxEU search page %d: %s", page, exc)
-                break
+                log.warning(
+                    "VoxEU search shard %s..%s page %d: %s — moving to next shard",
+                    start, end, page, exc,
+                )
+                return
 
             soup = BeautifulSoup(resp.text, "lxml")
             articles = soup.select("article.c-card")
             if not articles:
-                break
+                return
 
             for art in articles:
                 link = art.find("a", href=True)
@@ -1690,9 +1765,9 @@ class VoxEUIngestor(Ingestor):
             if last_link:
                 m = re.search(r"page=(\d+)", last_link.get("href", ""))
                 if m and page >= int(m.group(1)):
-                    break
+                    return
             elif len(articles) < 12:
-                break  # incomplete page = last page
+                return  # incomplete page = last page
 
             page += 1
             time.sleep(1.0)
