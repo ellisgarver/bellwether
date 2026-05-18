@@ -18,6 +18,15 @@
 # Set NUKE_PRIOR=1 to *delete* instead of archive. Set SKIP_CLEANUP=1 to keep
 # everything as-is (e.g. for ingestion-resume runs that use the checkpoint).
 #
+# IMPORTANT — stale-checkpoint pitfall (incident 2026-05-17/18):
+# Default mode archives data/processed and logs but PRESERVES data/raw/
+# (including .institutional_checkpoint.json). If the prior checkpoint marks
+# sub-ingestors "completed" from a smaller-window run (e.g. a 2024-only
+# dry-run), the new run will SKIP those sub-ingestors silently — producing
+# an incomplete corpus with no error. For any window change or after a
+# dry-run, run with NUKE_RAW=1 so data/raw/ is archived too. Recovery is
+# free: NUKE_RAW=1 still ARCHIVES (does not delete) unless NUKE_PRIOR=1.
+#
 # Usage from Midway3 login node:
 #   cd /scratch/midway3/ehgarver/macro-narrative-dynamics
 #   bash scripts/rcc/submit_full_pipeline.sh

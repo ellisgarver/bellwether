@@ -18,6 +18,7 @@ architectural decisions are in `docs/handoff_to_claude_code.md` and
 - ProQuest, Factiva, Bloomberg, AP News, Reuters, MarketWatch are NOT semantic corpus sources — do not reinstate without a new ADR. (AP News and Reuters were removed in ADR-010, 2026-05-11.)
 - arXiv and Jackson Hole (separate ingestor) are NOT active sources — removed in ADR-012, 2026-05-13. arXiv had 2017-only coverage; Jackson Hole speeches are captured by FederalReserveIngestor.
 - **IMF runs on RCC via curl_cffi + Coveo (ADR-014, 2026-05-17)** — imf.org is fronted by Akamai (not Cloudflare); the 403 ADR-013 attributed to an IP block was actually a TLS fingerprint (JA3) reject of stdlib `requests`. `IMFIngestor._imf_get` uses `curl_cffi.requests` with `impersonate='chrome131'` (verified 200 from RCC, T-Mobile cellular, and eduroam). Listing comes from the public Coveo Search endpoint (`imfproduction561s308u.org.coveo.com/rest/search/v2`); the old Sitecore JSS `_walk_publications` was replaced by series-keyed URL-prefix queries (`weo`, `gfsr`, `fandd`, `wp`, `blog`). `IMFIngestor()` is back in `InstitutionalIngestor._sub_ingestors`; no local-rsync needed. `curl_cffi==0.15.0` is in `requirements.txt` and must be installed in the RCC conda env (`mnd`).
+- **After any dry-run, window change, or schema change, re-submit `submit_full_pipeline.sh` with `NUKE_RAW=1`.** Default archive mode does NOT touch `data/raw/` — including `.institutional_checkpoint.json`. A stale checkpoint from a smaller-window prior run will silently SKIP sub-ingestors marked "completed" in that prior context, producing an incomplete corpus. This bit us on 2026-05-17/18: job 49737806 was submitted with default args, loaded the May-13 2024-dry-run checkpoint, and skipped Fed/FedRegional/BIS/Treasury/OFR/VoxEU/Brookings/PIIE with 2024-only counts. Cancelled and re-submitted as job 49740251 with `NUKE_RAW=1`. The script ARCHIVES (not deletes) under archive mode, so prior data is recoverable.
 - Any deviation from the above requires a new ADR in `docs/architecture_decisions.md` first.
 
 ## Communication style
@@ -48,8 +49,8 @@ modify pilot code. Resume instructions below are retained for reference only.
 
 - [x] Phase 0 — scaffold, configs, anchor set, ingestors, embedding module
 - [x] Phase 1 — filtering, dedup, clustering, dynamics, stages, validation, CLI
-- [ ] Phase 2 — full ingestion 2010–present (institutional Tiers 1–2 + CFR + RavenPack dynamics layer; journalism tier removed per ADR-010)
-- [ ] Phase 3 — full corpus embedding (Qwen3 primary + mpnet comparator look-ahead check, ADR-011), dynamics fitting
+- [/] Phase 2 — full ingestion 2010–2026 RUNNING on RCC since 2026-05-18 00:11 CDT (jobs 49740251–49740257: ingest → filter-pre-embed → filter → embed primary + comparator → cluster). Fresh chain after the 2026-05-17 stale-checkpoint incident; institutional Tiers 1–2 + CFR; RavenPack dynamics layer separate; journalism tier removed per ADR-010.
+- [/] Phase 3 — full corpus embedding chained behind Phase 2 (Qwen3 primary + mpnet comparator look-ahead check, ADR-011)
 - [ ] Phase 4 — pre-registration finalized, full anchor + fizzled validation
 - [ ] Phase 5 — Streamlit dashboard, Hugging Face Spaces deploy
 - [ ] Phase 6 — weekly cron update pipeline (AP News RSS + RavenPack live)
