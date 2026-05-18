@@ -1,10 +1,11 @@
 """Article ingestion sources.
 
-Semantic corpus sources (Tiers 1–2, per ADR-010 / ADR-012):
+Semantic corpus sources (Tiers 1–2, per ADR-010 / ADR-012 / ADR-014):
   InstitutionalIngestor — composite: Federal Reserve (FOMC, speeches incl.
                           Jackson Hole, Beige Book, FEDS Notes, MPR, FSR),
-                          Regional Feds, IMF, BIS, CBO, Treasury/OFR,
-                          Congressional testimony, VoxEU, Brookings, PIIE, CFR.
+                          Regional Feds, IMF (Coveo + curl_cffi, ADR-014),
+                          BIS, CBO, Treasury/OFR, Congressional testimony,
+                          VoxEU, Brookings, PIIE, CFR.
                           NBER and SSRN remain in the codebase for Phase 6
                           live RSS but are excluded from historical runs.
 
@@ -15,17 +16,23 @@ Detection layer (story counts only, no text):
   Media Cloud — see src/mnd/detection/mediacloud.py
 
 Removed sources (do not reinstate without a new ADR):
-  ADR-010: AP News, Reuters, MarketWatch (journalism tier)
+  ADR-010: AP News, Reuters, MarketWatch (journalism tier — replaced by
+           the RavenPack dynamics layer for journalism propagation signal).
   ADR-012: arXiv (2017-only coverage), separate Jackson Hole ingestor
-           (covered by FederalReserveIngestor)
+           (covered by FederalReserveIngestor).
   Archived code lives under scripts/archive/.
+
+WaybackIngestor (src/mnd/ingestion/wayback.py) is retained on disk for
+reference only. It discovered free-outlet article URLs for the now-archived
+journalism tier and reads whitelist keys that no longer exist; not imported
+here. Do not re-add to active flow without restoring the journalism tier
+(which requires a new ADR superseding ADR-010).
 """
 
 from mnd.ingestion.base import Article, Ingestor
 from mnd.ingestion.fed import FederalReserveIngestor
 from mnd.ingestion.fred import FredFetcher
 from mnd.ingestion.trafilatura_fetcher import fetch_free_outlet_bodies
-from mnd.ingestion.wayback import WaybackIngestor
 from mnd.ingestion.institutional import InstitutionalIngestor
 
 __all__ = [
@@ -34,6 +41,5 @@ __all__ = [
     "FederalReserveIngestor",
     "FredFetcher",
     "InstitutionalIngestor",
-    "WaybackIngestor",
     "fetch_free_outlet_bodies",
 ]

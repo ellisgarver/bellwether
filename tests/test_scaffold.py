@@ -36,10 +36,10 @@ def test_embedding_two_model_strategy():
     assert "comparator" in cfg["embedding"]
     assert cfg["embedding"]["primary"]["model"].startswith("Qwen/Qwen3-Embedding")
     assert cfg["embedding"]["primary"]["dimensions"] == 1024
-    # max_seq_len was 32768 (model native max); reduced to 2048 after the
-    # 2026-05-13 V100-16GB OOM. Headroom over the 600-token chunker output
-    # is still 3.4x. See config.yaml for full rationale.
-    assert cfg["embedding"]["primary"]["max_seq_len"] == 2048
+    # max_seq_len reduced 2048 → 1024 in ADR-013 after a second V100-16GB OOM
+    # at (batch=32, seq=2048, fp16). 1024 still gives 1.7x headroom over the
+    # 600-BPE-token chunker output. See config.yaml for full rationale.
+    assert cfg["embedding"]["primary"]["max_seq_len"] == 1024
     assert "mpnet" in cfg["embedding"]["comparator"]["model"]
     assert cfg["embedding"]["comparator"]["max_seq_len"] == 384
 
@@ -175,8 +175,8 @@ def test_embedder_factory_produces_correct_config():
     comparator = Embedder.from_config("comparator")
     assert "Qwen3" in primary.model_name
     assert primary.instruction_aware is True
-    # 2048 not 32768 — see config.yaml comment on the OOM-driven reduction.
-    assert primary.max_seq_len == 2048
+    # 1024 per ADR-013 (lowered from 2048 after the second V100-16GB OOM).
+    assert primary.max_seq_len == 1024
     assert "mpnet" in comparator.model_name
     assert comparator.instruction_aware is False
     assert comparator.max_seq_len == 384
