@@ -84,7 +84,11 @@ def _is_retryable(exc: Exception) -> bool:
     wait=wait_random_exponential(multiplier=1, max=30),
     retry=retry_if_exception(_is_retryable),
 )
-def _get(url: str, *, timeout: float = 30.0) -> requests.Response:
+def _get(url: str, *, timeout=30.0) -> requests.Response:
+    # Normalize float timeout to a (connect, read) tuple — see fed.py:_get
+    # for the rationale (TCP-level stalls don't trip single-value timeouts).
+    if isinstance(timeout, (int, float)):
+        timeout = (10.0, float(timeout))
     resp = requests.get(url, headers=_HEADERS, timeout=timeout)
     resp.raise_for_status()
     return resp
