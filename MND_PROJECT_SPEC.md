@@ -571,6 +571,22 @@ data/anchors/anchor_narratives.jsonl                   # anchor narrative ground
 
 **Commit and push discipline:** Every session ends with a commit and push to origin. Confirm remote is up to date before ending any Claude Code session.
 
+**Stale-checkpoint pitfall (operational, learned 2026-05-17/18):**
+`InstitutionalIngestor` writes per-sub-ingestor completion state to
+`data/raw/articles/.institutional_checkpoint.json`. On startup it reads that
+file and SKIPS any sub-ingestor marked `"status": "completed"`. The default
+archive mode of `submit_full_pipeline.sh` does NOT touch `data/raw/`, so a
+checkpoint from a smaller-window prior run (e.g. a 2024-only dry-run with
+Fed=142 articles) silently causes the new run to skip Fed even though the
+new window is 2010-2026. Result: incomplete corpus, no error.
+
+**Rule:** any time the date window changes, or after a dry-run, re-submit
+with `NUKE_RAW=1 bash scripts/rcc/submit_full_pipeline.sh`. That triggers
+the codepath in the script that archives `data/raw/` (including the
+checkpoint) along with `data/processed/`. Nothing is deleted under the
+default `NUKE_PRIOR=0`; everything moves to a timestamped
+`_archived_<TS>/` folder under `/scratch/midway3/ehgarver/data/`.
+
 ---
 
 ## 13. Statistical Reporting Standards
