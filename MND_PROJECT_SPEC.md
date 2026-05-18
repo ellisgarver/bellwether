@@ -221,20 +221,46 @@ No topic filter needed — all Layer 1A sources are macro-relevant by constructi
 
 ### Stage 3: Embedding
 
-**Model: `all-mpnet-base-v2` — currently locked per ADR-006. Read the note below before proceeding.**
+**Two-model strategy (resolved per ADR-011, 2026-05-11):**
 
-**Known limitation — evaluate before running:** all-mpnet-base-v2 has a native maximum sequence length of 384 tokens. The config shows `max_seq_len: 32768` and preprocessing truncates to headline + first 600 tokens, but the model silently caps at 384 tokens at inference time regardless of config. For long institutional documents (FOMC minutes at 10,000+ words, BIS articles at 3,000–8,000 words), the embedding is derived from the opening ~280 words of body text — not the substantive content.
+- **Primary (production): `Qwen/Qwen3-Embedding-0.6B`** — 1024-dim, 32,768-token context,
+  instruction-aware, Apache 2.0. Long context is essential for the corpus:
+  FOMC minutes 10–15k words, BIS QR 3–8k, Jackson Hole 8–15k, VoxEU 800–2,500.
+  Ranks at the top of MTEB clustering benchmarks (early 2025).
+  - On RCC: `max_seq_len=1024`, `batch_size=8`, fp16 (V100 16 GB OOM-safe, ADR-013).
+    The 600-BPE-token chunker output fits with 1.7× headroom.
+  - On Apple Silicon (MPS): set `MND_MAX_SEQ_LEN=512` in `.env` to avoid OOM on the
+    attention matrix (ADR-006).
+  - Upgrade path: `Qwen/Qwen3-Embedding-4B` if RCC capacity allows; identical interface.
 
-**If Phase 3 embedding has NOT yet run:** Evaluate switching to `Qwen3-Embedding-0.6B` or a comparable long-context model before committing GPU time. Qwen3-Embedding supports 32,768 token context, ranks significantly above all-mpnet on MTEB clustering benchmarks, and would produce substantially better cluster coherence for the long institutional documents that make up this corpus. The look-ahead concern (Qwen3 training cutoff ~2024) is real but bounded by the mandatory pre/post-2021 sensitivity check. If switching, update `config.yaml` embedding_model field and document as a new ADR.
+- **Comparator (look-ahead sensitivity check only): `all-mpnet-base-v2`** —
+  768-dim, 384-token native context, ~2020–2021 training cutoff. Not used for
+  production clustering. Sole role: run on the 10 anchor narrative sub-corpora
+  (±3 months around each reference date), compute NMI and pairwise silhouette
+  separately for pre-2021 and post-2021 windows, report Δ_NMI(post − pre) for
+  each model.
+  - **Kill criterion:** if Qwen3's Δ_NMI exceeds 0.15 AND mpnet's does not show
+    the same pattern → flag significant look-ahead bias and add caveat to the
+    pre-registration and methodology section. If both models track, look-ahead
+    is bounded by vocabulary stability (the expected result for institutional register).
 
-**If Phase 3 embedding IS already running or complete:** Proceed with all-mpnet. Document the 384-token limitation explicitly in the methodology as a known constraint. Do not re-embed.
+The honest framing: both models have look-ahead exposure on some of the historical
+corpus. Qwen3 has more exposure but also far superior context and representational
+quality. The right response is to measure the exposure, not to assume the weaker
+model is unbiased. The two-model design makes the look-ahead argument formal.
 
 **Embedding procedure:**
-- Truncate input to: headline + first 600 tokens of body text
-- Documents over 2,000 words: split into overlapping 600-token chunks with 100-token overlap; embed each chunk separately
-- Each chunk carries full parent document metadata
-- Store embeddings with chunk-to-document mapping preserved
-- Run on RCC GPU partition
+- Truncate input to: headline + first 600 tokens of body text (chunk-level)
+- Documents over 2,000 words: split into overlapping 600-token chunks with
+  100-token overlap; embed each chunk separately (BPE tokens, tiktoken
+  cl100k_base; `src/mnd/processing/chunker.py`)
+- Each chunk carries full parent document metadata; chunk-to-document mapping
+  preserved in `data/processed/chunks.parquet`
+- For dynamics counting, count by document (not by chunk) — see
+  `chunker.merge_chunk_embeddings`
+- Run on RCC GPU partition (`scripts/rcc/embed_rcc.sh`); the
+  `submit_full_pipeline.sh` chain runs primary and comparator in parallel by
+  default (`COMPARATOR=1`)
 
 ---
 
@@ -351,8 +377,12 @@ Remove any separate Jackson Hole ingestor. These speeches are Fed Chair and gove
 **Issue 3 — AP News and MarketWatch in the processed corpus:**
 These were ingested in Phase 2 but have since been removed from scope. Before embedding (if not yet run): write `scripts/filter_corpus_pre_embed.py` to filter `data/processed/` excluding documents where `source` is `ap_news` or `marketwatch`, output to `data/processed/corpus_for_embedding.jsonl`, report counts before/after. If embedding is already complete: filter by dropping those rows from the embedding matrix before clustering.
 
-**Issue 4 — Embedding model decision:**
-Check whether Phase 3 embedding has run. If not, evaluate switching to a long-context model (see Stage 3 note) before committing GPU time. If switching, create a new ADR.
+**Issue 4 — Embedding model decision:** RESOLVED per ADR-011 (2026-05-11).
+Qwen3-Embedding-0.6B is the primary production model; mpnet is the comparator
+for the formalized look-ahead sensitivity check. See Stage 3 above for the
+full procedure and ADR-013 for the V100 OOM-driven `max_seq_len=1024` /
+`batch_size=8` adjustments. No further evaluation needed before the historical
+RCC run.
 
 ---
 
@@ -428,8 +458,12 @@ Weekly cron job. Pulls past week's documents from all active Layer 1A sources. A
 **Do not change any of these without creating a new ADR in `docs/architecture_decisions.md`.**
 
 ```yaml
-# Embedding
-embedding_model: all-mpnet-base-v2        # see Stage 3 note — evaluate before running if not yet run
+# Embedding (ADR-011; ADR-013 for max_seq_len / batch_size)
+embedding_primary_model:    Qwen/Qwen3-Embedding-0.6B
+embedding_primary_max_seq_len: 1024       # RCC V100 16GB OOM-safe; 512 on MPS via MND_MAX_SEQ_LEN
+embedding_primary_batch_size: 8           # V100 OOM-safe (was 32)
+embedding_comparator_model: sentence-transformers/all-mpnet-base-v2
+embedding_comparator_max_seq_len: 384     # mpnet native max
 article_truncation_tokens: 600
 chunk_size_tokens: 600
 chunk_overlap_tokens: 100
@@ -548,4 +582,6 @@ data/anchors/anchor_narratives.jsonl                   # anchor narrative ground
 
 ---
 
-*Document version: 2026-05-11 rev3. Full rewrite. Key changes from prior versions: arXiv removed; Jackson Hole removed as separate source (covered by Fed speeches); RavenPack restructured as Layer 1B journalism supplement providing Signal A for dynamics fitting; Media Cloud is standalone Layer 2 detection; JLN replaced by EPU in Layer 3; Stage 5 rewritten for dual-signal dynamics approach; all-mpnet 384-token limitation documented with Qwen evaluation note; known issues section added covering all immediate fixes. The original project plan PDF remains valid for theoretical background; this document governs all implementation decisions.*
+*Document version: 2026-05-17 rev4. Embedding section (§3 Stage 3, §6 Issue 4, §9) updated to reflect the resolved ADR-011 decision: Qwen3-Embedding-0.6B is the primary production model and all-mpnet-base-v2 is the comparator for the formalized look-ahead sensitivity check. ADR-013 V100-OOM adjustments (max_seq_len=1024, batch_size=8) and ADR-014 IMF Coveo+curl_cffi retrieval path noted in passing. All other rev3 architecture stands.*
+
+*Rev3 history (2026-05-11): Full rewrite. Key changes from prior versions: arXiv removed; Jackson Hole removed as separate source (covered by Fed speeches); RavenPack restructured as Layer 1B journalism supplement providing Signal A for dynamics fitting; Media Cloud is standalone Layer 2 detection; JLN replaced by EPU in Layer 3; Stage 5 rewritten for dual-signal dynamics approach; known issues section added covering all immediate fixes. The original project plan PDF remains valid for theoretical background; this document governs all implementation decisions.*

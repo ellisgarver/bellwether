@@ -78,21 +78,30 @@ weeks (≈26–182 requests), making it far more robust for bulk historical quer
 
 ---
 
-## 4. Paywalled Outlet Access: Factiva → ProQuest TDM Studio
+## 4. Paywalled Outlet Access: Factiva / ProQuest → not in semantic corpus
 
 **Plan (§5 data table, §6.1):** "Library databases (Factiva, ProQuest News,
 LexisNexis Academic)" listed as equivalent options for full-text retrieval from
 paywalled outlets. Critical pre-flight check flagged: "confirm UChicago library
 access to Factiva or ProQuest News."
 
-**Implemented:** ProQuest TDM Studio exclusively, via a `database_native` ingestor
-(`src/mnd/ingestion/proquest.py`). Factiva stub removed. LexisNexis not
+**Initially implemented (Phase 1):** ProQuest TDM Studio exclusively, via the
+TDM-Studio export workflow (ADR-007). Factiva stub removed; LexisNexis not
 investigated.
 
-**Reason (not ADR'd):** UChicago library provides ProQuest TDM Studio with a
-programmatic Python API (`PROQUEST_API_TOKEN`). Factiva's license terms prohibit
-automated/bulk extraction, making it unusable for this pipeline. ProQuest TDM is
-designed precisely for text-data-mining academic use cases.
+**Currently implemented (Phase 2, ADR-010):** No paywalled-press text source.
+The semantic corpus is restricted to institutional + academic open sources
+(Layer 1A). Premium press volume signal is supplied by the RavenPack dynamics
+layer (Layer 1B via WRDS); RavenPack metadata covers WSJ, Barron's, Dow Jones
+Newswires, MarketWatch, PR Newswire, and ~800 other outlets but is NOT used for
+embedding. ProQuest TDM Studio code archived to `scripts/archive/`.
+
+**Reason:** The "narrative identity in analytical discourse, propagation in
+journalism" framing (MND_PROJECT_SPEC rev3 §4) makes institutional and academic
+text the primary clustering substrate; RavenPack supplies the journalism volume
+signal more consistently than scraping. The "Factiva/ProQuest kill criterion"
+from the original plan therefore no longer applies — the pipeline is fully open
+on the text side.
 
 ---
 
@@ -131,17 +140,25 @@ constraint cascade is: ADR-001 → Qwen3 model → transformers ≥ 4.51.
 
 ---
 
-## 7. Institutional Source Ingestors Not Yet Built (Phase 2)
+## 7. Institutional Source Ingestors — built and broadened in Phase 2
 
 **Plan (§5 data table, §6 Phase 2):** "Build Federal Reserve, IMF, BIS, OECD, NBER
 ingestion for 2010–present."
 
-**Implemented:** Federal Reserve ingestor is complete (FOMC statements, minutes,
-Beige Books, speeches). IMF, BIS, OECD, and NBER ingestors are not yet built.
+**Implemented (Phase 2, ADR-010 / ADR-012 / ADR-014):** Composite
+`InstitutionalIngestor` covers Federal Reserve (FOMC, speeches incl. Jackson Hole,
+Beige Book, FEDS Notes, MPR, FSR), Regional Feds (NY/SF/Chicago/Atlanta),
+IMF (WEO/GFSR/F&D/WPs/Blog via Coveo Search + curl_cffi Chrome impersonation,
+ADR-014), BIS (QR/WPs via sitemap), CBO (sitemap path, ADR-013), Treasury/OFR/FSOC,
+Congressional testimony, VoxEU/CEPR, Brookings, PIIE, CFR.
 
-**Reason:** These are Phase 2 deliverables. The Fed source alone provides high-quality
-institutional text sufficient for the Phase 1 pilot. IMF/BIS/OECD/NBER ingestion
-will be built in Phase 2 alongside full historical corpus ingestion.
+**Removed from plan scope:** OECD (no working free-text retrieval path identified).
+NBER and SSRN have historical-bulk retrieval blocked (bot protection / no public
+archive); both ingestors remain in code for Phase 6 live RSS only.
+
+**Reason:** Phase 2 deliverable, completed. The IMF path is the most operationally
+fragile — Akamai TLS-fingerprint rejection of stdlib `requests` required the
+`curl_cffi==0.15.0` dependency and Chrome impersonation (ADR-014).
 
 ---
 
@@ -181,20 +198,28 @@ earlier-embedding check is partially satisfied by ADR-001's comparator architect
 
 ---
 
-## 10. Whitelist Size Below Plan Target
+## 10. Whitelist Restructured Around Institutional + Academic Tiers
 
 **Plan (§5.1, §6.1):** "Curated U.S. financial press whitelist: approximately
 30–50 U.S. financial publications."
 
-**Implemented:** 21 free/mixed-access outlets in `config/whitelist.yaml`.
-Paywalled outlets (WSJ, Bloomberg, FT, Barron's, Economist) are in the whitelist
-but are not retrievable without `PROQUEST_API_TOKEN`, which is not yet configured
-for the pilot.
+**Implemented (ADR-010):** The semantic-corpus whitelist is restructured around
+institutional and academic tiers, not press outlets. The active tiers
+(`config/whitelist.yaml`) are:
 
-**Reason:** The 21 free outlets are sufficient for Phase 1 pilot validation. The
-full 30–50 outlet target is a Phase 2 goal once ProQuest TDM Studio access is
-confirmed and the token is set. Paywalled outlets are already in the whitelist YAML
-and will activate automatically when the token is available.
+- `tier_1_institutional_policy` — Fed Board, Regional Feds, IMF, BIS, CEA, CBO,
+  Treasury/OFR, Congressional testimony.
+- `tier_2_academic_analytical` — VoxEU, NBER (Phase 6 only), SSRN (Phase 6 only).
+- `tier_2_policy_analytical` — Brookings, PIIE, CFR.
+
+The press outlets the original plan counted (WSJ, Bloomberg, FT, Reuters, AP, etc.)
+are not in the semantic corpus by design. Their volume signal is the RavenPack
+dynamics layer (Layer 1B). The "30–50 outlets" target was a Phase 1 metric and
+is superseded by source-type coverage at the institutional + academic level.
+
+**Reason:** See deviation #4 and ADR-010. Narrative identity is determined in
+analytical discourse; counting press outlets as the unit of coverage is the wrong
+yardstick for the current architecture.
 
 ---
 
@@ -235,19 +260,153 @@ is the default when `--required` is omitted.
 
 ---
 
+## 13. Phase 2 Corpus Overhaul, RavenPack Dynamics Layer, Media Cloud Detection
+
+**Plan:** Phase 2 corpus was described as a press whitelist extended to 30–50
+outlets, plus institutional sources. Dynamics fitting consumed institutional
+counts. No detection layer.
+
+**Implemented (ADR-010, MND_PROJECT_SPEC rev3, 2026-05-11):**
+
+- Journalism tier (AP News, MarketWatch, Reuters) removed from the semantic corpus.
+- RavenPack RPA 1.0 Global Macro via WRDS added as Layer 1B (Signal A) — weekly
+  article volume time series for SIR/logistic fitting; metadata only, no text.
+- Media Cloud added as Layer 2 detection (`src/mnd/detection/mediacloud.py`) — daily
+  story counts by keyword query; does not feed embedding or clustering.
+- EPU (Baker-Bloom-Davis) replaces JLN in validation; text-based, free direct
+  download from policyuncertainty.com.
+- CFR reinstated as Tier 2 source.
+- FEDS Notes added explicitly to FederalReserveIngestor.
+
+**Reason:** Restructured around the Shiller propagation framework — narrative
+identity in institutional/academic text (Layer 1A), propagation in press volume
+(Layer 1B), pre-characterization detection in broad story counts (Layer 2).
+RavenPack supplies a cleaner dynamics signal than Wayback-counted journalism
+articles, and is consistent across the 2010–present window.
+
+---
+
+## 14. Embedding Model Re-Decided: Qwen3 Restored
+
+**Plan / ADR-010:** ADR-010 briefly switched the primary model to
+`all-mpnet-base-v2` to minimize look-ahead bias.
+
+**Implemented (ADR-011, 2026-05-11, same day):** Qwen3-Embedding-0.6B restored
+as primary. mpnet retained as comparator for a formalized look-ahead sensitivity
+check (NMI delta on pre-2021 vs post-2021 sub-corpora).
+
+**Reason:** With the journalism tier removed, the corpus is now overwhelmingly
+long-form institutional/academic documents (FOMC minutes 10–15k words, BIS QR
+3–8k words, Jackson Hole 8–15k words). mpnet's hard 384-token cap means only
+the first ~280 words are encoded, missing the analytical content. Qwen3's
+32,768-token context preserves it. Look-ahead risk is measured (Δ_NMI
+comparison vs mpnet) rather than assumed.
+
+---
+
+## 15. arXiv and Separate Jackson Hole Ingestor Removed
+
+**Plan / Earlier scope:** arXiv as Tier 2 academic source; Jackson Hole
+proceedings as a separate Tier 1 source.
+
+**Implemented (ADR-012, 2026-05-13):** Both removed. arXiv has 2017-only
+coverage of the econ category (low macro volume; not in MND_PROJECT_SPEC rev3).
+Jackson Hole speeches are Fed Chair / governor speeches published on
+federalreserve.gov and already captured by FederalReserveIngestor; a separate
+ingestor only created duplicates.
+
+**Also in ADR-012:** TopicFilter removed from the `filter` pipeline stage.
+With the journalism tier removed, all remaining sources are macro-relevant by
+construction; keyword filtering risked incorrectly dropping institutional docs.
+
+---
+
+## 16. Embedding Sequence Length: 32768 → 2048 → 1024 (V100 OOM)
+
+**ADR-006 / ADR-011 baseline:** `max_seq_len = 32768` (Qwen3 native max) on RCC.
+
+**Implemented (ADR-013, 2026-05-17):** Reduced 2048 → 1024 after job 49622334
+OOMed on a V100-16GB at (batch=32, seq=2048, fp16). The SDPA causal mask is
+cloned per layer; the combined working set blew past 16 GB. At (batch=8,
+seq=1024, fp16) the working set is ~6 GB. The chunker outputs 600-BPE-token
+chunks, so 1024 still gives 1.7x headroom.
+
+`compute.embedding_batch_size` also dropped 32 → 8. Same vectors come out;
+zero quality impact. `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` added
+to `embed_rcc.sh`.
+
+---
+
+## 17. Ingestor Repairs After 2024 Dry Run (ADR-013)
+
+**Pre-fix bugs (jobs 49622332–49622335, 2024 window, 0 articles):**
+
+- CongressionalIngestor — URL regex matched only legacy `sb####`/`jy####` slugs,
+  missing modern `/statements/`, `/testimonies/`, `/readouts/` forms. Fixed +
+  hardcoded "Economic Fury" exclusion replaced with conditional sanctions filter.
+- CBOIngestor — Drupal listing behind DataDome (403); replaced with sitemap.xml
+  enumeration + page-date validation.
+- CFRIngestor — RSS feed exposes only ~24 recent items; replaced with sitemap
+  enumeration over /articles, /backgrounders, /reports + URL-slug macro pre-filter.
+- IMFIngestor — Misdiagnosed as Cloudflare IP block; corrected to Akamai TLS
+  fingerprint (see ADR-014).
+
+**Pipeline-level fix:** `filter-pre-embed` (canonical ADR-010/012 archived-source
+exclusion writing `corpus_for_embedding.jsonl`) was missing from the SLURM
+chain. Added as `scripts/rcc/filter_pre_embed_rcc.sh` between ingest and filter
+in `submit_full_pipeline.sh`.
+
+---
+
+## 18. IMF Via Coveo Search + curl_cffi Chrome Impersonation (ADR-014)
+
+**Pre-fix (ADR-013 misdiagnosis):** IMFIngestor was disabled in the composite
+after observing HTTP 403 on every imf.org URL from RCC. Misdiagnosis: "Cloudflare
+WAF IP block."
+
+**Correct diagnosis (ADR-014, 2026-05-17):**
+
+- imf.org is fronted by Akamai (`server: AkamaiGHost`), not Cloudflare.
+- Akamai Bot Manager fingerprints the TLS handshake (JA3/JA4). stdlib `requests`
+  / urllib3's OpenSSL cipher list and extension order do not match a real browser
+  and are 403'd at the TLS layer before HTTP is consulted.
+- Re-running with `curl_cffi` and `impersonate='chrome131'` returns 200 from
+  residential, mobile, and university (RCC) IPs.
+
+**Listing path:** Replaced the Sitecore JSS walker with the public Coveo Search
+endpoint that powers imf.org's own search bar. Per-series URL-prefix queries
+(`weo`, `gfsr`, `fandd`, `wp`, `blog`) with date-range bisection on series that
+exceed Coveo's 1000-result cap.
+
+**Body extraction:** Tries `_next/data/<buildId>/<path>.json` SSG endpoint first
+for /en/publications/* URLs; falls back to trafilatura on the HTML page. Blog
+URLs (/en/blogs/articles/*) always take the trafilatura path.
+
+**Dependency:** `curl_cffi==0.15.0` is pinned in `requirements.txt` and must
+be installed in the RCC `mnd` conda env.
+
+---
+
 ## Summary Table
 
 | # | Area | Plan Said | Implemented | ADR? |
 |---|------|-----------|-------------|------|
-| 1 | Embedding model | `all-mpnet-base-v2` (sole) | Qwen3-0.6B (primary) + mpnet (comparator) | ADR-001 |
-| 2 | Sequence length | Implicit 384 (mpnet max) | 512 tokens (MPS memory bound) | ADR-006 |
-| 3 | Discovery layer | GDELT 2.0 | Wayback CDX (historical); GDELT retained for <7d | ADR-005 |
-| 4 | Paywalled text | Factiva or ProQuest | ProQuest TDM Studio only | No |
+| 1 | Embedding model | `all-mpnet-base-v2` (sole) | Qwen3-0.6B (primary) + mpnet (comparator) | ADR-001 / ADR-011 |
+| 2 | Sequence length | Implicit 384 (mpnet max) | 1024 on RCC; 512 on MPS (ADR-006 / ADR-013) | ADR-006 / ADR-013 |
+| 3 | Discovery layer | GDELT 2.0 | Wayback CDX archived in ADR-010 (no longer in active flow) | ADR-005 |
+| 4 | Paywalled text | Factiva or ProQuest | Not in semantic corpus; RavenPack volume signal only | ADR-010 |
 | 5 | Dynamics priority | SIR first, logistic fallback | Logistic first, SIR parallel | ADR-002 |
 | 6 | `transformers` version | 4.45.2 (pinned) | 4.51.3 (Qwen3 requires ≥4.51) | No |
-| 7 | Institutional ingestors | Fed + IMF + BIS + OECD + NBER | Fed only (Phase 2 deferred) | No |
-| 8 | Validation data | FRED, Yahoo, NBER, Michigan | Not yet integrated (Phase 3–4) | No |
-| 9 | Robustness checks | Cross-source + earlier-embedding | Not yet built (`[Compress]`) | Partial (ADR-001) |
-| 10 | Outlet count | 30–50 outlets | 21 free outlets (paywalled pending token) | No |
+| 7 | Institutional ingestors | Fed + IMF + BIS + OECD + NBER | Fed + IMF + BIS + CBO + Treasury/OFR + Congressional + Regional Feds + VoxEU + Brookings + PIIE + CFR | ADR-010 / ADR-012 / ADR-014 |
+| 8 | Validation data | FRED, Yahoo, NBER, Michigan | FRED + EPU + NBER cycles + Michigan (Phase 4 deliverable) | ADR-010 (JLN→EPU) |
+| 9 | Robustness checks | Cross-source + earlier-embedding | Look-ahead sensitivity formalized as Δ_NMI on anchor sub-corpora | ADR-011 |
+| 10 | Outlet count | 30–50 press outlets | Restructured around institutional/academic tiers; press signal via RavenPack | ADR-010 |
 | 11 | TensorFlow | Not a dependency | Installed then removed; `KERAS_BACKEND=torch` required | ADR-006 |
 | 12 | Validate `--required` | Not planned | Added for pilot subset testing | No |
+| 13 | Detection layer | Not in plan | Media Cloud daily story counts, Layer 2 | ADR-010 |
+| 14 | Dynamics layer | Institutional counts only | RavenPack RPA 1.0 weekly volume (Signal A) + institutional (Signal B) | ADR-010 |
+| 15 | Journalism tier | AP / MarketWatch / Reuters in semantic corpus | Removed from semantic corpus; RavenPack volume signal instead | ADR-010 |
+| 16 | arXiv / Jackson Hole | In scope | Removed (arXiv 2017-only; Jackson Hole covered by Fed speeches) | ADR-012 |
+| 17 | Topic filter in Stage 2 | Hybrid keyword + embedding gate | Removed; date-range + dedup only | ADR-012 |
+| 18 | IMF retrieval | Direct HTTP | Coveo Search API + curl_cffi Chrome impersonation (Akamai TLS fingerprint) | ADR-014 |
+| 19 | Embedding batch size | 32 | 8 (V100 16 GB OOM safety) | ADR-013 |
