@@ -726,10 +726,9 @@ _INST_MIN_COUNTS: dict[str, int] = {
     "federalreserve": 5,
     "fed_regional":   3,
     "congressional":  0,   # sparse; best-effort
-    # imf:           disabled in InstitutionalIngestor as of 2026-05-14; see
-    #                IMFIngestor docstring for /en/errors/404 issue.
+    "imf":            2,   # Coveo + curl_cffi path (ADR-014); WEO/GFSR are 2x/yr
     "bis":            3,
-    "cbo":            0,   # known external IP block (whitelist documents this)
+    "cbo":            0,   # sitemap path (ADR-013); publication pages 403 on residential IPs
     "treasury_ofr":   0,   # sparse; best-effort
     "voxeu":          5,
     "brookings":      2,
@@ -780,18 +779,19 @@ def _sample_check_institutional(
 ) -> None:
     from mnd.ingestion.institutional import (
         BISIngestor, BrookingsIngestor, CBOIngestor, CFRIngestor,
-        CongressionalIngestor, FedRegionalIngestor,
+        CongressionalIngestor, FedRegionalIngestor, IMFIngestor,
         PIIEIngestor, TreasuryOFRIngestor, VoxEUIngestor,
     )
     from mnd.ingestion.fed import FederalReserveIngestor
 
-    # Mirror InstitutionalIngestor._sub_ingestors exactly. IMF is disabled for
-    # historical runs as of 2026-05-14 (all URL paths land on /en/errors/404).
+    # Mirror InstitutionalIngestor._sub_ingestors exactly. IMF re-enabled in
+    # ADR-014 via Coveo Search + curl_cffi Chrome impersonation.
     # NBER and SSRN are Phase-6 live RSS only.
     sub_ingestors = [
         FederalReserveIngestor(),
         FedRegionalIngestor(),
         CongressionalIngestor(),
+        IMFIngestor(),
         BISIngestor(),
         TreasuryOFRIngestor(),
         CBOIngestor(),

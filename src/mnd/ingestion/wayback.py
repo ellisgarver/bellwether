@@ -1,12 +1,19 @@
 """Internet Archive Wayback Machine CDX-based article discovery.
 
-ADR-005: replaces GDELT as the historical free-outlet discovery layer.
+ARCHIVED (ADR-010, 2026-05-11): retained on disk for reference but not part of
+the active pipeline. WaybackIngestor was the discovery layer for the journalism
+tier (AP News, MarketWatch, Reuters) and free-outlet press whitelist sections
+(tier_1_core_financial_press / tier_2_adjacent_analytical / tier_3_institutional)
+that no longer exist in config/whitelist.yaml. RavenPack (Layer 1B) now provides
+the journalism propagation signal. _load_free_outlets() reads stale whitelist
+keys and will return an empty list against the current configuration. Do not
+re-add to mnd.ingestion.__init__ exports without a new ADR restoring the
+journalism tier.
+
+ADR-005 history: replaced GDELT as the historical free-outlet discovery layer.
 GDELT's free API applies IP-level rate throttling that makes bulk historical
 queries unreliable regardless of per-request delay. See ADR-005 in
 docs/architecture_decisions.md for full rationale.
-
-GDELT remains in the codebase (src/mnd/ingestion/gdelt.py) for near-real-time
-discovery (last 7 days) where request volume is low enough to avoid throttling.
 
 Discovery pipeline:
   WaybackIngestor.fetch()

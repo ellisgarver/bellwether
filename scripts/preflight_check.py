@@ -115,10 +115,10 @@ def check_institutional_ingestor() -> tuple[bool, str]:
         from mnd.ingestion import InstitutionalIngestor
         ing = InstitutionalIngestor()
         n_sub = len(ing._sub_ingestors)
-        # Expected 10 active sub-ingestors: Fed, FedRegional, Congressional,
-        # BIS, TreasuryOFR, CBO, VoxEU, Brookings, PIIE, CFR.
-        # (IMF disabled 2026-05-14; NBER/SSRN are Phase 6 only.)
-        return n_sub >= 9, f"InstitutionalIngestor with {n_sub} sub-ingestors"
+        # Expected 11 active sub-ingestors per ADR-014: Fed, FedRegional,
+        # Congressional, IMF, BIS, TreasuryOFR, CBO, VoxEU, Brookings, PIIE, CFR.
+        # (NBER/SSRN are Phase 6 live RSS only.)
+        return n_sub >= 11, f"InstitutionalIngestor with {n_sub} sub-ingestors"
     except Exception as exc:
         return False, f"failed to instantiate InstitutionalIngestor: {exc}"
 
