@@ -32,7 +32,6 @@ here. Do not re-add to active flow without restoring the journalism tier
 from mnd.ingestion.base import Article, Ingestor
 from mnd.ingestion.fed import FederalReserveIngestor
 from mnd.ingestion.fred import FredFetcher
-from mnd.ingestion.trafilatura_fetcher import fetch_free_outlet_bodies
 from mnd.ingestion.institutional import InstitutionalIngestor
 
 __all__ = [
@@ -41,5 +40,4 @@ __all__ = [
     "FederalReserveIngestor",
     "FredFetcher",
     "InstitutionalIngestor",
-    "fetch_free_outlet_bodies",
 ]
