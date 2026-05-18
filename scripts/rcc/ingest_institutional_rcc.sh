@@ -27,20 +27,16 @@
 #   RAM:       8 GB
 #   Time:      24 h  (VoxEU ~6.5h + Brookings ~6.25h + other sources ~3h)
 #
-# Full pipeline submission (run from Midway3 login node):
-#   INGEST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
-#   FILTER=$(sbatch --parsable --dependency=afterok:$INGEST \
-#                scripts/rcc/filter_rcc.sh)
-#   EMBED=$(sbatch --parsable --dependency=afterok:$FILTER \
-#                scripts/rcc/embed_rcc.sh)
-#   sbatch --dependency=afterok:$EMBED scripts/rcc/cluster_rcc.sh
-#   echo "Ingest institutional: $INGEST"
-#   echo "Filter:               $FILTER"
-#   echo "Embed:                $EMBED"
+# Canonical entry point is scripts/rcc/submit_full_pipeline.sh, which chains:
+#   ingest → filter-pre-embed → filter → embed (primary) → cluster
+# This script is the first link in that chain; submit it standalone only for
+# ingest-only runs (e.g. to populate raw JSONL without re-embedding).
 #
-# Custom date range:
+# Custom date range (standalone):
 #   sbatch --export=START=2010-01-01,END=2024-12-31 \
 #       scripts/rcc/ingest_institutional_rcc.sh
+#
+# IMF coverage: requires curl_cffi==0.15.0 in the mnd conda env (ADR-014).
 #
 # All data output in /scratch/midway3/ehgarver/ — never in PI project folder.
 

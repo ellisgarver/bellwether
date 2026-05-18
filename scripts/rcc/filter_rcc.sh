@@ -1,13 +1,16 @@
 #!/bin/bash
-# SLURM job script: topic filter + near-duplicate removal on the full ingested corpus.
+# SLURM job script: date-range filter + near-duplicate removal on the ingested corpus.
 #
-# Reads all JSONL files from data/raw/articles/ and writes
-# data/processed/articles.parquet. embed_rcc.sh depends on this output.
+# Per MND_PROJECT_SPEC rev3 Stage 2: NO topic filter — Layer 1A sources are
+# macro-relevant by construction (ADR-012). Two operations only:
+#   1. Date range filter: keep documents in [2010-01-01, today]
+#   2. MinHash near-duplicate removal within rolling 48h windows
 #
-# NOTE: Run filter-pre-embed (python run_pipeline.py filter-pre-embed) BEFORE
-# this job if any archived journalism sources (AP News, MarketWatch, Reuters)
-# are present in data/raw/articles/ from the prior Phase 2 ingestion run.
-# filter-pre-embed writes corpus_for_embedding.jsonl excluding those sources.
+# Input precedence (auto-detected in run_pipeline.py filter_cmd):
+#   1. data/processed/corpus_for_embedding.jsonl  (canonical, written by
+#      filter_pre_embed_rcc.sh — ADR-010/012 archived-source exclusion)
+#   2. data/raw/articles/*.jsonl                  (fallback, with inline exclusion)
+# Output: data/processed/articles.parquet — embed_rcc.sh depends on this.
 #
 # Resource spec:
 #   Account:   pi-dachxiu
@@ -16,17 +19,8 @@
 #   RAM:       16 GB
 #   Time:      1 h
 #
-# Full pipeline submission block (ADR-010; run from Midway3 login node):
-#   INGEST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
-#   FILTER=$(sbatch --parsable --dependency=afterok:$INGEST \
-#                scripts/rcc/filter_rcc.sh)
-#   EMBED_PRIMARY=$(sbatch --parsable \
-#                    --dependency=afterok:$FILTER \
-#                    --export=ROLE=primary scripts/rcc/embed_rcc.sh)
-#   EMBED_COMPARATOR=$(sbatch --parsable \
-#                    --dependency=afterok:$FILTER \
-#                    --export=ROLE=comparator scripts/rcc/embed_rcc.sh)
-#   sbatch --dependency=afterok:$EMBED_PRIMARY scripts/rcc/cluster_rcc.sh
+# Canonical chain (use scripts/rcc/submit_full_pipeline.sh):
+#   ingest → filter-pre-embed → filter → embed (primary) → cluster
 #
 # All data output in /scratch/midway3/ehgarver/ — never in PI project folder.
 

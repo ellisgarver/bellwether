@@ -7,10 +7,10 @@
 # The semantic corpus (text for embedding and clustering) has three tiers:
 #
 #   Tier 1 — Institutional policy:
-#     Fed (all: FOMC, speeches, Beige Book, FEDS Notes, MPR, FSR),
+#     Fed (all: FOMC, speeches incl. Jackson Hole, Beige Book, FEDS Notes, MPR, FSR),
 #     Regional Fed blogs (NY, SF, Chicago, Atlanta, Dallas, St. Louis, Cleveland),
-#     IMF (WEO/GFSR/Blog/WPs), BIS (QR/WPs), CEA,
-#     Kansas City Fed Jackson Hole proceedings,
+#     IMF (WEO/GFSR/F&D/Blog/WPs via Coveo + curl_cffi, ADR-014),
+#     BIS (QR/WPs), CEA,
 #     Congressional testimony (Treasury Sec; Fed Chair via fed.py),
 #     Treasury/OFR/FSOC
 #
@@ -382,11 +382,10 @@ detection_layer:
 #                in ADR-009, removed again. Dow Jones / RavenPack provides the
 #                MarketWatch volume signal without scraping.
 #
-# CBO          — cbo.gov returns HTTP 403 from all tested IPs (JS/Cloudflare
-#                challenge); both JSON API and HTML listing inaccessible.
-#                CBOIngestor remains in institutional.py but is inactive.
-#                Kept in whitelist Tier 1 for RCC-network runs where access
-#                may succeed.
+# CBO          — Active in the composite via the sitemap-enumeration path (ADR-013).
+#                cbo.gov/sitemap.xml is not bot-protected; publication detail pages
+#                are accessible from RCC (university IP) but 403 from residential
+#                IPs (DataDome). Legacy RSS/listing scrape retained as fallback.
 #
 # SSRN         — Exposes only 30–90 day RSS window; no public bulk API for
 #                historical archive. Phase 6 live-update pipeline only.

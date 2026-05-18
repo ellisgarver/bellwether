@@ -14,21 +14,10 @@
 #                    anchor narrative sub-corpora. Not used for production clustering.
 #                    Output: data/processed/embeddings_comparator.npy
 #
-# Full pipeline submission (run from Midway3 login node):
-#   INGEST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
-#   FILTER=$(sbatch --parsable --dependency=afterok:$INGEST \
-#                scripts/rcc/filter_rcc.sh)
-#   EMBED_PRIMARY=$(sbatch --parsable \
-#                    --dependency=afterok:$FILTER \
-#                    --export=ROLE=primary scripts/rcc/embed_rcc.sh)
-#   EMBED_COMPARATOR=$(sbatch --parsable \
-#                    --dependency=afterok:$FILTER \
-#                    --export=ROLE=comparator scripts/rcc/embed_rcc.sh)
-#   sbatch --dependency=afterok:$EMBED_PRIMARY scripts/rcc/cluster_rcc.sh
-#   echo "Ingest:           $INGEST"
-#   echo "Filter:           $FILTER"
-#   echo "Embed primary:    $EMBED_PRIMARY"
-#   echo "Embed comparator: $EMBED_COMPARATOR"
+# Canonical chain (use scripts/rcc/submit_full_pipeline.sh):
+#   ingest → filter-pre-embed → filter → embed (primary) → cluster
+#   submit_full_pipeline.sh also submits embed --role comparator in parallel
+#   with the primary embed when COMPARATOR=1 (default).
 #
 # Resource spec:
 #   Account:   pi-dachxiu
