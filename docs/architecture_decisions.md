@@ -733,6 +733,52 @@ Other ingestors validated on the next full RCC ingest run.
 
 ---
 
+## ADR-014: IMF ingestion via curl_cffi Chrome impersonation + Coveo Search listing
+
+- **Status**: Accepted
+- **Date**: 2026-05-17
+- **Amends**: ADR-013 (misdiagnosis correction — see "Context")
+
+### Context
+
+ADR-013 disabled `IMFIngestor` in `InstitutionalIngestor._sub_ingestors` after observing HTTP 403 on every `imf.org` URL from RCC's IP space. The diagnosis was "Cloudflare WAF IP block." Both halves of that diagnosis are wrong:
+
+1. **imf.org is fronted by Akamai, not Cloudflare** (`server: AkamaiGHost`). Akamai Bot Manager fingerprints the TLS handshake (JA3/JA4) — stdlib `requests` ships with OpenSSL's cipher list and extension order, which does not match any real browser, and Akamai 403s the request before the HTTP layer is consulted.
+2. **The 403 is not IP-based.** Re-running the same stdlib `requests` call from T-Mobile cellular (AS21928, residential) returned 403 with identical headers. Switching the same residential IP to `curl_cffi` with `impersonate='chrome131'` returned 200. The user later confirmed `curl_cffi` returns 200 from RCC as well.
+
+Separately, the Next.js `__NEXT_DATA__` walker that ADR-013 retained as a "fully implemented" retrieval path no longer matches the live site. IMF migrated to Sitecore JSS; `pageProps.componentProps` is now a GUID-keyed map of layout components, and the `AsidePublicationList` in the sidebar only exposes the *latest* issue per series. The actual historical listing on `/publications/<series>` is rendered client-side by a `PublicationIssuesList` React component that calls Sitecore GraphQL (`/api/graphql`) or, more usefully for us, the public Coveo Search endpoint that powers the site-wide search bar (`imfproduction561s308u.org.coveo.com/rest/search/v2`, public Bearer token harvested from the JS bundle).
+
+### Decision
+
+1. **Replace the TLS-layer fix.** `IMFIngestor._imf_get` routes all `imf.org` fetches through `curl_cffi.requests.get` with `impersonate='chrome131'`, falling back to stdlib `requests` only if `curl_cffi` is missing (a loud `ERROR` log makes the failure obvious). Already shipped in commit `ede1de6` (2026-05-17).
+2. **Replace the listing-layer fix.** The Sitecore JSS walker (`_walk_publications` + `_NEXT_INDEX_PAGES` + hardcoded `_WEO_PATHS` / `_GFSR_PATHS` / `_FANDD_PATHS` / `_WP_API`) is removed. The new `_coveo_list` queries Coveo with `aq=@uri="<prefix>" @date>=… @date<=…` per series (`weo`, `gfsr`, `fandd`, `wp`, `blog`), paginates to Coveo's 1000-result cap, and recursively bisects the date window when a series exceeds the cap (only the WP series is dense enough to trigger this — ~700 papers/year).
+3. **Reuse the existing body-extraction path** with one tweak. `_fetch_publication_body` continues to try `_next/data/<buildId>/<path>.json` first for `/en/publications/*` URLs and falls back to trafilatura on the HTML page. The buildId is now scraped once per `fetch()` from `/en/Publications/WEO` and cached. Blog URLs (`/en/blogs/articles/*`) are not covered by the SSG build (`_next/data` 404s) so they always take the trafilatura path; yields ~800 words/post.
+4. **Re-enable `IMFIngestor()` in `InstitutionalIngestor._sub_ingestors`.** RCC composite runs include IMF from this commit forward. The class-level `_HISTORICAL_DISABLED` documentation flag is dropped (no code path consulted it).
+5. **Keep `--sources imf` as a debug affordance in `run_pipeline.py`.** Useful for small-window probes of IMF specifically without paying for the full composite cycle; help text and error messages drop the "local-only" framing.
+6. **`curl_cffi==0.15.0` is a hard dependency** in `requirements.txt` (MIT-licensed; wraps the curl-impersonate fork of libcurl). Must be installed in the RCC conda env (`mnd`) for IMF retrieval to work.
+
+### Consequences
+
+**Positive:**
+- IMF coverage (WEO, GFSR, F&D, WP, Blog) is restored to the semantic corpus with no new infrastructure and no paid dependencies.
+- One execution environment, not two. RCC remains the single source-of-truth ingestion host; no local-rsync drift risk.
+- The Coveo listing path is more comprehensive than the prior hardcoded URL tables (304 historical WEO entries vs. 30 hardcoded; 16,973 working papers vs. none). Coverage now extends to all WEO/GFSR Updates and F&D individual articles, not just flagship issue landing pages.
+- Trafilatura body extraction is well-suited to IMF's HTML — verified ~250 words from WEO Oct 2024 landing page, ~800 words from a representative IMF Blog post.
+
+**Negative / risks:**
+- The Coveo Bearer token is harvested from a public JS bundle and may rotate. The token has been stable across the imf.org Next.js rebuilds observed in May 2026, but a future rotation would require re-fetching `/_next/static/chunks/1166-*.js` and updating `IMFIngestor._COVEO_TOKEN`. Failure mode is 401 on the listing call, surfaced via a `WARNING` log; no silent corruption.
+- `curl_cffi` is a less common dependency than `requests`. If a future RCC environment rebuild omits it, listing and fetches both fail loudly (the `ImportError` branch in `_imf_get` logs `ERROR`). Mitigated by pinning in `requirements.txt`.
+- Akamai Bot Manager could in principle update its fingerprinting heuristics and reject curl-impersonate-chrome131 in the future. If that happens, bump `impersonate='chrome131'` to a newer profile (curl-impersonate ships chrome116 → chrome131 → ...) or pin a specific browser version. Visible as 403s reappearing on every IMF URL.
+
+### Verification
+
+- `from mnd.ingestion.institutional import IMFIngestor; IMFIngestor()` instantiates without error. ✓
+- `InstitutionalIngestor()._sub_ingestors` includes `IMFIngestor`. ✓
+- Small-window run (`date(2024,9,1)` … `date(2024,10,31)`) yields 80 articles: 1 WEO, 1 GFSR, 24 F&D, 39 WP, 15 Blog, all with body word-count ≥ 50. ✓
+- WEO Oct 2024 issue specifically present in output with 254 words of executive-summary text. ✓
+
+---
+
 ## ADR template (copy for new entries)
 
 ```
