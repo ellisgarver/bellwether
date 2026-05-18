@@ -25,7 +25,9 @@
 #   Partition: caslake
 #   CPUs:      4  (sequential RSS/HTTP fetches; extra cores unused)
 #   RAM:       8 GB
-#   Time:      24 h  (VoxEU ~6.5h + Brookings ~6.25h + other sources ~3h)
+#   Time:      36 h  (full fresh 2010-2026 run: VoxEU ~6.5h + Brookings ~6.25h +
+#                     Congressional ~1.5h + IMF Coveo 16y ~3h + CBO sitemap ~1h +
+#                     CFR sitemap ~30min + Fed/FedRegional/BIS/Treasury/PIIE ~3h)
 #
 # Canonical entry point is scripts/rcc/submit_full_pipeline.sh, which chains:
 #   ingest → filter-pre-embed → filter → embed (primary) → cluster
@@ -45,7 +47,7 @@
 #SBATCH --partition=caslake
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
-#SBATCH --time=24:00:00
+#SBATCH --time=36:00:00
 #SBATCH --output=logs/ingest_institutional_rcc_%j.log
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ehgarver@uchicago.edu
