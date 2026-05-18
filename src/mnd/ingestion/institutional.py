@@ -1099,16 +1099,37 @@ class CBOIngestor(Ingestor):
             "with lastmod in [%s ± %dd]",
             len(candidates), f"{start}..{end}", self._LASTMOD_SLOP_DAYS,
         )
+        consecutive_403s = 0
         for url, _lastmod in candidates:
             if url in seen:
                 continue
             seen.add(url)
+            # Fail-fast guard: DataDome's JS-execution challenge was confirmed
+            # un-passable via curl_cffi on 2026-05-18 (every chrome/safari/edge/
+            # firefox impersonation and session warm-up returned 403). Once we
+            # see N consecutive 403s, abort the sitemap walk rather than burn
+            # SLURM hours on a hopeless 25k-URL loop. The 0-yield triggers the
+            # archive+RSS fallbacks below, which also fail fast.
+            if consecutive_403s >= 50:
+                log.warning(
+                    "CBO: %d consecutive 403s — aborting sitemap walk. "
+                    "DataDome is rejecting all curl_cffi impersonations. "
+                    "Treated as known coverage gap (see ingestor docstring).",
+                    consecutive_403s,
+                )
+                break
             try:
                 resp = self._cbo_get(url, timeout=30.0)
-                if resp.status_code in (403, 404):
-                    log.debug("CBO %s: HTTP %d — skipping", url, resp.status_code)
+                if resp.status_code == 403:
+                    consecutive_403s += 1
+                    log.debug("CBO %s: HTTP 403 — skipping (consecutive: %d)", url, consecutive_403s)
+                    continue
+                if resp.status_code == 404:
+                    consecutive_403s = 0
+                    log.debug("CBO %s: HTTP 404 — skipping", url)
                     continue
                 resp.raise_for_status()
+                consecutive_403s = 0
             except Exception as exc:
                 log.debug("CBO %s: %s", url, exc)
                 continue
