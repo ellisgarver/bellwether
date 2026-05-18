@@ -43,7 +43,7 @@ modify pilot code. Resume instructions below are retained for reference only.
 | embed | `run_pipeline.py embed --role primary` | `data/processed/embeddings.npy` |
 | cluster | `run_pipeline.py cluster` | `data/processed/clusters.parquet` |
 | stability | `run_pipeline.py stability` | _(stdout only — re-run if unsure)_ |
-| validate | `run_pipeline.py validate --anchors …` | _(stdout only — re-run if unsure)_ |
+| validate | `run_pipeline.py validate` _(all 10 anchors)_ or `validate --anchors anchor_01_svb,anchor_05_credit_suisse` _(comma-separated IDs)_. `--anchors` takes IDs, not a file path. | _(stdout only — re-run if unsure)_ |
 
 ## Phase status (update this when phases complete)
 

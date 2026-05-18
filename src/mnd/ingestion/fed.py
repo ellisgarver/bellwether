@@ -38,7 +38,14 @@ SPEECHES_RSS = "https://www.federalreserve.gov/feeds/speeches.xml"
 
 
 @retry(stop=stop_after_attempt(8), wait=wait_random_exponential(multiplier=2, max=120))
-def _get(url: str, *, timeout: float = 30.0) -> requests.Response:
+def _get(url: str, *, timeout=30.0) -> requests.Response:
+    # Normalize float timeout to a (connect, read) tuple. Single-value timeouts
+    # in stdlib `requests` are unreliable on TCP-level stalls — the read timeout
+    # only counts inter-byte gaps, not total time, so a server that drips one
+    # byte every 29s never trips a 30s timeout. The 2026-05-18 patch ingest
+    # hung for 2+ hours on a single Fed speech URL in exactly that state.
+    if isinstance(timeout, (int, float)):
+        timeout = (10.0, float(timeout))
     resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout)
     resp.raise_for_status()
     return resp
