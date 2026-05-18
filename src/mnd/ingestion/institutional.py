@@ -9,7 +9,8 @@ and config/whitelist.yaml:
                             federalreserve.gov and captured here — no separate ingestor needed.
     FedRegionalIngestor     Regional Fed blogs and Economic Letters
     CongressionalIngestor   Treasury Secretary testimony (Senate Banking, HFSC)
-    IMFIngestor             imf.org — WEO/GFSR/Blog/Working Papers (RCC only)
+    IMFIngestor             imf.org — WEO, GFSR, F&D, Working Papers, IMF Blog
+                            (Coveo Search API; curl_cffi Chrome impersonation)
     BISIngestor             bis.org — Quarterly Review + Working Papers
     TreasuryOFRIngestor     OFR Working Papers and Briefs, FSOC Annual Reports
     CBOIngestor             cbo.gov — Budget/Economic Outlook (may 403 from residential IPs)
@@ -45,7 +46,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 from urllib.parse import urljoin
@@ -349,43 +350,38 @@ def _wp_post_to_article(
 
 
 class IMFIngestor(Ingestor):
-    """IMF WEO, GFSR, F&D, and Working Papers (2010-present).
+    """IMF flagship publications (2010-present) via Coveo + curl_cffi.
 
-    STATUS (2026-05-17): EXPERIMENTAL — RE-ENABLED IN COMPOSITE.
+    Listing source is the public Coveo Search endpoint that powers imf.org's
+    own client search bar: ``imfproduction561s308u.org.coveo.com/rest/search/v2``
+    with the public Bearer token (harvested from the Next.js chunk
+    ``/_next/static/chunks/1166-*.js`` on 2026-05-17). For each series we
+    filter by URL prefix + date range and paginate up to Coveo's 1000-result
+    cap; over-cap windows recursively bisect the date range.
 
-    The hardcoded URL tables below (`_WEO_PATHS` / `_GFSR_PATHS` /
-    `_FANDD_PATHS`) all 302-redirect to `/en/errors/404` as of 2026-05-14
-    because IMF rotated slug IDs and migrated fully to Next.js SSR. New
-    retrieval path implemented 2026-05-17:
+    Coverage (series_id, URL prefix, document_type):
 
-      1. Fetch a publications-index page (e.g. /en/Publications/WEO) to
-         extract Next.js `__NEXT_DATA__` payload and parse out:
-         - `buildId` for `_next/data` SSG endpoint construction
-         - `props.pageProps.publications` (or similar) listing of recent
-           publication slugs with publication dates
-      2. For each in-window publication, fetch
-         `/_next/data/<buildId>/en/Publications/<type>/Issues/<slug>.json`
-         which returns the same data as the SSR page in JSON form (no
-         HTML scraping required).
-      3. Extract title/body/date from the JSON props.
+      | weo   | /en/publications/weo/issues/   | imf_weo            |
+      | gfsr  | /en/publications/gfsr/issues/  | imf_gfsr           |
+      | fandd | /en/publications/fandd/issues/ | imf_fandd          |
+      | wp    | /en/publications/wp/issues/    | imf_working_paper  |
+      | blog  | /en/blogs/articles/            | imf_blog           |
 
-    Static URL table retained as final fallback in case Next.js paths
-    further evolve. If both paths return 0, the composite ingestor
-    gracefully marks IMF as failed and continues.
+    Body extraction tries the Next.js ``_next/data/<buildId>/<path>.json`` SSG
+    endpoint first (no HTML parsing), and falls back to trafilatura on the
+    HTML page. For flagships (WEO/GFSR) the HTML yields the executive
+    summary + chapter intros (~250 words); for blogs and F&D articles it
+    yields the full post body (~800 words). buildId is scraped once from
+    ``/en/Publications/WEO`` at the start of fetch().
 
-    Note: IMF blocks scrapers identifying as MacroNarrativeDynamics/... with
-    HTTP 403 from residential IPs (Cloudflare WAF). Plain requests UA may
-    pass on university IPs; we use the default `_HEADERS` and add an
-    `Accept` header hint for JSON endpoints.
+    Network: every imf.org and imfproduction561s308u.org.coveo.com fetch
+    goes through ``curl_cffi.requests`` with ``impersonate='chrome131'``.
+    Akamai Bot Manager fronts imf.org and 403s stdlib ``requests`` on TLS
+    fingerprint regardless of IP or User-Agent (ADR-014, 2026-05-17).
+    curl_cffi==0.15.0 is required (see requirements.txt).
     """
 
     source_id = "imf"
-    # Re-set True 2026-05-17 (ADR-013 amendment): Cloudflare WAF blocks
-    # RCC's IP space for all IMF URLs regardless of UA. The Next.js
-    # __NEXT_DATA__ + _next/data retrieval path below is fully implemented
-    # and would work from an unblocked IP. Composite list re-comments
-    # IMFIngestor — uncomment if RCC IP is later unblocked.
-    _HISTORICAL_DISABLED = True
 
     # imf.org sits behind Akamai (NOT Cloudflare — server: AkamaiGHost).
     # Akamai Bot Manager 403s requests that present only the basic browser UA
@@ -446,422 +442,61 @@ class IMFIngestor(Ingestor):
             )
             return requests.get(url, **kwargs)
 
-    # Next.js publications-index pages where __NEXT_DATA__ can be harvested
-    # for a recent buildId + publication listing.
-    _NEXT_INDEX_PAGES = [
-        "https://www.imf.org/en/Publications/WEO",
-        "https://www.imf.org/en/Publications/GFSR",
-        "https://www.imf.org/en/Publications/fandd",
-        "https://www.imf.org/en/Publications/WP",
+    # ------------------------------------------------------------------
+    # Coveo Search API — listing path (ADR-014, 2026-05-17)
+    # ------------------------------------------------------------------
+
+    # Endpoint, org, and public Bearer token harvested from the imf.org
+    # JS bundle at /_next/static/chunks/1166-*.js (search for "COVEO:{").
+    # If listing starts returning 401, refetch the chunk and update.
+    _COVEO_ENDPOINT = "https://imfproduction561s308u.org.coveo.com/rest/search/v2"
+    _COVEO_ORG = "imfproduction561s308u"
+    _COVEO_TOKEN = "xx742a6c66-f427-4f5a-ae1e-770dc7264e8a"
+    # Coveo v2 caps firstResult+numberOfResults at 1000 without cursor mode.
+    # Windows that exceed this bisect on date range.
+    _COVEO_MAX_RESULTS = 1000
+
+    # (series_id, URL prefix matched by Coveo @uri, document_type emitted).
+    # Order is arbitrary; the composite ingestor doesn't depend on it.
+    _COVEO_SERIES: list[tuple[str, str, str]] = [
+        ("weo",   "/en/publications/weo/issues/",   "imf_weo"),
+        ("gfsr",  "/en/publications/gfsr/issues/",  "imf_gfsr"),
+        ("fandd", "/en/publications/fandd/issues/", "imf_fandd"),
+        ("wp",    "/en/publications/wp/issues/",    "imf_working_paper"),
+        ("blog",  "/en/blogs/articles/",            "imf_blog"),
     ]
-
-    # Verified WEO issue URLs (2010-2024). Older editions use 2016-12-31 as
-    # URL date; actual pub date is parsed from the slug title.
-    _WEO_PATHS = [
-        ("/en/Publications/WEO/Issues/2024/10/22/world-economic-outlook-october-2024-policy-pivot-rising-threats-55033", "2024-10-22"),
-        ("/en/Publications/WEO/Issues/2024/04/16/world-economic-outlook-april-2024-steady-but-slow-resilience-amid-divergence-54030", "2024-04-16"),
-        ("/en/Publications/WEO/Issues/2023/10/10/world-economic-outlook-october-2023-navigating-global-divergences-53197", "2023-10-10"),
-        ("/en/Publications/WEO/Issues/2023/04/11/world-economic-outlook-april-2023-a-rocky-recovery-52317", "2023-04-11"),
-        ("/en/Publications/WEO/Issues/2022/10/11/world-economic-outlook-october-2022-countering-the-cost-of-living-crisis-50372", "2022-10-11"),
-        ("/en/Publications/WEO/Issues/2022/04/19/world-economic-outlook-april-2022-war-sets-back-the-global-recovery-50501", "2022-04-19"),
-        ("/en/Publications/WEO/Issues/2021/10/12/world-economic-outlook-october-2021-recovery-during-a-pandemic-50570", "2021-10-12"),
-        ("/en/Publications/WEO/Issues/2021/04/06/world-economic-outlook-april-2021-managing-divergent-recoveries-50219", "2021-04-06"),
-        ("/en/Publications/WEO/Issues/2020/10/13/world-economic-outlook-october-2020-a-long-and-difficult-ascent-49722", "2020-10-13"),
-        ("/en/Publications/WEO/Issues/2020/04/14/world-economic-outlook-april-2020-the-great-lockdown-49306", "2020-04-14"),
-        ("/en/Publications/WEO/Issues/2019/10/15/world-economic-outlook-october-2019-global-manufacturing-downturn-rising-trade-barriers-48306", "2019-10-15"),
-        ("/en/Publications/WEO/Issues/2019/04/02/world-economic-outlook-april-2019-growth-slowdown-precarious-recovery-46809", "2019-04-02"),
-        ("/en/Publications/WEO/Issues/2018/09/24/world-economic-outlook-october-2018-challenges-to-steady-growth-45540", "2018-09-24"),
-        ("/en/Publications/WEO/Issues/2018/04/02/world-economic-outlook-april-2018-cyclical-upswing-structural-change-45119", "2018-04-02"),
-        ("/en/Publications/WEO/Issues/2017/09/19/world-economic-outlook-october-2017-seeking-sustainable-growth-short-term-recovery-44594", "2017-09-19"),
-        ("/en/Publications/WEO/Issues/2017/04/07/world-economic-outlook-april-2017-gaining-momentum-44464", "2017-04-07"),
-        ("/en/Publications/WEO/Issues/2016/10/04/world-economic-outlook-october-2016-subdued-demand-symptoms-and-remedies-44084", "2016-10-04"),
-        ("/en/Publications/WEO/Issues/2016/04/06/world-economic-outlook-april-2016-too-slow-for-too-long-43693", "2016-04-06"),
-        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-October-2015-Adjusting-to-Lower-Commodity-Prices-43234", "2015-10-01"),
-        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-April-2015-Uneven-Growth-Short-and-Long-Term-Factors-43011", "2015-04-01"),
-        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-October-2014-Legacies-Clouds-Uncertainties-42082", "2014-10-01"),
-        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-April-2014-Recovery-Strengthens-Remains-Uneven-41631", "2014-04-01"),
-        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-October-2013-Transitions-and-Tensions-41218", "2013-10-01"),
-        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-April-2013-Hopes-Realities-Risks-40834", "2013-04-01"),
-        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-October-2012-Coping-with-High-Debt-and-Sluggish-Growth-40557", "2012-10-01"),
-        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-April-2012-Growth-Resuming-Dangers-Remain-40210", "2012-04-01"),
-        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-September-2011-Slowing-Growth-Rising-Risks-39839", "2011-09-01"),
-        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-April-2011-Tensions-from-the-Two-Speed-Recovery-39562", "2011-04-01"),
-        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-October-2010-Recovery-Risk-and-Rebalancing-39113", "2010-10-01"),
-        ("/en/Publications/WEO/Issues/2016/12/31/World-Economic-Outlook-April-2010-Rebalancing-Growth-40086", "2010-04-01"),
-    ]
-
-    # Verified GFSR issue URLs (2010-2024).
-    _GFSR_PATHS = [
-        ("/en/Publications/GFSR/Issues/2024/10/22/global-financial-stability-report-october-2024-the-great-funding-transformation-55092", "2024-10-22"),
-        ("/en/Publications/GFSR/Issues/2024/04/17/global-financial-stability-report-april-2024-the-last-mile-financial-vulnerabilities-54174", "2024-04-17"),
-        ("/en/Publications/GFSR/Issues/2023/10/11/global-financial-stability-report-october-2023-financial-and-climate-policies-for-a-high-53510", "2023-10-11"),
-        ("/en/Publications/GFSR/Issues/2023/04/05/global-financial-stability-report-april-2023-vulnerabilities-in-a-higher-for-longer-52502", "2023-04-05"),
-        ("/en/Publications/GFSR/Issues/2022/10/11/global-financial-stability-report-october-2022-navigating-the-high-inflation-environment-51318", "2022-10-11"),
-        ("/en/Publications/GFSR/Issues/2022/04/19/global-financial-stability-report-april-2022-shockwaves-from-the-war-in-ukraine-test-the-50786", "2022-04-19"),
-        ("/en/Publications/GFSR/Issues/2021/10/13/global-financial-stability-report-october-2021-covid-19-crypto-and-climate-navigating-50823", "2021-10-13"),
-        ("/en/Publications/GFSR/Issues/2021/04/06/global-financial-stability-report-april-2021-preempting-a-legacy-of-vulnerabilities-50057", "2021-04-06"),
-        ("/en/Publications/GFSR/Issues/2020/10/13/global-financial-stability-report-october-2020-bridge-to-recovery-49753", "2020-10-13"),
-        ("/en/Publications/GFSR/Issues/2020/04/14/global-financial-stability-report-april-2020-markets-in-the-time-of-covid-19-49020", "2020-04-14"),
-        ("/en/Publications/GFSR/Issues/2019/10/16/global-financial-stability-report-october-2019-lower-for-longer-48763", "2019-10-16"),
-        ("/en/Publications/GFSR/Issues/2019/04/01/global-financial-stability-report-april-2019-vulnerabilities-in-a-maturing-credit-cycle-46843", "2019-04-01"),
-        ("/en/Publications/GFSR/Issues/2018/09/26/global-financial-stability-report-october-2018-a-decade-after-the-global-financial-crisis-45710", "2018-09-26"),
-        ("/en/Publications/GFSR/Issues/2018/04/02/global-financial-stability-report-april-2018-a-bumpy-road-ahead-45843", "2018-04-02"),
-        ("/en/Publications/GFSR/Issues/2017/09/27/global-financial-stability-report-october-2017-is-growth-at-risk-44419", "2017-09-27"),
-        ("/en/Publications/GFSR/Issues/2017/04/07/global-financial-stability-report-april-2017-getting-the-policy-mix-right-44501", "2017-04-07"),
-        ("/en/Publications/GFSR/Issues/2016/10/05/global-financial-stability-report-october-2016-fostering-stability-in-a-low-growth-low-44018", "2016-10-05"),
-        ("/en/Publications/GFSR/Issues/2016/04/11/global-financial-stability-report-april-2016-potent-policies-for-a-successful-43839", "2016-04-11"),
-        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-October-2015-Vulnerabilities-Legacies-and-Policy-43350", "2015-10-01"),
-        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-April-2015-Navigating-Monetary-Policy-Challenges-42120", "2015-04-01"),
-        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-October-2014-Risk-Taking-Liquidity-and-Shadow-Banking-Curbing-Excess-While-Promoting-Growth-41718", "2014-10-01"),
-        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-April-2014-Moving-from-Liquidity-to-Growth-Driven-Markets-41244", "2014-04-01"),
-        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-October-2013-Transitions-Challenges-to-Growth-41167", "2013-10-01"),
-        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-April-2013-Old-Risks-New-Challenges-40768", "2013-04-01"),
-        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-October-2012-Restoring-Confidence-and-Progressing-on-Reforms-40567", "2012-10-01"),
-        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-April-2012-The-Quest-for-Lasting-Stability-40583", "2012-04-01"),
-        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-September-2011-Grappling-with-Crisis-Legacies-39857", "2011-09-01"),
-        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-April-2011-Durable-Financial-Stability-39567", "2011-04-01"),
-        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-October-2010-Sovereigns-Funding-and-Systemic-Liquidity-39107", "2010-10-01"),
-        ("/en/Publications/GFSR/Issues/2016/12/31/Global-Financial-Stability-Report-April-2010-Meeting-New-Challenges-to-Stability-and-Building-a-Safer-System-40082", "2010-04-01"),
-    ]
-
-    # Finance & Development quarterly magazine (2010–2024).
-    # Published March, June, September, December. Paths verified 2026-05-08.
-    _FANDD_PATHS = [
-        ("/en/Publications/fandd/Issues/2024/12/TABLE-OF-CONTENTS-E1224", "2024-12-01"),
-        ("/en/Publications/fandd/Issues/2024/09/TABLE-OF-CONTENTS-E924", "2024-09-01"),
-        ("/en/Publications/fandd/Issues/2024/06/TABLE-OF-CONTENTS-E624", "2024-06-01"),
-        ("/en/Publications/fandd/Issues/2024/03/TABLE-OF-CONTENTS-E324", "2024-03-01"),
-        ("/en/Publications/fandd/Issues/2023/12/TABLE-OF-CONTENTS-E1223", "2023-12-01"),
-        ("/en/Publications/fandd/Issues/2023/09/TABLE-OF-CONTENTS-E923", "2023-09-01"),
-        ("/en/Publications/fandd/Issues/2023/06/TABLE-OF-CONTENTS-E623", "2023-06-01"),
-        ("/en/Publications/fandd/Issues/2023/03/TABLE-OF-CONTENTS-E323", "2023-03-01"),
-        ("/en/Publications/fandd/Issues/2022/12/TABLE-OF-CONTENTS-E1222", "2022-12-01"),
-        ("/en/Publications/fandd/Issues/2022/09/TABLE-OF-CONTENTS-E922", "2022-09-01"),
-        ("/en/Publications/fandd/Issues/2022/06/TABLE-OF-CONTENTS-E622", "2022-06-01"),
-        ("/en/Publications/fandd/Issues/2022/03/TABLE-OF-CONTENTS-E322", "2022-03-01"),
-        ("/en/Publications/fandd/Issues/2021/12/TABLE-OF-CONTENTS-E1221", "2021-12-01"),
-        ("/en/Publications/fandd/Issues/2021/09/TABLE-OF-CONTENTS-E921", "2021-09-01"),
-        ("/en/Publications/fandd/Issues/2021/06/TABLE-OF-CONTENTS-E621", "2021-06-01"),
-        ("/en/Publications/fandd/Issues/2021/03/TABLE-OF-CONTENTS-E321", "2021-03-01"),
-        ("/en/Publications/fandd/Issues/2020/12/TABLE-OF-CONTENTS-E1220", "2020-12-01"),
-        ("/en/Publications/fandd/Issues/2020/09/TABLE-OF-CONTENTS-E920", "2020-09-01"),
-        ("/en/Publications/fandd/Issues/2020/06/TABLE-OF-CONTENTS-E620", "2020-06-01"),
-        ("/en/Publications/fandd/Issues/2020/03/TABLE-OF-CONTENTS-E320", "2020-03-01"),
-        ("/en/Publications/fandd/Issues/2019/12/TABLE-OF-CONTENTS-E1219", "2019-12-01"),
-        ("/en/Publications/fandd/Issues/2019/09/TABLE-OF-CONTENTS-E919", "2019-09-01"),
-        ("/en/Publications/fandd/Issues/2019/06/TABLE-OF-CONTENTS-E619", "2019-06-01"),
-        ("/en/Publications/fandd/Issues/2019/03/TABLE-OF-CONTENTS-E319", "2019-03-01"),
-        ("/en/Publications/fandd/Issues/2018/12/TABLE-OF-CONTENTS-E1218", "2018-12-01"),
-        ("/en/Publications/fandd/Issues/2018/09/TABLE-OF-CONTENTS-E918", "2018-09-01"),
-        ("/en/Publications/fandd/Issues/2018/06/TABLE-OF-CONTENTS-E618", "2018-06-01"),
-        ("/en/Publications/fandd/Issues/2018/03/TABLE-OF-CONTENTS-E318", "2018-03-01"),
-        ("/en/Publications/fandd/Issues/2017/12/TABLE-OF-CONTENTS-E1217", "2017-12-01"),
-        ("/en/Publications/fandd/Issues/2017/09/TABLE-OF-CONTENTS-E917", "2017-09-01"),
-        ("/en/Publications/fandd/Issues/2017/06/TABLE-OF-CONTENTS-E617", "2017-06-01"),
-        ("/en/Publications/fandd/Issues/2017/03/TABLE-OF-CONTENTS-E317", "2017-03-01"),
-        ("/en/Publications/fandd/Issues/2016/12/TABLE-OF-CONTENTS-E1216", "2016-12-01"),
-        ("/en/Publications/fandd/Issues/2016/09/TABLE-OF-CONTENTS-E916", "2016-09-01"),
-        ("/en/Publications/fandd/Issues/2016/06/TABLE-OF-CONTENTS-E616", "2016-06-01"),
-        ("/en/Publications/fandd/Issues/2016/03/TABLE-OF-CONTENTS-E316", "2016-03-01"),
-        ("/en/Publications/fandd/Issues/2015/12/TABLE-OF-CONTENTS-E1215", "2015-12-01"),
-        ("/en/Publications/fandd/Issues/2015/09/TABLE-OF-CONTENTS-E915", "2015-09-01"),
-        ("/en/Publications/fandd/Issues/2015/06/TABLE-OF-CONTENTS-E615", "2015-06-01"),
-        ("/en/Publications/fandd/Issues/2015/03/TABLE-OF-CONTENTS-E315", "2015-03-01"),
-        ("/en/Publications/fandd/Issues/2014/12/TABLE-OF-CONTENTS-E1214", "2014-12-01"),
-        ("/en/Publications/fandd/Issues/2014/09/TABLE-OF-CONTENTS-E914", "2014-09-01"),
-        ("/en/Publications/fandd/Issues/2014/06/TABLE-OF-CONTENTS-E614", "2014-06-01"),
-        ("/en/Publications/fandd/Issues/2014/03/TABLE-OF-CONTENTS-E314", "2014-03-01"),
-        ("/en/Publications/fandd/Issues/2013/12/TABLE-OF-CONTENTS-E1213", "2013-12-01"),
-        ("/en/Publications/fandd/Issues/2013/09/TABLE-OF-CONTENTS-E913", "2013-09-01"),
-        ("/en/Publications/fandd/Issues/2013/06/TABLE-OF-CONTENTS-E613", "2013-06-01"),
-        ("/en/Publications/fandd/Issues/2013/03/TABLE-OF-CONTENTS-E313", "2013-03-01"),
-        ("/en/Publications/fandd/Issues/2012/12/TABLE-OF-CONTENTS-E1212", "2012-12-01"),
-        ("/en/Publications/fandd/Issues/2012/09/TABLE-OF-CONTENTS-E912", "2012-09-01"),
-        ("/en/Publications/fandd/Issues/2012/06/TABLE-OF-CONTENTS-E612", "2012-06-01"),
-        ("/en/Publications/fandd/Issues/2012/03/TABLE-OF-CONTENTS-E312", "2012-03-01"),
-        ("/en/Publications/fandd/Issues/2011/12/TABLE-OF-CONTENTS-E1211", "2011-12-01"),
-        ("/en/Publications/fandd/Issues/2011/09/TABLE-OF-CONTENTS-E911", "2011-09-01"),
-        ("/en/Publications/fandd/Issues/2011/06/TABLE-OF-CONTENTS-E611", "2011-06-01"),
-        ("/en/Publications/fandd/Issues/2011/03/TABLE-OF-CONTENTS-E311", "2011-03-01"),
-        ("/en/Publications/fandd/Issues/2010/12/TABLE-OF-CONTENTS-E1210", "2010-12-01"),
-        ("/en/Publications/fandd/Issues/2010/09/TABLE-OF-CONTENTS-E910", "2010-09-01"),
-        ("/en/Publications/fandd/Issues/2010/06/TABLE-OF-CONTENTS-E610", "2010-06-01"),
-        ("/en/Publications/fandd/Issues/2010/03/TABLE-OF-CONTENTS-E310", "2010-03-01"),
-    ]
-
-    # IMF Working Papers API endpoint (requires university IP — blocked from residential).
-    # Pagination: offset-based, 25 per page, sorted by date descending.
-    _WP_API = "https://www.imf.org/api/v1/en/publications"
-
-    def fetch(self, start: date, end: date) -> Iterator[Article]:
-        # Primary: Next.js __NEXT_DATA__ + _next/data SSG endpoint (2026-05-17)
-        yielded_via_next_data = 0
-        try:
-            for article in self._fetch_via_next_data(start, end):
-                yield article
-                yielded_via_next_data += 1
-        except Exception as exc:
-            log.warning("IMF Next.js path raised: %s — falling back to static URLs", exc)
-        log.info("IMF: Next.js path yielded %d articles", yielded_via_next_data)
-
-        # Secondary: legacy hardcoded URL tables. Most/all of these 404 as of
-        # 2026-05 but kept in case IMF restores a redirect map.
-        legacy_yielded = 0
-        for article in self._fetch_flagships(start, end, self._WEO_PATHS, "weo"):
-            yield article; legacy_yielded += 1
-        for article in self._fetch_flagships(start, end, self._GFSR_PATHS, "gfsr"):
-            yield article; legacy_yielded += 1
-        for article in self._fetch_flagships(start, end, self._FANDD_PATHS, "fandd"):
-            yield article; legacy_yielded += 1
-        for article in self._fetch_working_papers(start, end):
-            yield article; legacy_yielded += 1
-        log.info("IMF: legacy fallback paths yielded %d articles", legacy_yielded)
-
-    # -----------------------------------------------------------------------
-    # Next.js retrieval path (2026-05-17 attempt — needs RCC verification)
-    # -----------------------------------------------------------------------
 
     _NEXT_DATA_SCRIPT_RE = re.compile(
         r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL
     )
 
-    def _extract_next_data(self, html: str) -> dict | None:
-        """Extract the __NEXT_DATA__ JSON payload from a Next.js page."""
-        m = self._NEXT_DATA_SCRIPT_RE.search(html)
-        if not m:
-            return None
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError as exc:
-            log.debug("IMF __NEXT_DATA__ JSON parse: %s", exc)
-            return None
+    def fetch(self, start: date, end: date) -> Iterator[Article]:
+        build_id = self._fetch_build_id()
+        if not build_id:
+            log.warning(
+                "IMF: could not retrieve a current Next.js buildId; "
+                "_next/data SSG body path disabled, trafilatura fallback only"
+            )
 
-    def _fetch_via_next_data(
-        self, start: date, end: date
-    ) -> Iterator[Article]:
-        """Enumerate IMF publications via Next.js __NEXT_DATA__ payloads.
-
-        For each known index page (WEO/GFSR/F&D/WP), pull __NEXT_DATA__,
-        find the publication listing inside the props tree, filter to the
-        requested window, and yield articles. The shape of __NEXT_DATA__
-        is not documented and may vary by section — we search the JSON
-        tree for any list of dicts with a 'date' or 'publishedDate' field.
-        """
-        # Use _IMF_HEADERS (browser UA) — the project's branded UA is 403'd
-        # by IMF's Cloudflare WAF (verified RCC 2026-05-17 with the prior
-        # branded-UA attempt logging HTTP 403 on all four index pages).
-        headers = self._IMF_HEADERS
-        for index_url in self._NEXT_INDEX_PAGES:
-            try:
-                resp = self._imf_get(index_url, headers=headers, timeout=30.0,
-                                     allow_redirects=True)
-                if resp.status_code != 200:
-                    log.info("IMF index %s: HTTP %d", index_url, resp.status_code)
-                    continue
-            except Exception as exc:
-                log.warning("IMF index fetch %s: %s", index_url, exc)
-                continue
-
-            # Detect the SPA 404 page (HTML body has title=404)
-            if "errors/404" in resp.url or '<title>Page Not Found' in resp.text[:2000]:
-                log.info("IMF index %s redirected to 404 page", index_url)
-                continue
-
-            data = self._extract_next_data(resp.text)
-            if not data:
-                log.info("IMF index %s: no __NEXT_DATA__ payload", index_url)
-                continue
-
-            build_id = data.get("buildId")
-            page_props = (data.get("props") or {}).get("pageProps") or {}
-            log.info("IMF index %s: buildId=%s pageProps keys=%s",
-                     index_url, build_id, sorted(page_props.keys())[:10])
-
-            for pub in self._walk_publications(page_props):
-                pub_date = pub.get("_date")
-                slug_url = pub.get("_url")
-                title = pub.get("_title") or "IMF Publication"
-                if not pub_date or pub_date < start or pub_date > end:
-                    continue
-                if not slug_url:
-                    continue
-                full_url = (
-                    slug_url if slug_url.startswith("http")
-                    else "https://www.imf.org" + slug_url
-                )
-                # Fetch the page itself (or _next/data JSON) for body text.
-                body = self._fetch_publication_body(full_url, build_id, headers)
+        for series_id, url_prefix, doc_type in self._COVEO_SERIES:
+            log.info(
+                "IMF Coveo series=%s window=%s..%s",
+                series_id, start.isoformat(), end.isoformat(),
+            )
+            yielded = 0
+            for hit in self._coveo_list(url_prefix, start, end):
+                url = hit["url"]
+                pub_date = hit["date"]
+                title = hit["title"]
+                try:
+                    body = self._fetch_publication_body(
+                        url, build_id, self._IMF_HEADERS
+                    )
+                except Exception as exc:
+                    log.debug("IMF body fetch %s: %s", url, exc)
+                    body = None
                 if not body or len(body.split()) < 50:
                     continue
-                yield _make_article(
-                    source_id=self.source_id,
-                    url=full_url,
-                    published_at=pub_date.isoformat() + "T00:00:00Z",
-                    title=title,
-                    body=body,
-                    author="IMF",
-                    section=pub.get("_section", "imf_publication"),
-                    tier=1,
-                    document_type=pub.get("_section", "imf_publication"),
-                )
-                time.sleep(1.0)
-            time.sleep(0.5)
-
-    def _walk_publications(self, props: dict) -> Iterator[dict]:
-        """Walk a __NEXT_DATA__ pageProps tree, yielding publication-shaped dicts.
-
-        IMF's exact shape isn't documented and changes between sections. We
-        recursively walk anything dict-like, treating any object with both a
-        date-like field and a url-like field as a candidate publication.
-        Normalize keys into a flat _date / _url / _title / _section.
-        """
-        date_keys = ("date", "publishedDate", "publicationDate", "pubDate", "publishDate")
-        url_keys = ("url", "link", "href", "path", "slug")
-        title_keys = ("title", "name", "displayTitle", "headline")
-
-        def _normalize(obj: dict) -> dict | None:
-            d = None
-            for k in date_keys:
-                if k in obj and isinstance(obj[k], str):
-                    try:
-                        d = _parse_date_flexible(obj[k]) or date.fromisoformat(obj[k][:10])
-                        break
-                    except (ValueError, TypeError):
-                        continue
-            u = None
-            for k in url_keys:
-                v = obj.get(k)
-                if isinstance(v, str) and ("/Publications/" in v or "/en/Publications/" in v):
-                    u = v
-                    break
-            t = None
-            for k in title_keys:
-                v = obj.get(k)
-                if isinstance(v, str) and v.strip():
-                    t = v.strip()
-                    break
-            if d and u:
-                return {"_date": d, "_url": u, "_title": t,
-                        "_section": obj.get("type") or obj.get("publicationType")}
-            return None
-
-        def _walk(node):
-            if isinstance(node, dict):
-                norm = _normalize(node)
-                if norm:
-                    yield norm
-                for v in node.values():
-                    yield from _walk(v)
-            elif isinstance(node, list):
-                for item in node:
-                    yield from _walk(item)
-
-        yield from _walk(props)
-
-    def _fetch_publication_body(
-        self, full_url: str, build_id: str | None, headers: dict
-    ) -> str | None:
-        """Fetch the body text for an IMF publication URL.
-
-        Tries the _next/data SSG endpoint first when buildId is known (no
-        HTML parsing required), then falls back to HTML scraping with
-        trafilatura.
-        """
-        if build_id and "/en/Publications/" in full_url:
-            # Convert /en/Publications/<...> → /_next/data/<buildId>/en/Publications/<...>.json
-            path = full_url.split("imf.org", 1)[-1]
-            ssg_url = f"https://www.imf.org/_next/data/{build_id}{path}.json"
-            try:
-                r = self._imf_get(ssg_url, headers=headers, timeout=30.0)
-                if r.status_code == 200:
-                    try:
-                        ssg = r.json()
-                        props = (ssg.get("pageProps") or {})
-                        # Try common body fields
-                        for k in ("body", "content", "html", "abstract", "summary"):
-                            v = props.get(k)
-                            if isinstance(v, str) and len(v) > 200:
-                                # Strip HTML tags if present
-                                text = BeautifulSoup(v, "lxml").get_text(" ", strip=True)
-                                if text and len(text.split()) >= 50:
-                                    return text
-                    except json.JSONDecodeError:
-                        pass
-            except Exception as exc:
-                log.debug("IMF _next/data %s: %s", ssg_url, exc)
-
-        # HTML fallback
-        return _extract_body(full_url, min_words=50)
-
-    def _fetch_working_papers(self, start: date, end: date) -> Iterator[Article]:
-        """Fetch IMF Working Papers via the publications JSON API.
-
-        Requires university IP (RCC Midway3). Blocked from residential IPs with 403.
-        API returns paginated JSON with title, url, date, abstract fields.
-        """
-        base = "https://www.imf.org"
-        offset = 0
-        page_size = 25
-        seen: set[str] = set()
-
-        while True:
-            try:
-                resp = self._imf_get(
-                    self._WP_API,
-                    params={
-                        "type": "WP",
-                        "from": start.isoformat(),
-                        "to": end.isoformat(),
-                        "offset": offset,
-                        "limit": page_size,
-                        "sort": "date",
-                    },
-                    headers=self._IMF_HEADERS,
-                    timeout=30.0,
-                )
-                if resp.status_code == 403:
-                    log.info(
-                        "IMF WP API blocked (HTTP 403) — requires university IP. "
-                        "Skipping working papers (will succeed on RCC)."
-                    )
-                    return
-                resp.raise_for_status()
-                data = resp.json()
-            except Exception as exc:
-                log.warning("IMF WP API offset=%d: %s", offset, exc)
-                return
-
-            items = data.get("items", data.get("results", data if isinstance(data, list) else []))
-            if not items:
-                break
-
-            for item in items:
-                url_path = item.get("url", "") or item.get("link", "")
-                if not url_path:
-                    continue
-                url = base + url_path if url_path.startswith("/") else url_path
-                if url in seen:
-                    continue
-                seen.add(url)
-
-                title = item.get("title", "IMF Working Paper")
-                pub_date_str = item.get("date", item.get("publishedDate", ""))
-                try:
-                    pub_date = _parse_date_flexible(pub_date_str) or start
-                except Exception:
-                    pub_date = start
-                if pub_date < start or pub_date > end:
-                    continue
-
-                # Use abstract from API if present; otherwise fetch page body
-                abstract = item.get("abstract", item.get("summary", ""))
-                if abstract and len(abstract.split()) >= 50:
-                    body = abstract
-                else:
-                    body = _extract_body(url, min_words=50) or abstract
-                if not body or len(body.split()) < 30:
-                    continue
-
                 yield _make_article(
                     source_id=self.source_id,
                     url=url,
@@ -869,61 +504,229 @@ class IMFIngestor(Ingestor):
                     title=title,
                     body=body,
                     author="IMF",
-                    section="working_paper",
+                    section=doc_type,
                     tier=1,
-                    document_type="imf_working_paper",
+                    document_type=doc_type,
                 )
+                yielded += 1
                 time.sleep(0.5)
+            log.info("IMF series=%s yielded %d articles", series_id, yielded)
 
-            offset += page_size
-            if len(items) < page_size:
-                break
-            time.sleep(1.0)
-
-    def _fetch_flagships(
-        self, start: date, end: date, path_table: list, doc_type: str
-    ) -> Iterator[Article]:
-        base = "https://www.imf.org"
-        seen: set[str] = set()
-        for path, pub_date_str in path_table:
-            try:
-                pub_date = date.fromisoformat(pub_date_str)
-            except ValueError:
-                continue
-            if pub_date < start or pub_date > end:
-                continue
-            url = base + path
-            if url in seen:
-                continue
-            seen.add(url)
-            try:
-                resp = self._imf_get(url, headers=self._IMF_HEADERS, timeout=20.0)
-                resp.raise_for_status()
-            except Exception as exc:
-                log.debug("IMF %s fetch failed %s: %s", doc_type.upper(), url, exc)
-                continue
-            body = trafilatura.extract(resp.text, include_comments=False, include_tables=False)
-            meta = trafilatura.extract_metadata(resp.text)
-            title = (meta.title or "") if meta else ""
-            # IMF returns 200+404 HTML for rate-limited or non-existent pages
-            if title == "404" or not title:
-                log.debug("IMF %s skipping 404 response: %s", doc_type.upper(), url)
-                continue
-            if not body or len(body.split()) < 50:
-                log.debug("IMF %s body too short (%d words): %s", doc_type, len(body.split()) if body else 0, url)
-                continue
-            yield _make_article(
-                source_id=self.source_id,
-                url=url,
-                published_at=pub_date.isoformat() + "T00:00:00Z",
-                title=title,
-                body=body,
-                author="IMF",
-                section=doc_type,
-                tier=1,
-                document_type=doc_type,
+    def _fetch_build_id(self) -> str | None:
+        try:
+            resp = self._imf_get(
+                "https://www.imf.org/en/Publications/WEO",
+                timeout=30.0,
             )
-            time.sleep(1.0)
+            if resp.status_code != 200:
+                log.warning("IMF buildId fetch HTTP %d", resp.status_code)
+                return None
+            m = self._NEXT_DATA_SCRIPT_RE.search(resp.text)
+            if not m:
+                return None
+            return (json.loads(m.group(1)) or {}).get("buildId")
+        except Exception as exc:
+            log.warning("IMF buildId fetch failed: %s", exc)
+            return None
+
+    def _coveo_list(
+        self, url_prefix: str, start: date, end: date,
+    ) -> Iterator[dict]:
+        resp = self._coveo_post(url_prefix, start, end, first=0, num=100)
+        if resp.status_code != 200:
+            log.warning(
+                "IMF Coveo HTTP %d for %s [%s..%s]: %s",
+                resp.status_code, url_prefix, start, end, resp.text[:300],
+            )
+            return
+        try:
+            j = resp.json()
+        except Exception as exc:
+            log.warning("IMF Coveo JSON parse for %s: %s", url_prefix, exc)
+            return
+
+        total = j.get("totalCount", 0)
+        if total == 0:
+            return
+
+        if total > self._COVEO_MAX_RESULTS and start < end:
+            mid = start + (end - start) // 2
+            yield from self._coveo_list(url_prefix, start, mid)
+            yield from self._coveo_list(
+                url_prefix, mid + timedelta(days=1), end,
+            )
+            return
+
+        seen: set[str] = set()
+        yield from self._coveo_items(j.get("results", []), seen)
+
+        first = 100
+        page_size = 100
+        while first < min(total, self._COVEO_MAX_RESULTS):
+            resp = self._coveo_post(
+                url_prefix, start, end, first=first, num=page_size,
+            )
+            if resp.status_code != 200:
+                log.warning(
+                    "IMF Coveo page first=%d HTTP %d for %s",
+                    first, resp.status_code, url_prefix,
+                )
+                break
+            try:
+                j = resp.json()
+            except Exception as exc:
+                log.warning("IMF Coveo page first=%d JSON parse: %s", first, exc)
+                break
+            results = j.get("results", [])
+            if not results:
+                break
+            yield from self._coveo_items(results, seen)
+            first += page_size
+            time.sleep(0.3)
+
+    def _coveo_post(
+        self, url_prefix: str, start: date, end: date,
+        first: int = 0, num: int = 100,
+    ):
+        aq = (
+            f'@uri="{url_prefix}" '
+            f'@date>={start.strftime("%Y/%m/%d")} '
+            f'@date<={end.strftime("%Y/%m/%d")}'
+        )
+        body = {
+            "q": "",
+            "aq": aq,
+            "searchHub": "Search",
+            "numberOfResults": num,
+            "firstResult": first,
+            "sortCriteria": "date descending",
+            "fieldsToInclude": ["title", "date", "uri", "clickableuri"],
+        }
+        endpoint = f"{self._COVEO_ENDPOINT}?organizationId={self._COVEO_ORG}"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self._COVEO_TOKEN}",
+            "Accept": "application/json",
+            "Origin": "https://www.imf.org",
+            "Referer": "https://www.imf.org/",
+        }
+        try:
+            from curl_cffi import requests as cffi_requests
+            return cffi_requests.post(
+                endpoint,
+                impersonate="chrome131",
+                json=body,
+                headers=headers,
+                timeout=30.0,
+            )
+        except ImportError:
+            log.error(
+                "curl_cffi not installed; Coveo POST will likely 401 / 403. "
+                "Install with `pip install curl_cffi==0.15.0` (see requirements.txt)."
+            )
+            return requests.post(
+                endpoint, json=body, headers=headers, timeout=30.0,
+            )
+
+    @staticmethod
+    def _coveo_items(results: list, seen: set[str]) -> Iterator[dict]:
+        """Convert raw Coveo result dicts to ``{url, date, title}``.
+
+        Each item is indexed twice in Coveo: once with an HTTPS URI, once with
+        a ``sitecore://`` URI (the master DB record). We keep the HTTPS one and
+        rewrite ``origin-www.imf.org`` / ``origin-blogs.imf.org`` to canonical
+        ``www.imf.org`` — Coveo indexes the origin hostname but public traffic
+        and the Next.js routes use ``www.imf.org``.
+        """
+        for res in results:
+            uri = res.get("uri") or ""
+            if not uri.startswith("http"):
+                continue
+            uri = uri.replace(
+                "https://origin-www.imf.org/", "https://www.imf.org/"
+            )
+            uri = uri.replace(
+                "https://origin-blogs.imf.org/", "https://www.imf.org/"
+            )
+            if uri in seen:
+                continue
+            seen.add(uri)
+            ms = (res.get("raw") or {}).get("date")
+            if not ms:
+                continue
+            try:
+                pub_date = datetime.fromtimestamp(
+                    ms / 1000, tz=timezone.utc,
+                ).date()
+            except Exception:
+                continue
+            title = (res.get("title") or "").strip()
+            if not title:
+                continue
+            yield {"url": uri, "date": pub_date, "title": title}
+
+    # ------------------------------------------------------------------
+    # Body extraction
+    # ------------------------------------------------------------------
+
+    def _fetch_publication_body(
+        self, full_url: str, build_id: str | None, headers: dict,
+    ) -> str | None:
+        """Resolve body text for an IMF URL.
+
+        Strategy: try the Next.js ``_next/data/<buildId>/<path>.json`` SSG
+        endpoint first for ``/en/publications/*`` URLs (no HTML parsing); fall
+        back to trafilatura on the rendered HTML. Blog URLs always take the
+        trafilatura path because the SSG build does not cover ``/en/blogs/*``.
+        """
+        if build_id and "imf.org/en/publications/" in full_url.lower():
+            path = full_url.split("imf.org", 1)[-1]
+            ssg_url = (
+                f"https://www.imf.org/_next/data/{build_id}{path}.json"
+            )
+            try:
+                r = self._imf_get(ssg_url, headers=headers, timeout=30.0)
+                if r.status_code == 200:
+                    try:
+                        ssg = r.json()
+                        pp = ssg.get("pageProps") or {}
+                        for k in ("body", "content", "html", "abstract", "summary"):
+                            v = pp.get(k)
+                            if isinstance(v, str) and len(v) > 200:
+                                text = BeautifulSoup(
+                                    v, "lxml",
+                                ).get_text(" ", strip=True)
+                                if text and len(text.split()) >= 50:
+                                    return text
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+            except Exception as exc:
+                log.debug("IMF _next/data %s: %s", ssg_url, exc)
+
+        try:
+            resp = self._imf_get(full_url, headers=headers, timeout=30.0)
+            if resp.status_code != 200:
+                return None
+            body = trafilatura.extract(
+                resp.text, include_comments=False, include_tables=False,
+            )
+            if body:
+                return body
+            soup = BeautifulSoup(resp.text, "lxml")
+            for tag in soup.find_all(
+                ["nav", "footer", "script", "style", "header"]
+            ):
+                tag.decompose()
+            content = (
+                soup.find("main")
+                or soup.find("article")
+                or soup.find("body")
+            )
+            if content:
+                return content.get_text(separator=" ", strip=True)
+        except Exception as exc:
+            log.debug("IMF HTML body %s: %s", full_url, exc)
+        return None
 
 
 class BISIngestor(Ingestor):
@@ -2642,17 +2445,7 @@ class InstitutionalIngestor(Ingestor):
             FederalReserveIngestor(),
             FedRegionalIngestor(),
             CongressionalIngestor(),
-            # IMFIngestor stays out of the composite pending a parser rewrite.
-            # The network layer is now unblocked via curl_cffi Chrome impersonation
-            # in self._imf_get (the original "Cloudflare WAF IP block" diagnosis
-            # in ADR-013 was a misread — imf.org sits behind Akamai and rejects
-            # stdlib `requests` on TLS fingerprint, not IP). But IMF migrated to
-            # Sitecore JSS and the GUID-keyed `componentProps.<...>` page structure
-            # no longer matches `_walk_publications`, so the ingestor yields 0
-            # articles even though the index fetches return 200. Re-enable once
-            # the parser is rewritten against the current Sitecore schema and a
-            # small-window run confirms non-zero yield.
-            # IMFIngestor(),
+            IMFIngestor(),
             BISIngestor(),
             TreasuryOFRIngestor(),
             CBOIngestor(),

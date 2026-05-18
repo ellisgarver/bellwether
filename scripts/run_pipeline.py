@@ -71,10 +71,11 @@ def cli(ctx: click.Context) -> None:
     "--sources", default="institutional",
     show_default=True,
     help=(
-        "Comma-separated source IDs. Only 'institutional' is active for the semantic corpus "
-        "(ADR-012). Covers Fed (FOMC/speeches/Beige Book/FEDS Notes), Regional Feds, IMF, "
-        "BIS, CEA, CBO, Treasury/OFR, Congressional testimony, VoxEU, Brookings, PIIE, CFR "
-        "(Tiers 1–2). arXiv and Jackson Hole removed in ADR-012 — see MND_PROJECT_SPEC rev3. "
+        "Comma-separated source IDs. 'institutional' is the standard composite covering "
+        "Fed (FOMC/speeches/Beige Book/FEDS Notes), Regional Feds, IMF, BIS, CBO, Treasury/OFR, "
+        "Congressional testimony, VoxEU, Brookings, PIIE, CFR (Tiers 1–2). 'imf' runs the "
+        "IMFIngestor standalone — useful for small-window debug probes without paying for "
+        "the full composite cycle (ADR-014). arXiv and Jackson Hole removed in ADR-012. "
         "AP News, Reuters, and MarketWatch removed in ADR-010 — see scripts/archive/."
     ),
 )
@@ -87,6 +88,7 @@ def ingest(
     from datetime import date as date_t
 
     from mnd.ingestion import InstitutionalIngestor
+    from mnd.ingestion.institutional import IMFIngestor
 
     cfg = ctx.obj["cfg"]
     root = project_root()
@@ -101,12 +103,14 @@ def ingest(
     def _make_ingestor(name: str, cp_path):
         if name == "institutional":
             return InstitutionalIngestor(checkpoint_path=cp_path)
+        if name == "imf":
+            return IMFIngestor()
         raise ValueError(
-            f"Unknown source: '{name}'. Only 'institutional' is active. "
+            f"Unknown source: '{name}'. Valid: 'institutional', 'imf' (standalone debug — ADR-014). "
             "AP News, Reuters, and MarketWatch have been removed from the semantic corpus (ADR-010)."
         )
 
-    valid_sources = {"institutional"}
+    valid_sources = {"institutional", "imf"}
 
     for name in [s.strip() for s in sources.split(",")]:
         if name not in valid_sources:
