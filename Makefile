@@ -6,7 +6,7 @@
 SHELL := /bin/bash
 PYTHON ?= python
 
-.PHONY: help install install-dev preflight test lint format clean pilot \
+.PHONY: help install install-dev preflight test lint format clean \
         ingest filter embed cluster validate dashboard
 
 help:  ## Show this help
@@ -41,16 +41,17 @@ clean:  ## Remove caches and build artifacts
 	find . -type d -name .ipynb_checkpoints -exec rm -rf {} + 2>/dev/null || true
 
 # ----------------------------------------------------------------------------
-# Pipeline targets — these dispatch to scripts/run_pipeline.py once it exists.
+# Pipeline targets — local entry points. Full historical runs go on RCC via
+# scripts/rcc/submit_full_pipeline.sh; these targets are for spot-runs.
 # ----------------------------------------------------------------------------
 
-pilot:  ## Run the Phase 1 pilot end-to-end (6-month sample)
-	$(PYTHON) scripts/run_pipeline.py pilot
+ingest:  ## Run institutional ingest for a date range. Use START=YYYY-MM-DD END=YYYY-MM-DD
+	$(PYTHON) scripts/run_pipeline.py ingest --start $(START) --end $(END) --sources institutional
 
-ingest:  ## Run ingestion for a date range. Use START=YYYY-MM-DD END=YYYY-MM-DD
-	$(PYTHON) scripts/run_pipeline.py ingest --start $(START) --end $(END)
+filter-pre-embed:  ## Exclude archived sources from raw JSONL (ADR-010/012)
+	$(PYTHON) scripts/run_pipeline.py filter-pre-embed
 
-filter:  ## Run topic filter + MinHash dedup over ingested articles
+filter:  ## Date-range filter + MinHash dedup (no topic filter per ADR-012)
 	$(PYTHON) scripts/run_pipeline.py filter
 
 embed:  ## Embed filtered articles. ROLE=primary|comparator
