@@ -168,35 +168,32 @@ class FederalReserveIngestor(Ingestor):
             )
 
     def _fetch_beige_books(self, start: date, end: date) -> Iterator[Article]:
-        """Fetch Beige Book reports from the Fed's beige book index page."""
-        index_url = "https://www.federalreserve.gov/monetarypolicy/beige-book-default.htm"
-        try:
-            resp = _get(index_url)
-        except Exception as exc:
-            log.error("Failed to fetch Beige Book index: %s", exc)
-            return
-        soup = BeautifulSoup(resp.text, "lxml")
-        for link in soup.find_all("a", href=True):
-            href = link["href"]
-            if "beigebook" not in href.lower():
-                continue
-            # URL pattern: /monetarypolicy/beigebook202309.htm or beigebook/2023/...
-            try:
-                stem = href.rsplit("/", 1)[-1].replace("beigebook", "").replace(".htm", "")
-                pub_date = datetime.strptime(stem[:6], "%Y%m").date()
-            except Exception:
-                continue
-            if pub_date < start or pub_date > end:
-                continue
-            full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
+        """Fetch Beige Book reports.
+
+        Two-source strategy:
+          1. The default index page (beige-book-default.htm) — current year only.
+          2. Direct URL enumeration for historical years: the Fed publishes
+             Beige Books on a consistent URL pattern (beigebookYYYYMM.htm) and
+             ~8 releases/year on irregular months. We probe all 12 months for
+             each year in window and accept 404s.
+
+        Prior code relied only on (1) and lost ~97% of historical Beige Books
+        because beige-book-default.htm doesn't link to prior years.
+        """
+        seen_urls: set[str] = set()
+
+        def _emit_from_url(full_url: str, pub_date: date) -> Iterator[Article]:
+            if full_url in seen_urls:
+                return
+            seen_urls.add(full_url)
             try:
                 page = _get(full_url)
             except Exception as exc:
-                log.warning("Failed to fetch Beige Book %s: %s", full_url, exc)
-                continue
+                log.debug("Beige Book %s fetch failed: %s", full_url, exc)
+                return
             body = _extract_text(page.text)
             if not body or len(body.split()) < 200:
-                continue
+                return
             yield Article(
                 article_id=_stable_article_id(self.source_id, full_url),
                 source_id="federalreserve",
@@ -214,6 +211,46 @@ class FederalReserveIngestor(Ingestor):
                 word_count=len(body.split()),
                 raw_metadata={"document_type": "beige_book"},
             )
+
+        # (1) Default index page — covers the current year.
+        index_url = "https://www.federalreserve.gov/monetarypolicy/beige-book-default.htm"
+        try:
+            resp = _get(index_url)
+        except Exception as exc:
+            log.warning("Beige Book index fetch failed: %s", exc)
+            resp = None
+        if resp is not None:
+            soup = BeautifulSoup(resp.text, "lxml")
+            for link in soup.find_all("a", href=True):
+                href = link["href"]
+                if "beigebook" not in href.lower():
+                    continue
+                try:
+                    stem = href.rsplit("/", 1)[-1].replace("beigebook", "").replace(".htm", "")
+                    pub_date = datetime.strptime(stem[:6], "%Y%m").date()
+                except Exception:
+                    continue
+                if pub_date < start or pub_date > end:
+                    continue
+                full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
+                yield from _emit_from_url(full_url, pub_date)
+
+        # (2) Direct URL enumeration for historical years.
+        # Try every (year, month) in window. Most return 404; we accept and skip.
+        import time as _time
+        for year in range(start.year, end.year + 1):
+            for month in range(1, 13):
+                pub_date = date(year, month, 1)
+                if pub_date < start or pub_date > end:
+                    continue
+                full_url = (
+                    f"https://www.federalreserve.gov/monetarypolicy/beigebook"
+                    f"{year:04d}{month:02d}.htm"
+                )
+                if full_url in seen_urls:
+                    continue
+                yield from _emit_from_url(full_url, pub_date)
+                _time.sleep(0.2)
 
     def _fetch_speeches(self, start: date, end: date) -> Iterator[Article]:
         """Walk Board speech indexes year by year; fall back to RSS on index failure.
@@ -309,83 +346,88 @@ class FederalReserveIngestor(Ingestor):
                 )
 
     def _fetch_feds_notes(self, start: date, end: date) -> Iterator[Article]:
-        """Fetch FEDS Notes from the Fed's econres/notes listing page.
+        """Fetch FEDS Notes from the Fed's econres/notes listing pages.
 
         FEDS Notes are short analytical pieces (1,000–3,000 words, ~70/year) written
         by Board economists. Faster than working papers; authoritative within days of
-        events. URL pattern: /econres/notes/feds-notes/YYYY/slug.htm
+        events.
+
+        URL pattern (current): /econres/notes/feds-notes/{slug}-{YYYYMMDD}.html
+        Prior code expected: /econres/notes/feds-notes/{YYYY}/{slug}.htm — that
+        path layout was retired during the federalreserve.gov redesign and the
+        old regex yielded zero matches, producing 100% silent loss across all
+        years until this fix.
+
+        The main archive page lists notes from all years on a single HTML page;
+        per-year index pages (e.g., /2024-index.htm) are walked as a fallback in
+        case the main listing is ever paginated.
         """
         import re as _re
-        index_url = "https://www.federalreserve.gov/econres/notes/feds-notes/"
-        try:
-            resp = _get(index_url)
-        except Exception as exc:
-            log.warning("FEDS Notes index fetch failed: %s", exc)
-            return
-        soup = BeautifulSoup(resp.text, "lxml")
+        import time as _time
+
         seen: set[str] = set()
-        for link in soup.find_all("a", href=True):
-            href = link["href"]
-            m = _re.search(r"/econres/notes/feds-notes/(\d{4})/", href)
-            if not m:
-                continue
-            try:
-                note_year = int(m.group(1))
-            except ValueError:
-                continue
-            if note_year < start.year or note_year > end.year:
-                continue
-            full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
-            if full_url in seen:
-                continue
-            seen.add(full_url)
-            try:
-                page = _get(full_url)
-            except Exception as exc:
-                log.debug("FEDS Notes fetch failed %s: %s", full_url, exc)
-                continue
-            body = _extract_text(page.text)
-            if not body or len(body.split()) < 100:
-                continue
-            title = link.get_text(strip=True) or f"FEDS Note {note_year}"
-            pub_date = date(note_year, 1, 1)
-            # Try path-embedded date: /YYYY/MM/DD/
-            date_m = _re.search(r"/(\d{4})/(\d{2})/(\d{2})/", href)
-            if date_m:
-                try:
-                    pub_date = date(int(date_m.group(1)), int(date_m.group(2)), int(date_m.group(3)))
-                except ValueError:
-                    pass
-            # Try filename-embedded date: fn20240115.htm → 20240115
-            if pub_date == date(note_year, 1, 1):
-                stem = href.rsplit("/", 1)[-1]
-                stem_m = _re.search(r"(\d{4})(\d{2})(\d{2})", stem)
-                if stem_m:
-                    try:
-                        pub_date = date(int(stem_m.group(1)), int(stem_m.group(2)), int(stem_m.group(3)))
-                    except ValueError:
-                        pass
-            if pub_date < start or pub_date > end:
-                continue
-            yield Article(
-                article_id=_stable_article_id(self.source_id, full_url),
-                source_id="federalreserve",
-                url=full_url,
-                published_at=pub_date.isoformat() + "T12:00:00Z",
-                retrieved_at=_now_utc_iso(),
-                title=title,
-                body=body,
-                author="Federal Reserve Board",
-                section="feds_notes",
-                language="en",
-                tier=1,
-                access="free",
-                retrieval="fed_site",
-                word_count=len(body.split()),
-                raw_metadata={"document_type": "feds_notes"},
+        # Date encoded directly in the filename suffix: ...-YYYYMMDD.html
+        slug_pattern = _re.compile(
+            r"/econres/notes/feds-notes/[^/\"]*-(\d{4})(\d{2})(\d{2})\.html?$"
+        )
+
+        index_urls = ["https://www.federalreserve.gov/econres/notes/feds-notes/"]
+        # Per-year archive pages exist (e.g. .../feds-notes/2024-index.htm) and
+        # serve as a fallback if the main archive ever gets paginated.
+        for year in range(start.year, end.year + 1):
+            index_urls.append(
+                f"https://www.federalreserve.gov/econres/notes/feds-notes/{year}-index.htm"
             )
-            import time as _time
-            _time.sleep(0.5)
+
+        for index_url in index_urls:
+            try:
+                resp = _get(index_url)
+            except Exception as exc:
+                log.debug("FEDS Notes index %s fetch failed: %s", index_url, exc)
+                continue
+            soup = BeautifulSoup(resp.text, "lxml")
+            for link in soup.find_all("a", href=True):
+                href = link["href"]
+                m = slug_pattern.search(href)
+                if not m:
+                    continue
+                try:
+                    pub_date = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                except ValueError:
+                    continue
+                if pub_date < start or pub_date > end:
+                    continue
+                full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
+                if full_url in seen:
+                    continue
+                seen.add(full_url)
+                try:
+                    page = _get(full_url)
+                except Exception as exc:
+                    log.debug("FEDS Notes fetch failed %s: %s", full_url, exc)
+                    continue
+                body = _extract_text(page.text)
+                if not body or len(body.split()) < 100:
+                    continue
+                title = link.get_text(strip=True) or f"FEDS Note {pub_date.year}"
+                yield Article(
+                    article_id=_stable_article_id(self.source_id, full_url),
+                    source_id="federalreserve",
+                    url=full_url,
+                    published_at=pub_date.isoformat() + "T12:00:00Z",
+                    retrieved_at=_now_utc_iso(),
+                    title=title,
+                    body=body,
+                    author="Federal Reserve Board",
+                    section="feds_notes",
+                    language="en",
+                    tier=1,
+                    access="free",
+                    retrieval="fed_site",
+                    word_count=len(body.split()),
+                    raw_metadata={"document_type": "feds_notes"},
+                )
+                _time.sleep(0.5)
 
     def _fetch_mpr(self, start: date, end: date) -> Iterator[Article]:
         """Fetch Monetary Policy Reports (2x/yr, Feb and Jul).
