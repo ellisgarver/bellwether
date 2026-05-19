@@ -840,6 +840,85 @@ The full audit lives at `docs/filter_audit_jel.md`.
 
 ---
 
+## ADR-016: Single-stage topic filtering + Media Cloud Premium as dynamics layer
+
+- **Status**: Accepted (drafted, ratified, and implemented 2026-05-18)
+- **Date**: 2026-05-18
+- **Supersedes**:
+  - ADR-015 partially (the "Option B: canonical Stage-1 mirror of Stage-2" recommendation is rejected here as methodologically asymmetric — see Context (a))
+  - ADR-010 partially (the "RavenPack RPA via WRDS = Layer 1B" architecture is replaced by Media Cloud Premium Press — see Context (b))
+  - ADR-008 partially (the "AP News + RavenPack" Phase 6 update plan is replaced by Tier 1/2 periodic re-ingest + Media Cloud Premium — see Context (c))
+
+### Context
+
+Three issues surfaced during the 2026-05-18 Phase 2 closeout review.
+
+**(a) ADR-015 Stage-1 inline filter is asymmetric to Stage-2.** ADR-015 replaced six per-source bespoke title-filters with a shared "canonical" title filter using the same keyword list as Stage 2. The audit claimed "no asymmetric loss because Stage 1 and Stage 2 use the same keyword list." This claim is wrong: Stage 1 filters on **title only with ≥1 keyword** while Stage 2 filters on **title + body with ≥2 keywords + embedding similarity**. An article titled "What Happens Next?" with a Fed-policy body fails Stage 1 (no title keyword) and would have passed Stage 2 (body keywords + embedding similarity). The current corpus may already be asymmetrically truncated; pre-registration must defend a corpus shaped by a title-only pre-filter that Stage 2 doesn't apply.
+
+**(b) The RavenPack-via-WRDS dynamics layer was never implemented or used.** ADR-010 declared RavenPack RPA 1.0 the Layer 1B journalism dynamics source. The implementation (`src/mnd/ingestion/ravenpack.py`) requires a WRDS subscription and ~5-week monthly-vintage delivery cadence. The detection layer is sourced from Media Cloud (free academic access, near-realtime). Using two different APIs and access methods for two operationally identical roles (journalism volume aggregation) is unnecessary surface area. Media Cloud supports per-outlet-collection queries — the same API serves both Layer 1B (premium-press collection: WSJ, Bloomberg, FT, Reuters, Barron's, Dow Jones, MarketWatch, etc.) and Layer 2 (broad collection).
+
+**(c) Phase 6 update plan named "AP News RSS + RavenPack live."** AP News was removed from the semantic corpus in ADR-010. The Layer 1B switch in (b) means RavenPack is also out. The Phase 6 update mechanism is unspecified in light of these removals. Periodic re-ingest of Tier 1 + Tier 2 institutional/academic sources captures new analytical text; Media Cloud Premium captures new journalism volume. No third "live RSS" mechanism is needed.
+
+### Decision
+
+1. **No Stage 1 topic filter.** Every per-source inline `_is_macro_relevant` / `_is_relevant` topic check is removed. Topic relevance becomes a single decision made at Stage 2 (`src/mnd/filtering/topic_filter.py`) using `config/topic_filter_keywords.yaml` over title + body with the keyword + embedding two-gate test. The canonical YAML (schema 2.0.0 from ADR-015 with JEL annotations + 234 keywords) is the only topic operationalization.
+
+2. **Preserve structural-only Stage 1 filters.** Filters that drop articles by *type* (not topic) remain:
+   - **Congressional `_is_relevant`**: drops sub-Secretary-level releases (under-secretary, assistant secretary, deputy). Tier-1 ingestion is Secretary-level by definition.
+   - **CFR `_RELEVANT_SECTIONS`**: limits sitemap walk to `/articles/`, `/backgrounders/`, `/reports/` (skips `/podcasts/`, `/events/`, `/experts/`, `/explainer-videos/`). URL-section structural filter, not topic.
+   - **Date-window filters** in every ingestor. Structural.
+   - **Word-count minimums** (≥50 words for the body to be considered analytical text). Structural.
+
+   Removed: CBO `_KEEP_KEYWORDS`, VoxEU `_MACRO_TERMS`, Brookings `_MACRO_TERMS`, CFR `_MACRO_TERMS` AND `_URL_MACRO_TOKENS` (the URL-slug topic pre-filter — this also dropped relevant articles asymmetrically), Congressional sanctions-de-dup + canonical title check.
+
+3. **Layer 1B journalism dynamics = Media Cloud Premium Press.** Daily/weekly story counts per canonical-filter keyword across the Media Cloud premium-press outlet collection (WSJ, Bloomberg, FT, Reuters, NYT, Barron's, Dow Jones, MarketWatch, AP Business, etc.). Free academic access, no WRDS subscription, near-realtime indexing.
+
+4. **Single Media Cloud module serves both Layer 1B and Layer 2.** `src/mnd/detection/mediacloud.py` is extended (separate work item) to support per-outlet-collection scoping — premium for 1B dynamics, broad for 2 detection. One API surface.
+
+5. **`src/mnd/ingestion/ravenpack.py` is deprecated.** File retained for reference; module-level docstring is prepended with a DEPRECATED notice. Not imported, not invoked. `WRDS_*` env vars are obsolete.
+
+6. **Phase 6 continuous-update mechanism: re-ingest, not RSS.** Same `run_pipeline.py ingest --sources institutional` job that powers the historical run, scheduled weekly, with checkpoint-based dedup catching new publications since the prior run. SSRN-style RSS-only sources supplement only where institutional sites lack bulk historical access.
+
+7. **CBO accepted as a documented coverage gap.** A Wayback CDX fallback for CBO was prototyped during this commit's drafting and rejected: it would introduce a single-source-specific retrieval path (no other source uses Wayback), snapshot timestamps ≠ publication dates, patchy coverage, and a new methodology limitation to defend in pre-registration. CBO remains zero records until cbo.gov direct retrieval works (would require a headless-browser layer — separate ADR if pursued).
+
+### Consequences
+
+**Positive:**
+
+- The corpus is shaped by exactly one topic decision applied at one well-defined place. Pre-registration sentence: *"Topic relevance is defined operationally by `config/topic_filter_keywords.yaml` v2.0.0 applied with ≥2 keyword matches + embedding similarity threshold at `src/mnd/filtering/topic_filter.py`. No ingest-time topic filter is applied."* No "but some sources also do this at ingest" caveat.
+- One API for both journalism-volume roles. No WRDS subscription. No two-API mental model.
+- Phase 6 update mechanism reuses the historical-ingest code; no separate live-RSS subsystem to maintain.
+- CBO gap is honest and defensible: "DataDome blocks our direct fetcher; we accept it rather than introduce a one-off workaround."
+
+**Negative / risks:**
+
+- **Ingest throughput drops substantially.** Brookings alone: prior canonical-filter pre-fetch kept ingest under an hour; content-neutral ingest of ~48,000 Brookings articles over 2010-2026 at ~1 fetch/s is ~13h. CFR similarly. VoxEU. Total full-corpus ingest moves from ~6-8h to an estimated 20-30h. This is wall-clock, not money. Amortized: ingest happens once per major re-run.
+- **More raw JSONL on disk** (rough estimate: 300 MB → 1-1.5 GB before Stage 2 filter dedup). Within scratch budget.
+- **The 47/47 unit tests previously asserted that no Stage 1 filter is present is a TODO** — they pass because nothing currently exercises filter behavior; a regression-test sub-task is added.
+- **Media Cloud Premium implementation is still TODO.** This ADR ratifies the architecture; the actual extension to `mediacloud.py` for premium-collection queries is a follow-on commit before Phase 4 freeze.
+
+### Implementation steps (this commit)
+
+1. **Code:** `src/mnd/ingestion/institutional.py` — strip topic title-filter call sites from CBO sitemap path, CBO `_fetch_archive`, CBO `_fetch_rss`, VoxEU `_fetch_year`, Brookings `fetch`, CFR sitemap walk + `_fetch_rss`; delete `_URL_MACRO_TOKENS` set from CFR; reduce Congressional `_is_relevant` to the role-guard only (sanctions-de-dup and canonical topic gate are gone — Stage 2 catches them on the body). NBER (inactive in Phase 2) retains its JEL-primary + canonical-fallback logic; flagged for a Phase-6 revisit.
+2. **Code:** `src/mnd/ingestion/ravenpack.py` — deprecation docstring at module top.
+3. **Docs:** CLAUDE.md, MND_PROJECT_SPEC.md, README.md — replace every "RavenPack/WRDS" mention with "Media Cloud Premium Press"; update Phase 6 plan; remove WRDS env var instructions; mark `ravenpack.py` as deprecated in file-locations table.
+4. **Docs:** This ADR.
+
+### Implementation steps (deferred, before Phase 4)
+
+5. Extend `src/mnd/detection/mediacloud.py` with a `query_premium_collection()` function that targets the Media Cloud premium-press outlet IDs. Output: `data/dynamics/mediacloud_premium/` weekly volume series.
+6. Update `run_pipeline.py ingest-dynamics` to call the Media Cloud Premium querier instead of (the never-invoked) RavenPack ingestor.
+7. Pre-registration update: add "no ingest-time topic filter" disclosure; update Layer 1B source citation to Media Cloud Premium.
+
+### Verification
+
+- `grep -nE "_MACRO_TERMS|_KEEP_KEYWORDS|_URL_MACRO_TOKENS" src/mnd/ingestion/institutional.py` returns no matches.
+- `grep -nE "RavenPack|WRDS_" CLAUDE.md MND_PROJECT_SPEC.md README.md` returns only deprecation-marker mentions.
+- 47/47 unit tests pass.
+- After the full re-ingest (NUKE_RAW=1), `corpus-composition --by-tier` shows substantially higher raw counts on Brookings / CFR / VoxEU and higher filter-stage admission counts when Stage 2 evaluates the now-unfiltered titles' bodies. Anchor recovery target: ≥8/10 (was 6/10 pre-coverage-fix and pre-filter-cleanup).
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

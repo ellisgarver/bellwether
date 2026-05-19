@@ -49,9 +49,9 @@ If SIR fits poorly across the validation set, fall back to logistic growth or no
 
 ## 4. Data Source Architecture — FINAL
 
-**This supersedes all prior corpus architecture. The following are permanently removed from active ingestion: AP News, MarketWatch, GDELT, Common Crawl, ProQuest, NewsAPI, arXiv, Jackson Hole papers as a separate source. NBER and SSRN are removed from historical ingestion and retained for Phase 6 live updates only. RavenPack is the journalism coverage layer. Media Cloud is the detection layer. JLN uncertainty indices are replaced by EPU.**
+**This supersedes all prior corpus architecture. The following are permanently removed from active ingestion: AP News, MarketWatch, GDELT, Common Crawl, ProQuest, NewsAPI, arXiv, Jackson Hole papers as a separate source. NBER and SSRN are removed from historical ingestion and retained for Phase 6 live updates only. Media Cloud Premium Press is the journalism coverage layer (Layer 1B). Media Cloud broad outlets is the detection layer (Layer 2). JLN uncertainty indices are replaced by EPU. RavenPack is NOT used (ADR-016, 2026-05-18).**
 
-The architecture maps directly onto Shiller's narrative propagation framework: narratives are characterized in analytical institutional discourse (Layer 1A text), propagate into financial journalism (Layer 1B RavenPack), and their emergence is detected via broad volume signals before institutional characterization begins (Layer 2). These layers are operationally separate — RavenPack does not feed text embedding; Media Cloud does not feed clustering.
+The architecture maps directly onto Shiller's narrative propagation framework: narratives are characterized in analytical institutional discourse (Layer 1A text), propagate into financial journalism (Layer 1B Media Cloud Premium Press), and their emergence is detected via broad volume signals before institutional characterization begins (Layer 2). These layers are operationally separate — Media Cloud does not feed text embedding or clustering at either layer; both layers consume the same Media Cloud API with different outlet-collection scopes.
 
 ---
 
@@ -104,7 +104,7 @@ These are where macro narratives originate. Think tanks are downstream of this l
 
 | Source | Location | Reason |
 |--------|----------|--------|
-| AP News | `scripts/archive/` | Journalism layer replaced by RavenPack (Layer 1B) |
+| AP News | `scripts/archive/` | Journalism layer replaced by Media Cloud Premium Press (Layer 1B, ADR-016) |
 | MarketWatch | `scripts/archive/` | Same |
 | GDELT | `scripts/archive/` | Superseded; no full text; quality issues |
 | Common Crawl ingestor | `scripts/archive/` | Superseded |
@@ -116,21 +116,23 @@ These are where macro narratives originate. Think tanks are downstream of this l
 
 ---
 
-### Layer 1B — Journalism Coverage via RavenPack (dynamics fitting only, no text embedding)
+### Layer 1B — Journalism Coverage via Media Cloud Premium Press (dynamics fitting only, no text embedding)
 
-RavenPack provides structured article-level metadata and weekly volume time series from ~30 premium financial outlets (WSJ, Bloomberg, FT, Reuters, and others) consistently from 2010 to present. Access is via WRDS academic subscription. No paywall scraping. No Wayback CDX patching. No coverage inconsistency across years.
+**(ADR-016, 2026-05-18: replaces the prior RavenPack-via-WRDS plan.)** Media Cloud's premium-press outlet collection — WSJ, Bloomberg, FT, Reuters, NYT, Barron's, Dow Jones Newswires, MarketWatch, AP Business, Bloomberg Businessweek, and similar — supplies daily story counts by keyword and entity, consistent from 2010 onward. Free, academically accessible, no subscription gate. Same Media Cloud API as Layer 2; the difference is the outlet collection scoped to in the query.
 
-**What RavenPack provides:** Article volume time series per outlet cluster, event category tags (macro, monetary policy, recession, inflation, etc.), relevance scores, sentiment scores.
+**What Layer 1B provides:** Daily and weekly article volume time series per narrative keyword/entity. No full text — we never embed Media Cloud content. Premium-press scope ensures the signal measures professional financial journalism propagation rather than open-web noise.
 
-**What RavenPack does NOT do:** Provide full text for embedding. Do not pass RavenPack records into the semantic corpus pipeline. Narrative identity is determined entirely by the institutional text in Layer 1A. RavenPack measures how widely a narrative has propagated into financial journalism after being characterized in analytical discourse.
+**What Layer 1B does NOT do:** Provide full text for embedding. Narrative identity is determined entirely by the institutional + academic text in Layer 1A. Media Cloud measures how widely a narrative has propagated into financial journalism after being characterized in analytical discourse.
 
-**Role in dynamics fitting:** RavenPack provides Signal A — the primary volume series for SIR/logistic parameter estimation. It is richer and more consistent than institutional corpus counts alone, especially for the 2010–2015 window when think tank digital presence was smaller. Concordance between RavenPack dynamics (journalism propagation) and institutional corpus dynamics (analytical community engagement) is itself a finding — it measures how quickly analytical framing propagates into financial journalism, which is a direct empirical test of Shiller's propagation framework.
+**Role in dynamics fitting:** Layer 1B provides Signal A — the primary volume series for SIR/logistic parameter estimation. It is richer and more consistent than institutional corpus counts alone, especially for the 2010–2015 window when think tank digital presence was smaller. Concordance between Layer 1B dynamics (journalism propagation) and Layer 1A own-corpus dynamics (analytical community engagement) is itself a finding — it measures how quickly analytical framing propagates into financial journalism, a direct empirical test of Shiller's propagation framework.
 
 | Source | Provides | Access |
 |--------|---------|--------|
-| RavenPack RPA 1.0 Global Macro, Dow Jones Edition | Weekly article volume time series, event tags, relevance/sentiment per outlet cluster, 2010–present | WRDS — `WRDS_USERNAME`, `WRDS_PASSWORD` |
+| Media Cloud API, premium-press outlet collection | Daily/weekly article count time series per keyword/entity across ~30 curated premium financial outlets, 2010–present | `MEDIACLOUD_API_KEY` in `.env` (free academic access) |
 
-**Implementation:** `src/mnd/ingestion/ravenpack.py`. Query via WRDS PostgreSQL or Python API. Filter to macro-relevant event categories. Output weekly volume time series per outlet cluster to `data/dynamics/ravenpack/`. Store entirely separately from the Layer 1A document pipeline — these are time series, not documents.
+**Implementation:** `src/mnd/detection/mediacloud.py` (extends Layer 2 module). Query Media Cloud `/stories/count` endpoint scoped to the premium-press collection. Filter to macro-relevant keyword set (the canonical filter at `config/topic_filter_keywords.yaml`). Output weekly volume time series per narrative keyword to `data/dynamics/mediacloud_premium/`. Store entirely separately from the Layer 1A document pipeline — these are time series, not documents.
+
+**Deprecated:** `src/mnd/ingestion/ravenpack.py` remains in the repo for reference but is NOT imported or invoked. Do not pass `WRDS_*` env vars; they are obsolete.
 
 ---
 
@@ -142,7 +144,7 @@ Media Cloud provides story count time series by keyword/entity across thousands 
 - Day 0–3: Media Cloud volume spike detected (candidate flag raised)
 - Day 3–14: Regional Fed blog and think tank documents arrive, get embedded, cluster begins forming
 - Day 14–21: Formal Fed communications, IMF Blog engage with the narrative
-- Week 3+: RavenPack confirms press-level propagation; cluster has sufficient volume for dynamics fitting
+- Week 3+: Media Cloud Premium volume confirms press-level propagation; cluster has sufficient volume for dynamics fitting
 
 The lag between Media Cloud detection and institutional characterization is a measurable signal of narrative propagation speed — not a system weakness.
 
@@ -206,7 +208,7 @@ Pull documents from all Layer 1A sources. Each ingestor outputs documents with t
 
 **Timestamp rule:** Use publication/release date, not meeting or event date. FOMC minutes timestamp = release date (3 weeks after meeting), not the meeting date. The system measures when ideas enter public discourse.
 
-Run RavenPack ingestion separately via `src/mnd/ingestion/ravenpack.py`. Output goes to `data/dynamics/ravenpack/` as time series — do not mix with document records from Layer 1A.
+Run Layer 1B Media Cloud Premium ingestion separately via `src/mnd/detection/mediacloud.py`. Output goes to `data/dynamics/mediacloud_premium/` as time series — do not mix with document records from Layer 1A.
 
 ---
 
@@ -298,8 +300,8 @@ hdbscan_cluster_selection_method: eom
 
 Two volume signals feed this stage and are kept operationally separate.
 
-**Signal A — RavenPack press volume (primary)**
-Weekly article counts from the ~30-outlet premium press whitelist. Primary series for SIR/logistic parameter estimation. Consistent, outlet-normalized, full 2010–present window. Stored at `data/dynamics/ravenpack/`.
+**Signal A — Media Cloud Premium press volume (primary)**
+Weekly article counts from the ~30-outlet premium press whitelist. Primary series for SIR/logistic parameter estimation. Consistent, outlet-normalized, full 2010–present window. Stored at `data/dynamics/mediacloud_premium/`.
 
 **Signal B — Institutional corpus document counts (secondary)**
 Per-cluster document counts from Layer 1A. Count by document, not by chunk. Measures analytical-institutional community engagement. Stored at `data/dynamics/institutional/`.
@@ -309,14 +311,14 @@ Per-cluster document counts from Layer 1A. Count by document, not by chunk. Meas
 **Fitting procedure for each narrative cluster:**
 
 1. Extract Signal B time series (Layer 1A document counts per day)
-2. Extract Signal A time series (RavenPack weekly volume for matched macro event categories)
+2. Extract Signal A time series (Media Cloud Premium weekly volume for matched canonical-filter keyword set)
 3. Apply 7-day centered moving average smoothing to both series (bump to 21-day if noisy — this is the only parameter to adjust before escalating)
 4. Apply **stratified smoothing** on Signal B — smooth institutional and think-tank documents separately to prevent quarterly BIS or IMF report releases from spiking the series
 5. Apply **calendar annotation** — flag FOMC meeting dates, BLS release dates, and major known macro events on the weekly series
 6. Fit four parametric models in parallel **on Signal A** (primary): SIR, logistic, Gompertz, exponential
 7. Fit logistic model **on Signal B** (secondary) for comparison
 8. Use Bayesian inference with weakly-informative priors (PyMC) — full posterior distributions over parameters, not point estimates
-9. **Volume normalization (Signal A):** Express weekly RavenPack counts as fraction of total RavenPack corpus articles that week. Makes R₀ comparable across years; absorbs outlet coverage expansion effects.
+9. **Volume normalization (Signal A):** Express weekly Media Cloud Premium counts as fraction of total Media Cloud Premium articles that week. Makes R₀ comparable across years; absorbs outlet coverage expansion effects.
 
 **Two-stage fitting threshold:** Apply parametric models only when a cluster exceeds **3 articles/week averaged over 4 consecutive weeks AND 50 cumulative articles** in Signal A. Below threshold: descriptive stats only (first appearance, cumulative count, most recent document title). Label "pre-fitting" in dashboard. Do not force a fit on thin data.
 
@@ -404,9 +406,9 @@ Report what exists. Then proceed in this order:
 3. Fix Issue 3: filter AP News and MarketWatch from corpus (pre- or post-embed as appropriate)
 4. Fix Issue 4: make embedding model decision; create ADR if changing
 5. Add `src/mnd/detection/mediacloud.py` — new, does not exist; Media Cloud detection layer
-6. Confirm `src/mnd/ingestion/ravenpack.py` exists and outputs to `data/dynamics/ravenpack/` as time series only — not into the document corpus
+6. ~~Confirm `src/mnd/ingestion/ravenpack.py`~~ DEPRECATED (ADR-016). Layer 1B is sourced from Media Cloud Premium via `src/mnd/detection/mediacloud.py`; output goes to `data/dynamics/mediacloud_premium/` as time series only.
 7. Implement EPU validation data pull from policyuncertainty.com; remove any JLN/WRDS_MFS references
-8. Remove env vars: `PROQUEST_DATASET_ID`, `NEWS_API_KEY`, `WRDS_MFS_*`
+8. Remove env vars: `PROQUEST_DATASET_ID`, `NEWS_API_KEY`, `WRDS_*` (entire family — RavenPack via WRDS no longer used)
 9. Commit and push all changes; confirm remote is up to date
 
 ---
@@ -562,7 +564,7 @@ WRDS_MFS_*        (JLN indices replaced by EPU)
 /scratch/midway3/ehgarver/data/processed/              # cleaned, filtered documents
 /scratch/midway3/ehgarver/data/embeddings/             # embedding vectors + chunk-doc mapping
 /scratch/midway3/ehgarver/data/clusters/               # BERTopic output, all granularity levels
-/scratch/midway3/ehgarver/data/dynamics/ravenpack/     # Signal A — RavenPack time series
+/scratch/midway3/ehgarver/data/dynamics/mediacloud_premium/     # Signal A — Media Cloud Premium time series
 /scratch/midway3/ehgarver/data/dynamics/institutional/ # Signal B — corpus document counts
 data/detection/mediacloud/                             # Media Cloud detection signals (local)
 data/raw/validation/                                   # FRED, EPU, NBER recession dates (local)

@@ -22,13 +22,13 @@ for every architectural choice as a dated ADR.
 - **Phase 3+ ahead.** Full corpus embedding (Qwen3 primary + mpnet
   comparator look-ahead check, ADR-011), dynamics fitting, validation.
 
-## Corpus architecture (ADR-010 / ADR-014, current)
+## Corpus architecture (ADR-010 / ADR-014 / ADR-015 / ADR-016, current)
 
 | Layer | Role | Sources |
 |---|---|---|
 | 1A — Semantic text corpus | Embedding + clustering | Fed Board (FOMC, speeches incl. Jackson Hole, Beige Book, FEDS Notes, MPR, FSR), Regional Feds (NY/SF/Chicago/Atlanta/Dallas/StL/Cleveland), IMF (WEO/GFSR/F&D/WPs/Blog via Coveo + curl_cffi), BIS, CBO, Treasury/OFR/FSOC, Congressional testimony, VoxEU/CEPR, Brookings, PIIE, CFR |
-| 1B — Dynamics layer | Volume time series for SIR/logistic fitting (no text) | RavenPack RPA 1.0 Global Macro via WRDS |
-| 2 — Detection layer | Story-count anomaly flagging (no text) | Media Cloud API |
+| 1B — Dynamics layer | Volume time series for SIR/logistic fitting (no text) | Media Cloud premium-press collection (WSJ, Bloomberg, FT, Reuters, NYT, Barron's, Dow Jones, MarketWatch, AP Business, etc.) — ADR-016 |
+| 2 — Detection layer | Story-count anomaly flagging (no text) | Media Cloud API, broad outlet collection |
 | 3 — Validation supplements | Outcome correlation, business-cycle context | FRED, EPU (Baker-Bloom-Davis), NBER Business Cycle Dating |
 
 Permanently removed from the semantic corpus (do not reinstate without a new
@@ -50,9 +50,10 @@ pip install -e . -r requirements.txt
 
 # 3. Configure environment
 cp .env.example .env
-# Edit .env: set FRED_API_KEY, WRDS_USERNAME/PASSWORD (dynamics layer),
-# MEDIACLOUD_API_KEY (detection layer). On Apple Silicon set
-# MND_MAX_SEQ_LEN=512 to avoid Qwen3 OOM on MPS (ADR-006).
+# Edit .env: set FRED_API_KEY (Layer 3 validation only), MEDIACLOUD_API_KEY
+# (used for BOTH Layer 1B premium-press dynamics AND Layer 2 broad detection,
+# ADR-016). On Apple Silicon set MND_MAX_SEQ_LEN=512 to avoid Qwen3 OOM on
+# MPS (ADR-006). WRDS credentials are NOT required (RavenPack abandoned).
 
 # 4. Run pre-flight checks
 make preflight                # skips embedding model download
@@ -87,7 +88,7 @@ data/anchors/          Validation ground truth (10 anchor narratives + fizzled s
 data/raw/              Ingested articles (gitignored except .gitkeep)
 data/processed/        Pipeline artifacts (gitignored except .gitkeep)
 src/mnd/               Python package
-  ingestion/             InstitutionalIngestor composite + Fed + FRED + RavenPack
+  ingestion/             InstitutionalIngestor composite + Fed + FRED  (ravenpack.py deprecated per ADR-016)
   processing/            tiktoken-based 600-token chunker (ADR-008)
   filtering/             MinHash dedup; TopicFilter retained but not in active flow
   embedding/             Qwen3 primary + mpnet comparator
