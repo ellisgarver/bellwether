@@ -919,6 +919,83 @@ Three issues surfaced during the 2026-05-18 Phase 2 closeout review.
 
 ---
 
+## ADR-017: Coverage-gap closures + Phase 6 scope freeze
+
+- **Status**: Accepted (drafted, ratified, and implemented 2026-05-19)
+- **Date**: 2026-05-19
+- **Supersedes**:
+  - ADR-013 (which characterized CBO as a coverage gap pending headless-browser layer)
+  - ADR-010 partially (which kept NBER and SSRN on the books for Phase 6 live RSS — both are now removed entirely)
+  - ADR-016 partially (which accepted CBO as a documented gap — now closed via Playwright)
+
+### Context
+
+Three issues surfaced during the 2026-05-19 source-coverage audit:
+
+**(a) CBO is a needed source, not an acceptable gap.** ADR-016 accepted CBO's zero-records state as a documented coverage gap. On review, CBO publications (Budget and Economic Outlook, Long-Term Budget Outlook, Working Papers, scoring reports) are foundational to U.S. fiscal narrative analysis. Anchor coverage for fiscal narratives (debt ceiling, stimulus, deficit framing) is materially weaker without CBO. The "documented gap" position was an unnecessary concession.
+
+**(b) Multiple Tier 1/2 sources are undercaptured in ways the prior re-ingest plan does not fix.** Audit of source counts vs. expected production:
+- PIIE: 179 records vs. ~500-800/year expected (~10x undercapture). Cause: title-only listing-fallback logic dropping records when body fetch fails; teaser selector too narrow.
+- BIS: 1,057 records — captures Working Papers only. BIS Quarterly Review (~16-24/yr), Bulletins (~10-20/yr since 2020), and curated central-bank speeches (hundreds/yr) are not ingested.
+- Treasury: 160 OFR-only is correct for OFR's small output, but the labeling is confusing — Treasury Secretary press releases (the bulk of Treasury content) are captured under `congressional` source_id. Documented rather than restructured (renaming source_id would break existing data alignment).
+- ADR-016 removed Stage 1 topic filters so all three will pick up more under content-neutral ingest. But the structural scraper gaps (selectors, missing series) require code fixes, not just filter removal.
+
+**(c) Phase 6 scope drift.** ADR-010 specified NBER and SSRN as Phase-6-only live RSS sources. ADR-016 documented Phase 6 = Tier 1/2 re-ingest + Media Cloud Premium. The continued presence of NBER/SSRN in the live-only list is methodologically untidy — Phase 6 should be a clean scope. User directive (2026-05-18): "nothing new should be added to live except Media Cloud for premium press propagation."
+
+### Decision
+
+1. **CBO via Playwright + curl_cffi hybrid (ADR-013 reopened and closed).** `CBOIngestor._acquire_cookies()` launches a headless Chromium via Playwright once per ingest run to clear DataDome's JS challenge and capture clearance cookies (~3-5s, one-time). `_cbo_get()` then uses curl_cffi with those cookies for the ~25,000-URL sitemap walk (~3.5h at 0.5s/fetch). On a burst of 50 consecutive 403s mid-walk, cookies are invalidated and re-acquired up to 3 times before the run gives up. Requires `playwright==1.48.0` + `python -m playwright install chromium` (one-time per env; ~300 MB). Setup script: `scripts/install_playwright_for_cbo.sh`.
+
+2. **PIIE rewrite.** Replace title-only listing fallback with explicit body-required emission. Broaden teaser selector to `.teaser` (handles `<article>` and `<div>` variants). Add per-page logging of in-window / body-failed / emitted counts. Expectation: PIIE volume jumps from ~179 to ~1,000-2,000.
+
+3. **BIS expansion.** Replace the single working-paper regex with a dispatching list covering Working Papers + Quarterly Review articles + Bulletins + curated central-bank speeches + a catch-all for other `/publ/` HTML. Per-section count logging per year. Expectation: BIS volume jumps from ~1,057 to ~5,000-8,000 (most growth from BIS-republished speeches).
+
+4. **Treasury: clarify, do not restructure.** Document that Treasury Secretary press releases are ingested under `congressional` source_id (and have been since the original design). OFR research stays under `treasury_ofr`. Both will pick up additional content under the ADR-016 content-neutral ingest. No code rename — would invalidate existing data alignment.
+
+5. **NBER and SSRN removed entirely.** Already commented out of `InstitutionalIngestor._sub_ingestors` for historical runs. Now also removed from any Phase 6 plan. The classes survive in code as inactive reference but are NOT in any pipeline path. CLAUDE.md and MND_PROJECT_SPEC.md updated.
+
+6. **Phase 6 scope frozen.** Phase 6 = (i) periodic re-ingest of every Tier 1/2 source already in `InstitutionalIngestor._sub_ingestors`, plus (ii) Media Cloud Premium Press live volume. Nothing else. No "live RSS only" sources. No AP News, no NBER, no SSRN, no separate live ingestors.
+
+### Consequences
+
+**Positive:**
+
+- CBO becomes a first-class source. Fiscal-narrative anchor recovery (debt ceiling, stimulus, IRA, CHIPS Act, deficit framing) gains a major signal.
+- PIIE and BIS volume jumps mean fuller coverage of international macro (PIIE) and financial-stability narratives (BIS).
+- Phase 6 scope is unambiguously defined: re-ingest + Media Cloud Premium, period. Pre-registration line is clean.
+
+**Negative / risks:**
+
+- Playwright + Chromium adds ~300 MB to each conda env and a one-time setup step on RCC. Documented in `scripts/install_playwright_for_cbo.sh`.
+- Playwright sessions are slower to launch than curl_cffi calls; the per-URL average is unchanged because cookies are reused, but if DataDome rotates cookies often mid-walk, we eat 3-5s per re-acquisition. Bounded by the 3-attempt cap.
+- DataDome may detect and challenge Playwright too (real-Chrome impersonation is harder to defeat than TLS impersonation, but not impossible). If they do, we revisit — likely with `playwright-stealth` or moving Chromium binary off the well-known path.
+- PIIE rewrite drops the title-only fallback. Pages that fail body fetch (residential-IP variants) won't be in the corpus at all, vs. the prior title-only stub. From RCC's university IP, body fetch should succeed; if not, the per-page log surfaces the failure rate.
+- BIS speeches via `/review/r\d+.htm` are mostly third-party central bankers (Carney, Lagarde, Powell speaking at non-Fed events). They're curated by BIS but not BIS staff output. Section labeling distinguishes them.
+
+### Implementation steps (this commit)
+
+1. `src/mnd/ingestion/institutional.py`:
+   - `CBOIngestor`: add `_cookie_cache` class state, `_acquire_cookies()`, `_invalidate_cookies()`; rewire `_cbo_get()` to use cookies; replace fail-fast 50-403 abort with cookie-reacquire-then-abort (3 attempts max).
+   - `BISIngestor`: replace single regex with `_URL_PATTERNS` list (working_paper, quarterly_review, bulletin, speech, other_publication); per-section count logging.
+   - `PIIEIngestor`: broaden selector to `.teaser`; remove title-only fallback; require body ≥50 words; per-page logging.
+2. `requirements.txt`: add `playwright==1.48.0`; note `playwright install chromium` is required; remove RavenPack/WRDS comment block.
+3. `scripts/install_playwright_for_cbo.sh`: new one-time setup script with sanity check.
+4. Docs: CLAUDE.md and MND_PROJECT_SPEC.md remove NBER/SSRN Phase 6 mentions; Phase 6 scope clarified.
+5. This ADR.
+
+### Verification
+
+- `python scripts/install_playwright_for_cbo.sh` succeeds in the mnd conda env on RCC.
+- `python -c "from mnd.ingestion.institutional import CBOIngestor; CBOIngestor._acquire_cookies()"` returns True from RCC and prints the cookie names.
+- 47/47 unit tests pass.
+- After the next full re-ingest (NUKE_RAW=1):
+  - CBO source_id present in the JSONL with >1,000 records.
+  - BIS records include `section in (working_paper, quarterly_review, bulletin, speech)`.
+  - PIIE records >1,000.
+  - No NBER or SSRN records (sources commented out of `_sub_ingestors`).
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

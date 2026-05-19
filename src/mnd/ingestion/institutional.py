@@ -769,20 +769,44 @@ class IMFIngestor(Ingestor):
 
 
 class BISIngestor(Ingestor):
-    """BIS Working Papers via year-based XML sitemaps.
+    """BIS publications via year-based XML sitemaps.
 
-    BIS publishes ~60-80 working papers per year. We discover them from
-    ``bis.org/sitemap_documents_{year}.xml`` (URL pattern ``/publ/workNNNN.htm``)
-    and use the ``lastmod`` date as the publication date.
+    BIS publishes through several series; this ingestor walks
+    ``bis.org/sitemap_documents_{year}.xml`` once per year and dispatches
+    each URL to its matching series.
 
-    The old RSS feed (bis_rss.rss) only carries recent items; the sitemap
-    approach gives full historical coverage back to the 1990s.
+    Series captured (each tagged by ``section`` for downstream analysis):
+      - ``working_paper``      ``/publ/work\\d+\\.htm``       ~60-80/yr
+      - ``quarterly_review``   ``/publ/qtrpdf/r_qt\\d+\\.htm``  ~16-24/yr
+                                                              (4 issues × ~5 articles)
+      - ``bulletin``           ``/publ/bisbull\\d+\\.htm``    ~10-20/yr (since 2020)
+      - ``speech``             ``/review/r\\d+[a-z]?\\.htm``  hundreds/yr — central
+                                                              bankers' speeches that
+                                                              BIS curates and republishes
+      - ``other_publication``  ``/publ/[a-z]+\\d+\\.htm``     residual catch-all
+
+    Prior code matched only the working-paper pattern, capturing ~70/yr while
+    the BIS QR + Bulletins + speeches added ~hundreds more per year.
     """
 
     source_id = "bis"
 
     _SITEMAP_TMPL = "https://www.bis.org/sitemap_documents_{year}.xml"
     _BASE = "https://www.bis.org"
+
+    # (regex, section_label, document_type) — first match wins, so order matters
+    # for ambiguous URLs (working-paper pattern is the most specific; speeches
+    # are the broadest catch-all under /review/).
+    _URL_PATTERNS: list[tuple[str, str, str]] = [
+        (r"/publ/work\d+\.htm$",          "working_paper",     "bis_working_paper"),
+        (r"/publ/qtrpdf/r_qt\d+\.htm$",   "quarterly_review",  "bis_quarterly_review"),
+        (r"/publ/bisbull\d+\.htm$",       "bulletin",          "bis_bulletin"),
+        (r"/review/r\d+[a-z]?\.htm$",     "speech",            "bis_speech"),
+        # Catch-all for other /publ/ HTML documents (annual reports, conference
+        # proceedings, etc.). Excludes /publ/qtrpdf/ subdirectory which is
+        # handled above. Excludes PDF endings.
+        (r"/publ/[a-z]+\d+\.htm$",        "other_publication", "bis_publication"),
+    ]
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
@@ -802,13 +826,24 @@ class BISIngestor(Ingestor):
             return
 
         ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+        compiled = [(re.compile(p), s, d) for p, s, d in self._URL_PATTERNS]
+        per_section_count: dict[str, int] = {}
+
         for url_el in tree.findall("s:url", ns):
             loc_el = url_el.find("s:loc", ns)
             mod_el = url_el.find("s:lastmod", ns)
             if loc_el is None:
                 continue
             url = loc_el.text or ""
-            if not re.search(r"/publ/work\d+\.htm$", url):
+
+            section = None
+            doc_type = None
+            for pat, sec, dt in compiled:
+                if pat.search(url):
+                    section = sec
+                    doc_type = dt
+                    break
+            if section is None:
                 continue
 
             pub_date: date | None = None
@@ -830,6 +865,7 @@ class BISIngestor(Ingestor):
             if not body or len(body.split()) < 50:
                 continue
 
+            per_section_count[section] = per_section_count.get(section, 0) + 1
             yield _make_article(
                 source_id=self.source_id,
                 url=url,
@@ -837,11 +873,15 @@ class BISIngestor(Ingestor):
                 title=title or url.split("/")[-1],
                 body=body,
                 author=author,
-                section="working_paper",
+                section=section,
                 tier=1,
-                document_type="bis_working_paper",
+                document_type=doc_type,
             )
             time.sleep(1.0)
+
+        if per_section_count:
+            log.info("BIS %d: %s", year,
+                     ", ".join(f"{s}={n}" for s, n in sorted(per_section_count.items())))
 
 
 class FedRegionalIngestor(Ingestor):
@@ -1229,10 +1269,20 @@ class CBOIngestor(Ingestor):
     (every fetch 403'd from the RCC IP range, despite an earlier dry-run
     succeeding before DataDome tightened its policy).
 
+    ADR-017 fix (2026-05-19): Playwright launches a real headless Chromium
+    once per ingest run to clear DataDome's JS execution challenge and
+    capture the resulting clearance cookies (~3-5s). Those cookies are then
+    reused across all curl_cffi fetches for the duration of the ingest —
+    avoiding the per-URL browser overhead that would make a 25k-URL walk
+    impractical. On a burst of 403s mid-walk, cookies are invalidated and
+    re-acquired (up to 3 times) so a rotated DataDome session doesn't
+    abort the job. Requires ``pip install playwright && playwright install
+    chromium`` in the conda env on RCC.
+
     Listing path: cbo.gov's sitemap.xml is NOT bot-protected and returns
     200 from any UA. We walk the sitemap index to enumerate candidate
     publication URLs in the requested window, then fetch each publication
-    page via curl_cffi.
+    page via curl_cffi-with-cookies.
 
     `lastmod` is the last-edit date, not publication date — CBO occasionally
     edits prior publications. We add a ±365-day slop to the window when
@@ -1271,18 +1321,88 @@ class CBOIngestor(Ingestor):
         "Sec-Ch-Ua-Platform": '"macOS"',
     }
 
+    # Class-level cookie cache: DataDome clearance cookie acquired via
+    # Playwright is reused across all subsequent curl_cffi fetches until
+    # invalidated (e.g. after a 403). Acquiring the cookie launches a real
+    # Chromium browser, waits for DataDome's JS challenge to complete, then
+    # extracts the resulting cookie jar. The cookie is typically valid for
+    # hours, so one acquisition amortizes across tens of thousands of fetches.
+    _cookie_cache: dict[str, str] = {}
+    _cookie_acquired_at: float = 0.0
+
+    @classmethod
+    def _acquire_cookies(cls) -> bool:
+        """Launch headless Chromium, visit cbo.gov, capture DataDome clearance cookie.
+
+        Returns True if cookies were acquired (or already cached), False on
+        failure (Playwright not installed, Chromium not available, challenge
+        timed out). On failure, callers fall through to curl_cffi-only fetches
+        which will 403 — surfacing the failure rather than degrading silently.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            log.error(
+                "Playwright not installed — cannot acquire DataDome cookies for cbo.gov. "
+                "Install with `pip install playwright && playwright install chromium`."
+            )
+            return False
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                ctx = browser.new_context(
+                    user_agent=cls._CBO_HEADERS["User-Agent"],
+                    viewport={"width": 1280, "height": 800},
+                    locale="en-US",
+                )
+                page = ctx.new_page()
+                # Visit homepage — triggers DataDome challenge if any.
+                page.goto(cls._CBO_BASE + "/", wait_until="networkidle", timeout=45000)
+                # Visit a publication URL — confirms challenge cleared and
+                # the cookie is valid for the publication path.
+                page.goto(cls._CBO_BASE + "/publications", wait_until="networkidle", timeout=45000)
+                cookies = ctx.cookies(cls._CBO_BASE)
+                browser.close()
+            jar = {c["name"]: c["value"] for c in cookies}
+            if not jar:
+                log.error("Playwright session for cbo.gov produced no cookies")
+                return False
+            cls._cookie_cache = jar
+            cls._cookie_acquired_at = time.time()
+            log.info("Acquired %d cookies for cbo.gov (Playwright); names: %s",
+                     len(jar), ",".join(sorted(jar)[:5]))
+            return True
+        except Exception as exc:
+            log.error("Playwright cookie acquisition for cbo.gov failed: %s", exc)
+            return False
+
     @classmethod
     def _cbo_get(cls, url: str, **kwargs):
-        """HTTP GET impersonating Chrome's TLS+HTTP/2 fingerprint for cbo.gov.
+        """HTTP GET for cbo.gov URLs.
 
-        Falls back to stdlib requests if curl_cffi isn't installed; that fallback
-        will reliably 403 from RCC, which is intentional — the failure surfaces
-        loudly rather than producing another silent 0-yield run.
+        Layered defense against DataDome bot protection:
+          1. First use call triggers a Playwright session to obtain a fresh
+             DataDome clearance cookie (~3-5s, one-time per ingest run).
+          2. Every subsequent fetch is a fast curl_cffi GET with Chrome TLS
+             impersonation AND the Playwright-acquired cookies — no per-URL
+             browser overhead.
+
+        If Playwright isn't installed or the challenge fails, falls through to
+        cookie-less curl_cffi which will 403 — surfacing the failure loudly
+        rather than producing another silent 0-yield run.
         """
+        # Acquire cookies on first call. Re-acquire if the cache is empty
+        # (e.g. a previous 403 invalidated them).
+        if not cls._cookie_cache:
+            cls._acquire_cookies()
+
         try:
             from curl_cffi import requests as cffi_requests
             kwargs.setdefault("impersonate", "chrome131")
             kwargs.setdefault("headers", cls._CBO_HEADERS)
+            if cls._cookie_cache:
+                kwargs.setdefault("cookies", dict(cls._cookie_cache))
             return cffi_requests.get(url, **kwargs)
         except ImportError:
             log.error(
@@ -1290,7 +1410,19 @@ class CBOIngestor(Ingestor):
                 "Install with `pip install curl_cffi` (see requirements.txt)."
             )
             kwargs.setdefault("headers", cls._CBO_HEADERS)
+            if cls._cookie_cache:
+                kwargs.setdefault("cookies", dict(cls._cookie_cache))
             return requests.get(url, **kwargs)
+
+    @classmethod
+    def _invalidate_cookies(cls) -> None:
+        """Drop cached cookies — forces re-acquisition on next _cbo_get call.
+
+        Triggered by the fail-fast 403 path inside fetch() so a rotated
+        DataDome session can be re-acquired mid-walk without aborting.
+        """
+        cls._cookie_cache = {}
+        cls._cookie_acquired_at = 0.0
 
     # Slop applied to lastmod window — CBO edits older publications, and
     # they appear to do periodic sitemap-wide rebuilds (~6000 items show
@@ -1309,24 +1441,38 @@ class CBOIngestor(Ingestor):
             len(candidates), f"{start}..{end}", self._LASTMOD_SLOP_DAYS,
         )
         consecutive_403s = 0
+        cookie_reacquire_attempts = 0
         for url, _lastmod in candidates:
             if url in seen:
                 continue
             seen.add(url)
-            # Fail-fast guard: DataDome's JS-execution challenge was confirmed
-            # un-passable via curl_cffi on 2026-05-18 (every chrome/safari/edge/
-            # firefox impersonation and session warm-up returned 403). Once we
-            # see N consecutive 403s, abort the sitemap walk rather than burn
-            # SLURM hours on a hopeless 25k-URL loop. The 0-yield triggers the
-            # archive+RSS fallbacks below, which also fail fast.
+            # 403 recovery: after N consecutive 403s, invalidate the cached
+            # DataDome cookies and re-acquire via Playwright (ADR-017). Cookies
+            # rotate periodically; this lets us recover mid-walk without
+            # restarting the SLURM job. After K failed re-acquisitions, give up.
             if consecutive_403s >= 50:
-                log.warning(
-                    "CBO: %d consecutive 403s — aborting sitemap walk. "
-                    "DataDome is rejecting all curl_cffi impersonations. "
-                    "Treated as known coverage gap (see ingestor docstring).",
-                    consecutive_403s,
-                )
-                break
+                if cookie_reacquire_attempts < 3:
+                    cookie_reacquire_attempts += 1
+                    log.warning(
+                        "CBO: %d consecutive 403s — invalidating cached cookies "
+                        "and re-acquiring via Playwright (attempt %d/3)",
+                        consecutive_403s, cookie_reacquire_attempts,
+                    )
+                    type(self)._invalidate_cookies()
+                    if type(self)._acquire_cookies():
+                        consecutive_403s = 0
+                        # Retry this URL once with fresh cookies.
+                        seen.discard(url)
+                        continue
+                    log.warning("CBO: cookie re-acquisition failed — continuing")
+                else:
+                    log.warning(
+                        "CBO: %d consecutive 403s after %d cookie re-acquisitions "
+                        "— aborting sitemap walk. DataDome blocking definitively. "
+                        "Treated as known coverage gap.",
+                        consecutive_403s, cookie_reacquire_attempts,
+                    )
+                    break
             try:
                 resp = self._cbo_get(url, timeout=30.0)
                 if resp.status_code == 403:
@@ -2085,6 +2231,7 @@ class PIIEIngestor(Ingestor):
         base = "https://www.piie.com"
         page = 0
         past_window = False
+        total_emitted = 0
 
         while not past_window:
             try:
@@ -2095,18 +2242,26 @@ class PIIEIngestor(Ingestor):
                     timeout=30.0,
                 )
                 if resp.status_code in (403, 404):
-                    log.debug("PIIE %s page %d: HTTP %d", path, page, resp.status_code)
+                    log.warning("PIIE %s page %d: HTTP %d — stopping pagination",
+                                path, page, resp.status_code)
                     return
                 resp.raise_for_status()
             except Exception as exc:
-                log.warning("PIIE %s page %d: %s", path, page, exc)
+                log.warning("PIIE %s page %d: %s — stopping pagination", path, page, exc)
                 return
 
             soup = BeautifulSoup(resp.text, "lxml")
-            items = soup.select("article.teaser")
+            # Broader teaser selector — PIIE redesign occasionally swaps
+            # <article class="teaser"> for <div class="teaser ..."> on certain
+            # listing variants. ".teaser" matches both.
+            items = soup.select(".teaser")
             if not items:
+                log.info("PIIE %s page %d: 0 teaser items — pagination exhausted",
+                         path, page)
                 break
 
+            page_in_window = 0
+            page_body_failed = 0
             for item in items:
                 date_el = item.select_one("time")
                 if not date_el:
@@ -2125,7 +2280,8 @@ class PIIEIngestor(Ingestor):
                     past_window = True
                     continue
 
-                link = item.select_one(".teaser__title a")
+                page_in_window += 1
+                link = item.select_one(".teaser__title a") or item.select_one("h2 a, h3 a")
                 if not link:
                     continue
                 href = link.get("href", "")
@@ -2138,15 +2294,16 @@ class PIIEIngestor(Ingestor):
                 author_el = item.select_one(".author-list")
                 author = author_el.get_text(" ", strip=True) if author_el else None
 
-                # Try to fetch full body; fall back to title on 403
-                body, fetched_title, _, _pd = _fetch_page_full(url, min_words=30)
-                if not body or len(body.split()) < 20:
-                    body = title  # minimal fallback — will be filtered by corpus min_words
-                    log.debug("PIIE body unavailable for %s (likely residential IP block)", url)
+                # Fetch full body. ADR-016: ingest is content-neutral and there
+                # is NO Stage 1 topic filter; we either capture the article
+                # body or skip the record (do not emit title-only fallbacks
+                # that would carry no body signal for Stage 2 to evaluate).
+                body, fetched_title, _, _pd = _fetch_page_full(url, min_words=50)
                 if fetched_title and not title:
                     title = fetched_title
-
-                if not body or len(body.split()) < 10:
+                if not body or len(body.split()) < 50:
+                    page_body_failed += 1
+                    log.debug("PIIE body unavailable / too short for %s", url)
                     continue
 
                 yield _make_article(
@@ -2159,10 +2316,16 @@ class PIIEIngestor(Ingestor):
                     section="piie_publication",
                     tier=2,
                     document_type=f"piie_{doc_type}",
-                    extra_meta={"listing_only": len(body.split()) < 50},
                 )
+                total_emitted += 1
                 time.sleep(1.0)
 
+            log.info(
+                "PIIE %s page %d: %d items, %d in-window, %d body-failed, %d emitted "
+                "(running total: %d)",
+                path, page, len(items), page_in_window, page_body_failed,
+                page_in_window - page_body_failed, total_emitted,
+            )
             page += 1
             time.sleep(0.5)
 

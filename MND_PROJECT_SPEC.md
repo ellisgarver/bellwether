@@ -49,7 +49,7 @@ If SIR fits poorly across the validation set, fall back to logistic growth or no
 
 ## 4. Data Source Architecture — FINAL
 
-**This supersedes all prior corpus architecture. The following are permanently removed from active ingestion: AP News, MarketWatch, GDELT, Common Crawl, ProQuest, NewsAPI, arXiv, Jackson Hole papers as a separate source. NBER and SSRN are removed from historical ingestion and retained for Phase 6 live updates only. Media Cloud Premium Press is the journalism coverage layer (Layer 1B). Media Cloud broad outlets is the detection layer (Layer 2). JLN uncertainty indices are replaced by EPU. RavenPack is NOT used (ADR-016, 2026-05-18).**
+**This supersedes all prior corpus architecture. The following are permanently removed from active ingestion (historical AND Phase 6 live): AP News, MarketWatch, GDELT, Common Crawl, ProQuest, NewsAPI, arXiv, Jackson Hole papers as a separate source, NBER, SSRN. Media Cloud Premium Press is the journalism coverage layer (Layer 1B). Media Cloud broad outlets is the detection layer (Layer 2). JLN uncertainty indices are replaced by EPU. RavenPack is NOT used (ADR-016, 2026-05-18). Phase 6 = Tier 1/2 re-ingest + Media Cloud Premium only; nothing new added in live (ADR-017, 2026-05-18).**
 
 The architecture maps directly onto Shiller's narrative propagation framework: narratives are characterized in analytical institutional discourse (Layer 1A text), propagate into financial journalism (Layer 1B Media Cloud Premium Press), and their emergence is detected via broad volume signals before institutional characterization begins (Layer 2). These layers are operationally separate — Media Cloud does not feed text embedding or clustering at either layer; both layers consume the same Media Cloud API with different outlet-collection scopes.
 
@@ -111,8 +111,8 @@ These are where macro narratives originate. Think tanks are downstream of this l
 | ProQuest export script | `scripts/archive/` | Superseded |
 | arXiv | Remove from any active scripts immediately | Cut from scope: 2017-only coverage, low macro volume, not in spec |
 | Jackson Hole (separate ingestor) | Remove from any active scripts immediately | Redundant: covered by Fed speeches ingestor |
-| NBER | Removed from historical ingestion | Bulk retrieval failed; RSS retained for Phase 6 live updates only |
-| SSRN | Removed from historical ingestion | Same as NBER; live updates only |
+| NBER | Removed entirely (ADR-017) | Bulk retrieval failed; live RSS also dropped — no new sources in Phase 6 beyond Tier 1/2 re-ingest + Media Cloud Premium |
+| SSRN | Removed entirely (ADR-017) | Same as NBER |
 
 ---
 
@@ -445,7 +445,7 @@ Do not begin until Phase 3 NMI and ARI results are confirmed and pass kill crite
 
 ### Phase 6 — Live Updating
 
-Weekly cron job. Pulls past week's documents from all active Layer 1A sources. Also activates NBER and SSRN RSS feeds (live-update-only, not in historical corpus). Embeds new documents. Assigns to existing clusters or flags candidate new clusters. Refits parameters on changed clusters. Writes static artifacts. Failure handling: display last-good state with "last updated" timestamp.
+Weekly cron job. Pulls past week's documents from all active Layer 1A sources (Tier 1 + Tier 2 institutional/academic). Also refreshes Layer 1B Media Cloud Premium Press volume series. Does NOT activate NBER, SSRN, or any other source not in the historical corpus (ADR-017). Embeds new documents. Assigns to existing clusters or flags candidate new clusters. Refits parameters on changed clusters. Writes static artifacts. Failure handling: display last-good state with "last updated" timestamp.
 
 ### Phase 7 — Writeup and Reproducibility
 
