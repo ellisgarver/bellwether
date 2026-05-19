@@ -779,6 +779,66 @@ Separately, the Next.js `__NEXT_DATA__` walker that ADR-013 retained as a "fully
 
 ---
 
+## ADR-015: JEL-anchored canonical filter; eliminate inline Stage 1 filters
+
+- **Status**: Proposed (drafted 2026-05-18 during Phase 2 closeout)
+- **Date**: 2026-05-18
+- **Supersedes**: portions of ADR-012 (which removed a separate Stage 2 topic filter but left inline Stage 1 filters in place)
+
+### Context
+
+The corpus topic filter currently operates in two stages:
+
+1. **Stage 1 — Per-source inline filter.** Six broad-source ingestors (CBO, NBER, VoxEU, Brookings, CFR, Congressional) each carry a bespoke keyword list inside `src/mnd/ingestion/institutional.py` and apply it to article titles at ingest time. The lists are researcher-derived, ad-hoc per source, and not the same list across sources. Sources without inline filters: IMF, Fed, BIS, Treasury, OFR, fed_regional, PIIE.
+2. **Stage 2 — Canonical filter (`src/mnd/filtering/topic_filter.py`).** Loads keywords from `config/topic_filter_keywords.yaml` and applies a two-gate test (≥2 keyword matches AND embedding-similarity vs. seed articles).
+
+The Stage 1 lists are **not a subset of Stage 2** — each source's inline list can drop articles that Stage 2 would have admitted. This means **the corpus is shaped by per-source researcher judgment that is not pre-registered and not audit-traceable.** Pre-registration freeze is coming and this is the kind of methodology softness that requires a defensive "limitations" paragraph.
+
+Separately, the Stage 2 keyword list itself is researcher-derived and not anchored to a field-standard taxonomy. The JEL (Journal of Economic Literature) Classification System maintained by the American Economic Association is the universal classification standard for economics research; anchoring our filter to JEL subcodes makes the operational definition of "macro narrative content" pre-registration-defensible and replication-friendly.
+
+The full audit lives at `docs/filter_audit_jel.md`.
+
+### Decision
+
+1. **Anchor the canonical filter to JEL E/F/G/H scope.** Add a `methodology` block to `config/topic_filter_keywords.yaml` listing in-scope JEL top-level codes (E, F, G) and selected subcodes (F1/F3/F4/F5/F6, G1/G2/G33, H6). Annotate each existing keyword category with the JEL subcode(s) it operationalizes. Bump schema_version to `2.0.0`.
+2. **Apply the audit recommendations.** Add ~50 keywords across 11 categories to close JEL subcode gaps (e.g., `r-star`, `inflation breakevens`, `SLOOS`, `BTFP`, `swap lines`, `financial conditions index`, etc.); add a new `named_events` category covering pandemic, Brexit, named legislation (IRA, CHIPS Act) so anchor-relevant content is explicitly captured rather than relying on the embedding gate. Full additions list in `docs/filter_audit_jel.md`.
+3. **Eliminate inline Stage 1 filters.** All six broad-source ingestors stop carrying bespoke `_MACRO_TERMS` / `_KEEP_KEYWORDS` lists. The canonical YAML keyword set is loaded at ingest time and applied as a shared Stage 1 filter, identical to Stage 2's keyword set. Same filter at both stages → no asymmetric loss; ingest stays bandwidth-bounded. (Option B in the audit document — strictly faster than option A "no Stage 1 filter at all" with no methodological downside.)
+4. **Apply the canonical filter to PIIE as well.** PIIE currently has no Stage 1 filter; after the PIIE undercapture bug is fixed (separately), the article volume will increase substantially and PIIE should be filtered consistently with every other broad source.
+5. **NBER's existing JEL-based filter is retained.** NBER papers carry JEL codes natively in metadata; that filter is already JEL-anchored and serves as the canonical reference for sources that don't expose JEL codes.
+6. **Document in pre-registration.** Add a "Corpus scope" subsection citing JEL E/F/G/H and pointing at `config/topic_filter_keywords.yaml` as the keyword operationalization, with `docs/filter_audit_jel.md` as the audit record.
+
+### Consequences
+
+**Positive:**
+
+- The operational definition of "macro narrative content" is now citable: JEL E/F/G/H scope, with the keyword list as the audit-traceable operationalization. Pre-registration replaces a half-page "limitations" paragraph with a one-paragraph methodology citation.
+- One filter, applied consistently. No per-source researcher judgment shaping the corpus.
+- The JEL audit identified ~50 keyword additions (e.g., `inflation breakevens`, `BTFP`, `swap lines`) that close real coverage gaps. Expected to improve anchor recovery for COVID, Brexit, taper tantrum, and China devaluation (the 4 anchors currently failing on the pre-patch corpus per `validate` 2026-05-18 6/10).
+- PIIE filter consistency removes an asymmetry that would otherwise need separate justification.
+
+**Negative / risks:**
+
+- Refactor touches six ingestors plus the canonical YAML. Risk of breakage. Mitigated by re-running the `filter` step only (no re-ingest) after the change and re-validating anchor recovery — the loop is cheap (~40 min).
+- The `named_events` category contains entity-like terms (pandemic, Brexit, IRA). Risk that the keyword filter drifts toward entity recognition rather than topic operationalization. Mitigated by keeping the `named_events` list small and explicitly cross-referenced to anchor narratives in `data/anchors/anchor_narratives.jsonl`.
+- JEL is a 1990-vintage taxonomy and some narrative-economics constructs (e.g., the "soft landing" debate as a self-referential narrative) don't map cleanly to a single subcode. The audit table picks the closest match and accepts that some keywords cross subcode boundaries; this is consistent with how JEL is used in practice (papers typically declare 2-3 JEL codes).
+
+### Implementation steps
+
+1. Author this ADR (this commit).
+2. Edit `config/topic_filter_keywords.yaml` per the audit — schema_version 2.0.0, JEL annotations, ~50 additions, `named_events` category.
+3. Refactor inline filters: each broad-source ingestor's `_MACRO_TERMS` / `_KEEP_KEYWORDS` constant + `_is_macro_relevant` / `_is_relevant` method is replaced by a shared loader that reads from `topic_filter_keywords.yaml`.
+4. Re-run `python scripts/run_pipeline.py filter` (no re-ingest needed; the existing JSONL has more articles than the canonical filter will admit; the filter step's job is to subset it).
+5. Re-run `cluster_rcc.sh` and `validate` to confirm the methodology change doesn't regress recovery.
+6. Pre-registration update: add Corpus scope subsection.
+
+### Verification
+
+- `from mnd.filtering.topic_filter import TopicFilter; TopicFilter()` loads canonical keywords without error.
+- `python scripts/run_pipeline.py corpus-composition` post-refactor shows similar tier-1/tier-2 splits to the current state (gross deviation would indicate a bug).
+- `python scripts/run_pipeline.py validate` recovers ≥7/10 anchors post-refactor (validates that methodology hardening doesn't regress signal). Stretch goal: ≥8/10, since the JEL audit added coverage of pandemic/Brexit terminology specifically.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```
