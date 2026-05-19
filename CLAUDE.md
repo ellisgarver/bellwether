@@ -19,6 +19,9 @@ architectural decisions are in `docs/handoff_to_claude_code.md` and
 - arXiv and Jackson Hole (separate ingestor) are NOT active sources — removed in ADR-012, 2026-05-13. arXiv had 2017-only coverage; Jackson Hole speeches are captured by FederalReserveIngestor.
 - **IMF runs on RCC via curl_cffi + Coveo (ADR-014, 2026-05-17)** — imf.org is fronted by Akamai (not Cloudflare); the 403 ADR-013 attributed to an IP block was actually a TLS fingerprint (JA3) reject of stdlib `requests`. `IMFIngestor._imf_get` uses `curl_cffi.requests` with `impersonate='chrome131'` (verified 200 from RCC, T-Mobile cellular, and eduroam). Listing comes from the public Coveo Search endpoint (`imfproduction561s308u.org.coveo.com/rest/search/v2`); the old Sitecore JSS `_walk_publications` was replaced by series-keyed URL-prefix queries (`weo`, `gfsr`, `fandd`, `wp`, `blog`). `IMFIngestor()` is back in `InstitutionalIngestor._sub_ingestors`; no local-rsync needed. `curl_cffi==0.15.0` is in `requirements.txt` and must be installed in the RCC conda env (`mnd`).
 - **After any dry-run, window change, or schema change, re-submit `submit_full_pipeline.sh` with `NUKE_RAW=1`.** Default archive mode does NOT touch `data/raw/` — including `.institutional_checkpoint.json`. A stale checkpoint from a smaller-window prior run will silently SKIP sub-ingestors marked "completed" in that prior context, producing an incomplete corpus. This bit us on 2026-05-17/18: job 49737806 was submitted with default args, loaded the May-13 2024-dry-run checkpoint, and skipped Fed/FedRegional/BIS/Treasury/OFR/VoxEU/Brookings/PIIE with 2024-only counts. Cancelled and re-submitted as job 49740251 with `NUKE_RAW=1`. The script ARCHIVES (not deletes) under archive mode, so prior data is recoverable.
+- **CBO is a known coverage gap (2026-05-18).** DataDome has moved to a JS-execution challenge that defeats all `curl_cffi` impersonations (chrome120/131/android, safari17_0, edge99, firefox133) and session warm-up. CBO sub-ingestor returns 0 articles; sitemap walk aborts after 50 consecutive 403s via fail-fast guard. Restoring CBO requires adding a headless-browser layer (out of Phase 2 scope) — would need a new ADR.
+- **HTTP timeouts must be tuples, not single floats.** stdlib `requests` single-value timeouts only enforce inter-byte gaps as the read timeout; a server dripping bytes never trips a 30s timeout. The 2026-05-18 patch ingest hung 2+ hours on a single Fed speech URL in exactly that state. Both `_get` helpers (`fed.py`, `institutional.py`) now normalize float timeouts to `(connect=10, read=30)` tuples. Don't bypass this normalization in new ingestor code.
+- **Filter methodology is being JEL-anchored (ADR-015 proposed, 2026-05-18).** Inline Stage 1 filters in six broad-source ingestors (CBO/NBER/VoxEU/Brookings/CFR/Congressional) are scheduled for removal; the canonical `config/topic_filter_keywords.yaml` filter applies at both Stage 1 (ingest) and Stage 2 (filter step) using the same JEL-anchored keyword set. See `docs/filter_audit_jel.md` for the audit. Until ADR-015 is accepted and implemented, don't add new per-source inline filters.
 - Any deviation from the above requires a new ADR in `docs/architecture_decisions.md` first.
 
 ## Communication style
@@ -49,12 +52,19 @@ modify pilot code. Resume instructions below are retained for reference only.
 
 - [x] Phase 0 — scaffold, configs, anchor set, ingestors, embedding module
 - [x] Phase 1 — filtering, dedup, clustering, dynamics, stages, validation, CLI
-- [/] Phase 2 — full ingestion 2010–2026 RUNNING on RCC since 2026-05-18 00:11 CDT (jobs 49740251–49740257: ingest → filter-pre-embed → filter → embed primary + comparator → cluster). Fresh chain after the 2026-05-17 stale-checkpoint incident; institutional Tiers 1–2 + CFR; RavenPack dynamics layer separate; journalism tier removed per ADR-010.
-- [/] Phase 3 — full corpus embedding chained behind Phase 2 (Qwen3 primary + mpnet comparator look-ahead check, ADR-011)
+- [/] Phase 2 — initial chain COMPLETE 2026-05-18 (jobs 49740251–49740257, 21,289 articles, 63,600 chunks). Six coverage bugs identified by corpus-composition QA and patched in commit fc8fb60 (FEDS Notes regex, Beige Book historical enumeration, fed_chicago meta_date guard, VoxEU date-shard, CBO curl_cffi attempt). Tuple-timeout fix landed c47fb91 after 2-hour TCP-stall hang. CBO fail-fast guard landed f9222ba after curl_cffi smoke test confirmed DataDome JS challenge defeats every impersonation. Patch ingest job 49771521 currently running (2026-05-18 16:01 start, ~5-6h estimate).
+- [/] Phase 3 — initial embedding + clustering COMPLETE 2026-05-18 (jobs 49740254/256/257, Qwen3 primary + mpnet comparator + BERTopic 624/60/15 topics, outlier 25.4%). **Stability PASS: mean NMI=0.880±0.003, ARI=0.612±0.012 across 19 bootstrap replicates** (kill criterion 1 cleared by 2.2× margin). Anchor recovery on pre-patch corpus: 6/10 (FAIL by one) — 4 failing anchors are all 2013-2020 events that land in BERTopic outlier bucket due to corpus undercoverage in that era. Patches in flight are predicted to push recovery to 8-9/10.
 - [ ] Phase 4 — pre-registration finalized, full anchor + fizzled validation
 - [ ] Phase 5 — Streamlit dashboard, Hugging Face Spaces deploy
 - [ ] Phase 6 — weekly cron update pipeline (AP News RSS + RavenPack live)
 - [ ] Phase 7 — technical report, reproducibility audit
+
+### Open work (priority order, post-patch-ingest)
+
+1. **After patch ingest 49771521 completes:** re-run filter → embed → cluster chain; re-run `validate`. Expect ≥7/10 anchor recovery; if so, tick Phase 2 and Phase 3 boxes.
+2. **JEL-anchored filter refactor (ADR-015 proposed).** Methodology hardening before Phase 4 freeze: remove inline Stage 1 filters from 6 broad-source ingestors, JEL-annotate `config/topic_filter_keywords.yaml`, add ~50 keywords closing JEL E/F/G/H coverage gaps. Audit in `docs/filter_audit_jel.md`. Re-run filter+cluster+validate to confirm no regression.
+3. **PIIE undercapture (task #16).** 179 vs ~800+ expected — likely `article.teaser` selector stale after PIIE redesign. Deferred until JEL refactor lands (will also apply canonical filter to PIIE).
+4. **Phase 4** — pre-registration finalize + full anchor validation (including 6 fizzled anchors). Blocked by items 1-3.
 
 ## Environment
 
