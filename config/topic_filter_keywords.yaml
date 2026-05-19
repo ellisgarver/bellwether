@@ -1,213 +1,357 @@
 # =============================================================================
-# Topic Filter Keywords
+# Topic Filter Keywords — JEL-anchored canonical list
 # =============================================================================
-# Macro-financial keyword seed list used by the topic filter (Stage 2).
+# Macro-financial keyword set used as the single source of truth for topic
+# filtering at BOTH stages of the pipeline:
 #
-# An article passes the keyword check if it contains AT LEAST
-# `filtering.topic.keyword_min_matches` (default: 2) terms from this list.
-# It must ALSO pass the embedding-similarity check against
-# data/anchors/topic_seed_articles.jsonl.
+#   Stage 1 (per-ingestor pre-fetch) — institutional.py ingestors apply this
+#     same keyword set as an inline title filter to skip irrelevant
+#     publications before downloading them. ADR-015 (2026-05-18) eliminated
+#     the prior per-source ad-hoc inline filter lists.
 #
-# Both checks are required (AND, not OR) to prevent over-broad ingestion.
+#   Stage 2 (post-ingest canonical filter) — src/mnd/filtering/topic_filter.py
+#     applies this list as the keyword gate of a two-gate hybrid filter.
+#     An article must contain at least `filtering.topic.keyword_min_matches`
+#     terms from this list AND pass an embedding-similarity check against
+#     data/anchors/topic_seed_articles.jsonl.
+#
+# Methodology rationale: the keyword set is anchored to the JEL (Journal of
+# Economic Literature) Classification System maintained by the American
+# Economic Association. Each category is annotated with the JEL subcode(s)
+# it operationalizes; additions are justified by JEL coverage gaps. The
+# audit document (docs/filter_audit_jel.md) explains the in-scope codes
+# (E macroeconomics, F international, G financial, H6 fiscal) and which
+# JEL areas are intentionally excluded (D micro, I health, J labor general,
+# L industrial org, etc.).
 #
 # DO NOT lower keyword_min_matches without justification — single-keyword
-# matches admit a flood of off-topic articles (a Reuters piece mentioning
-# "inflation" of NFT prices, etc.).
+# matches admit a flood of off-topic articles (e.g., a piece mentioning
+# "inflation" of NFT prices).
 # =============================================================================
 
-schema_version: "1.0.0"
+schema_version: "2.0.0"
+
+methodology:
+  taxonomy: "JEL Classification System (American Economic Association)"
+  in_scope_codes:
+    - "E"     # Macroeconomics and Monetary Economics (all subcodes)
+    - "F1"    # International Trade
+    - "F3"    # International Finance
+    - "F4"    # Macroeconomic Aspects of International Trade and Finance
+    - "F5"    # International Relations, National Security, IPE
+    - "F6"    # Economic Impacts of Globalization
+    - "G1"    # General Financial Markets
+    - "G2"    # Financial Institutions and Services
+    - "G33"   # Bankruptcy / Liquidation
+    - "H6"    # National Budget, Deficit, Debt
+    - "Q4"    # Energy (only where macro-relevant — oil price shocks)
+    - "R31"   # Housing Demand
+  out_of_scope_codes:
+    [D, I, J_general, L, M, N, "O (except F-relevant)", "Q (except Q4)", "R (except R31)", Z]
+  rationale_doc: docs/filter_audit_jel.md
+  stage_policy: |
+    Identical keyword set at Stage 1 (per-ingestor inline filter) and
+    Stage 2 (canonical filter). No source has a bespoke filter. See ADR-015.
 
 categories:
 
   core_macro:
-    - inflation
-    - deflation
-    - disinflation
-    - reflation
-    - stagflation
-    - recession
-    - recessionary
-    - expansion
-    - business cycle
-    - economic outlook
-    - GDP
-    - gross domestic product
-    - unemployment
-    - jobless
-    - payrolls
-    - nonfarm payrolls
-    - consumer price index
-    - CPI
-    - PCE
-    - personal consumption expenditures
-    - core inflation
-    - headline inflation
-    - sticky inflation
-    - PPI
-    - producer price index
+    jel: [E2, E31, E32]
+    keywords:
+      - inflation
+      - deflation
+      - disinflation
+      - reflation
+      - stagflation
+      - recession
+      - recessionary
+      - expansion
+      - business cycle
+      - economic outlook
+      - GDP
+      - gross domestic product
+      - unemployment
+      - jobless
+      - payrolls
+      - nonfarm payrolls
+      - consumer price index
+      - CPI
+      - PCE
+      - personal consumption expenditures
+      - core inflation
+      - headline inflation
+      - sticky inflation
+      - core PCE
+      - supercore inflation
+      - unit labor costs
+      - output gap
+      - PPI
+      - producer price index
 
   monetary_policy:
-    - Federal Reserve
-    - FOMC
-    - Fed funds
-    - federal funds rate
-    - interest rate
-    - rate hike
-    - rate cut
-    - rate cycle
-    - rate path
-    - quantitative easing
-    - quantitative tightening
-    - balance sheet
-    - dovish
-    - hawkish
-    - monetary policy
-    - central bank
-    - ECB
-    - European Central Bank
-    - Bank of England
-    - Bank of Japan
-    - BOJ
-    - PBOC
-    - People's Bank of China
-    - Powell
-    - Lagarde
-    - SOMA
-    - reverse repo
-    - discount rate
-    - open market operations
+    jel: [E5, E52, E58]
+    keywords:
+      - Federal Reserve
+      - FOMC
+      - Fed funds
+      - federal funds rate
+      - interest rate
+      - rate hike
+      - rate cut
+      - rate cycle
+      - rate path
+      - quantitative easing
+      - quantitative tightening
+      - balance sheet
+      - dovish
+      - hawkish
+      - monetary policy
+      - central bank
+      - ECB
+      - European Central Bank
+      - Bank of England
+      - Bank of Japan
+      - BOJ
+      - PBOC
+      - People's Bank of China
+      - Powell
+      - Lagarde
+      - SOMA
+      - reverse repo
+      - discount rate
+      - open market operations
+      - r-star
+      - neutral rate
+      - dot plot
+      - IORB
+      - interest on reserves
+      - repo facility
+      - standing repo
 
   rates_and_bonds:
-    - yield curve
-    - yield curve inversion
-    - Treasury yields
-    - Treasury market
-    - sovereign yields
-    - breakeven inflation
-    - TIPS
-    - real yields
-    - term premium
-    - bond market
-    - bond auction
-    - duration risk
-    - convexity
+    jel: [E43, G12]
+    keywords:
+      - yield curve
+      - yield curve inversion
+      - Treasury yields
+      - Treasury market
+      - sovereign yields
+      - inflation breakevens
+      - breakeven inflation
+      - TIPS
+      - real yields
+      - term premium
+      - term spread
+      - 5y5y forward
+      - bond market
+      - bond auction
+      - bond rally
+      - bond selloff
+      - duration risk
+      - convexity
 
   credit:
-    - credit spreads
-    - high yield
-    - investment grade
-    - corporate bonds
-    - default rate
-    - credit conditions
-    - credit cycle
-    - leveraged loans
-    - distressed debt
+    jel: [G2, G33]
+    keywords:
+      - credit spreads
+      - high yield
+      - investment grade
+      - corporate bonds
+      - default rate
+      - credit conditions
+      - credit cycle
+      - leveraged loans
+      - distressed debt
+      - lending standards
+      - senior loan officer
+      - SLOOS
+      - commercial real estate
+      - CRE
+      - private credit
 
   banking_and_financial_stability:
-    - bank stress
-    - bank failure
-    - deposit run
-    - banking crisis
-    - regional banks
-    - capital requirements
-    - Basel
-    - Dodd-Frank
-    - systemic risk
-    - too big to fail
-    - lender of last resort
-    - financial stability
-    - bailout
-    - resolution
-    - FDIC
-    - discount window
+    jel: [G21, G28]
+    keywords:
+      - bank stress
+      - bank failure
+      - deposit run
+      - banking crisis
+      - regional banks
+      - capital requirements
+      - Basel
+      - Dodd-Frank
+      - systemic risk
+      - too big to fail
+      - lender of last resort
+      - financial stability
+      - bailout
+      - resolution
+      - FDIC
+      - discount window
+      - BTFP
+      - Bank Term Funding Program
+      - liquidity coverage ratio
+      - LCR
+      - held-to-maturity
+      - HTM
+      - unrealized losses
 
   currency:
-    - dollar
-    - dollar index
-    - DXY
-    - currency crisis
-    - exchange rate
-    - foreign exchange
-    - reserve currency
-    - currency war
-    - depreciation
-    - appreciation
-    - peg
-    - devaluation
+    jel: [F31, F33]
+    keywords:
+      - dollar
+      - dollar index
+      - DXY
+      - currency crisis
+      - exchange rate
+      - foreign exchange
+      - reserve currency
+      - currency war
+      - depreciation
+      - appreciation
+      - peg
+      - devaluation
+      - carry trade
+      - dollar funding
+      - swap lines
+      - FX intervention
 
   markets:
-    - stock market
-    - equity market
-    - S&P 500
-    - Nasdaq
-    - Dow Jones
-    - bear market
-    - bull market
-    - market correction
-    - market crash
-    - volatility
-    - VIX
-    - drawdown
-    - selloff
-    - rally
-    - melt-up
-    - market regime
+    jel: [G1, G11, G14]
+    keywords:
+      - stock market
+      - equity market
+      - S&P 500
+      - Nasdaq
+      - Dow Jones
+      - bear market
+      - bull market
+      - market correction
+      - market crash
+      - volatility
+      - VIX
+      - drawdown
+      - selloff
+      - rally
+      - melt-up
+      - market regime
+      - risk-on
+      - risk-off
+      - safe haven
+      - correlation breakdown
+      - financial conditions index
+      - FCI
+      - Goldman financial conditions
 
   macro_themes:
-    - soft landing
-    - hard landing
-    - no landing
-    - transitory
-    - wage-price spiral
-    - cost of living
-    - inflation expectations
-    - real wages
-    - productivity boom
-    - secular stagnation
-    - deglobalization
-    - reshoring
-    - friend-shoring
+    jel: [E32, E37, F62]
+    keywords:
+      - soft landing
+      - hard landing
+      - no landing
+      - transitory
+      - wage-price spiral
+      - cost of living
+      - inflation expectations
+      - real wages
+      - productivity boom
+      - secular stagnation
+      - deglobalization
+      - reshoring
+      - friend-shoring
+      - forward guidance
+      - Goldilocks
+      - disinflationary boom
+      - K-shaped recovery
+      - excess savings
 
   shocks_and_geopolitics_macro:
-    - sanctions
-    - trade war
-    - tariff
-    - supply chain
-    - supply shock
-    - energy crisis
-    - oil price shock
-    - commodity prices
-    - geopolitical risk
-    - debt ceiling
-    - sovereign debt
-    - default risk
+    jel: [F51, F13, Q43]
+    keywords:
+      - sanctions
+      - trade war
+      - tariff
+      - supply chain
+      - supply shock
+      - energy crisis
+      - oil price shock
+      - commodity prices
+      - geopolitical risk
+      - debt ceiling
+      - sovereign debt
+      - default risk
 
   policy_fiscal:
-    - fiscal policy
-    - government spending
-    - budget deficit
-    - debt-to-GDP
-    - tax cut
-    - tax hike
-    - stimulus
-    - fiscal cliff
-    - Treasury issuance
+    jel: [E62, H6]
+    keywords:
+      - fiscal policy
+      - government spending
+      - budget deficit
+      - debt-to-GDP
+      - tax cut
+      - tax hike
+      - stimulus
+      - fiscal cliff
+      - Treasury issuance
+      - government shutdown
+      - continuing resolution
 
   housing_and_consumer:
-    - housing market
-    - mortgage rates
-    - home prices
-    - housing affordability
-    - consumer spending
-    - consumer confidence
-    - consumer sentiment
-    - retail sales
+    jel: [E21, R31]
+    keywords:
+      - housing market
+      - mortgage rates
+      - home prices
+      - housing affordability
+      - housing starts
+      - building permits
+      - purchase application
+      - consumer spending
+      - consumer confidence
+      - consumer sentiment
+      - retail sales
+      - real consumption
+      - discretionary spending
+
+  named_events:
+    # Named macro shocks and policy events referenced as narrative anchors.
+    # Each entry corresponds to a JEL-in-scope shock and is documented in
+    # data/anchors/anchor_narratives.jsonl. Including these explicitly
+    # captures anchor-relevant content that purely concept-driven keywords
+    # would miss (e.g., COVID-19 / Brexit anchor recovery).
+    jel: [E32, F4, F51, G21, H6]
+    keywords:
+      # Pandemic shock (COVID anchor)
+      - COVID-19
+      - COVID
+      - pandemic
+      - lockdown
+      - reopening
+      # Brexit anchor
+      - Brexit
+      - referendum
+      - Article 50
+      # Russia / Ukraine — geopolitical shock with macro spillovers
+      - Ukraine invasion
+      - Russian sanctions
+      # Named legislation with macro-narrative load
+      - Inflation Reduction Act
+      - IRA
+      - CHIPS Act
+      - Build Back Better
+      - American Rescue Plan
+      # Banking-stress named events
+      - Silicon Valley Bank
+      - SVB
+      - First Republic
+      - Credit Suisse
+      - taper tantrum
 
 # -----------------------------------------------------------------------------
 # Explicit out-of-scope keywords — flag for filter exclusion if dominant
 # -----------------------------------------------------------------------------
 excluded_signals:
-  # Single-stock / micro topics
+  # Single-stock / micro topics (out-of-scope JEL G3 corporate finance detail)
   - earnings beat
   - earnings miss
   - quarterly results
@@ -221,7 +365,7 @@ excluded_signals:
   - altcoin
   - shitcoin
   - NFT
-  # Personal finance
+  # Personal finance (JEL D14 — out of scope)
   - personal loan
   - credit score
   - retirement planning

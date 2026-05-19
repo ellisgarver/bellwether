@@ -781,9 +781,10 @@ Separately, the Next.js `__NEXT_DATA__` walker that ADR-013 retained as a "fully
 
 ## ADR-015: JEL-anchored canonical filter; eliminate inline Stage 1 filters
 
-- **Status**: Proposed (drafted 2026-05-18 during Phase 2 closeout)
+- **Status**: Accepted (drafted, ratified, and implemented 2026-05-18 during Phase 2 closeout — same day a coverage-bug audit surfaced four ingestor fixes that share the methodology-hardening pre-Phase-4 re-ingest)
 - **Date**: 2026-05-18
 - **Supersedes**: portions of ADR-012 (which removed a separate Stage 2 topic filter but left inline Stage 1 filters in place)
+- **Implemented in**: `config/topic_filter_keywords.yaml` (schema 2.0.0), `src/mnd/ingestion/institutional.py` (`_canonical_topic_keywords()` + `_title_matches_canonical()` helpers; six ingestors refactored), `src/mnd/filtering/topic_filter.py` (backward-compatible `_load_keywords` for both schemas)
 
 ### Context
 

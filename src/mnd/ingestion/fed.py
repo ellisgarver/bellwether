@@ -177,15 +177,22 @@ class FederalReserveIngestor(Ingestor):
     def _fetch_beige_books(self, start: date, end: date) -> Iterator[Article]:
         """Fetch Beige Book reports.
 
-        Two-source strategy:
+        Three-source strategy:
           1. The default index page (beige-book-default.htm) — current year only.
-          2. Direct URL enumeration for historical years: the Fed publishes
-             Beige Books on a consistent URL pattern (beigebookYYYYMM.htm) and
-             ~8 releases/year on irregular months. We probe all 12 months for
-             each year in window and accept 404s.
+          2. The archive index (beige-book-archive.htm) — links to per-year
+             landing pages (beigebookYYYY.htm) which in turn list each issue.
+             This is the canonical way to discover historical issues.
+          3. Direct URL enumeration as a backstop for years where the archive
+             index walk yields nothing. URL pattern is era-dependent:
+               - 2017+:   /monetarypolicy/beigebookYYYYMM.htm
+               - 2010-16: /monetarypolicy/beigebook/beigebookYYYYMM.htm
+                          (extra `beigebook/` subdirectory)
+             We try both variants for every (year, month) and accept 404s.
 
-        Prior code relied only on (1) and lost ~97% of historical Beige Books
-        because beige-book-default.htm doesn't link to prior years.
+        Earlier code relied only on (1) and missed ~97% of historical Beige
+        Books because beige-book-default.htm doesn't link to prior years.
+        The single-pattern enumeration added on 2026-05-18 fixed 2017+ but
+        still missed 2010-2016 because that era uses the subdirectory variant.
         """
         seen_urls: set[str] = set()
 
@@ -219,6 +226,13 @@ class FederalReserveIngestor(Ingestor):
                 raw_metadata={"document_type": "beige_book"},
             )
 
+        import re as _re
+        import time as _time
+
+        # Matches both /monetarypolicy/beigebook201906.htm (2017+) and
+        # /monetarypolicy/beigebook/beigebook201406.htm (2010-16).
+        issue_pat = _re.compile(r"/monetarypolicy/(?:beigebook/)?beigebook(\d{4})(\d{2})\.htm$")
+
         # (1) Default index page — covers the current year.
         index_url = "https://www.federalreserve.gov/monetarypolicy/beige-book-default.htm"
         try:
@@ -230,34 +244,75 @@ class FederalReserveIngestor(Ingestor):
             soup = BeautifulSoup(resp.text, "lxml")
             for link in soup.find_all("a", href=True):
                 href = link["href"]
-                if "beigebook" not in href.lower():
+                m = issue_pat.search(href)
+                if not m:
                     continue
                 try:
-                    stem = href.rsplit("/", 1)[-1].replace("beigebook", "").replace(".htm", "")
-                    pub_date = datetime.strptime(stem[:6], "%Y%m").date()
-                except Exception:
+                    pub_date = date(int(m.group(1)), int(m.group(2)), 1)
+                except ValueError:
                     continue
                 if pub_date < start or pub_date > end:
                     continue
                 full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
                 yield from _emit_from_url(full_url, pub_date)
 
-        # (2) Direct URL enumeration for historical years.
-        # Try every (year, month) in window. Most return 404; we accept and skip.
-        import time as _time
+        # (2) Archive index — walks per-year landing pages for historical issues.
+        archive_url = "https://www.federalreserve.gov/monetarypolicy/beige-book-archive.htm"
+        try:
+            archive_resp = _get(archive_url)
+            archive_soup = BeautifulSoup(archive_resp.text, "lxml")
+            year_pages: list[str] = []
+            for link in archive_soup.find_all("a", href=True):
+                href = link["href"]
+                ym = _re.search(r"/monetarypolicy/beigebook(\d{4})\.htm$", href)
+                if not ym:
+                    continue
+                year = int(ym.group(1))
+                if year < start.year or year > end.year:
+                    continue
+                full = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
+                year_pages.append(full)
+            for year_page in year_pages:
+                try:
+                    page_resp = _get(year_page)
+                except Exception as exc:
+                    log.debug("Beige Book year page %s fetch failed: %s", year_page, exc)
+                    continue
+                year_soup = BeautifulSoup(page_resp.text, "lxml")
+                for link in year_soup.find_all("a", href=True):
+                    href = link["href"]
+                    m = issue_pat.search(href)
+                    if not m:
+                        continue
+                    try:
+                        pub_date = date(int(m.group(1)), int(m.group(2)), 1)
+                    except ValueError:
+                        continue
+                    if pub_date < start or pub_date > end:
+                        continue
+                    full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
+                    yield from _emit_from_url(full_url, pub_date)
+                _time.sleep(0.2)
+        except Exception as exc:
+            log.warning("Beige Book archive index fetch failed: %s", exc)
+
+        # (3) Backstop direct enumeration — try both URL variants for each
+        # (year, month) in window. Most 404; cheap to attempt.
         for year in range(start.year, end.year + 1):
             for month in range(1, 13):
                 pub_date = date(year, month, 1)
                 if pub_date < start or pub_date > end:
                     continue
-                full_url = (
+                for variant in (
                     f"https://www.federalreserve.gov/monetarypolicy/beigebook"
-                    f"{year:04d}{month:02d}.htm"
-                )
-                if full_url in seen_urls:
-                    continue
-                yield from _emit_from_url(full_url, pub_date)
-                _time.sleep(0.2)
+                    f"{year:04d}{month:02d}.htm",
+                    f"https://www.federalreserve.gov/monetarypolicy/beigebook/beigebook"
+                    f"{year:04d}{month:02d}.htm",
+                ):
+                    if variant in seen_urls:
+                        continue
+                    yield from _emit_from_url(variant, pub_date)
+                    _time.sleep(0.2)
 
     def _fetch_speeches(self, start: date, end: date) -> Iterator[Article]:
         """Walk Board speech indexes year by year; fall back to RSS on index failure.
@@ -359,28 +414,33 @@ class FederalReserveIngestor(Ingestor):
         by Board economists. Faster than working papers; authoritative within days of
         events.
 
-        URL pattern (current): /econres/notes/feds-notes/{slug}-{YYYYMMDD}.html
-        Prior code expected: /econres/notes/feds-notes/{YYYY}/{slug}.htm — that
-        path layout was retired during the federalreserve.gov redesign and the
-        old regex yielded zero matches, producing 100% silent loss across all
-        years until this fix.
+        URL pattern (modern, 2017+):
+            /econres/notes/feds-notes/{slug}-{YYYYMMDD}.html
+        URL pattern (legacy, 2013-2016):
+            /econresdata/notes/feds-notes/{YEAR}/{slug}-{YYYYMMDD}.html
+            (extra ``data`` segment and per-year subdirectory)
 
-        The main archive page lists notes from all years on a single HTML page;
-        per-year index pages (e.g., /2024-index.htm) are walked as a fallback in
-        case the main listing is ever paginated.
+        The per-year index pages (.../feds-notes/{YEAR}-index.htm) link to BOTH
+        URL variants depending on the publication date, so walking the per-year
+        indexes for the full window discovers the historical legacy URLs that
+        the modern-only regex previously dropped.
         """
         import re as _re
         import time as _time
 
         seen: set[str] = set()
-        # Date encoded directly in the filename suffix: ...-YYYYMMDD.html
+        # Match both URL formats:
+        #   /econres/notes/feds-notes/{slug}-YYYYMMDD.html         (2017+)
+        #   /econresdata/notes/feds-notes/{YEAR}/{slug}-YYYYMMDD.html  (2013-16)
+        # The `{slug}-` portion may be a complete slug or omitted (rare).
         slug_pattern = _re.compile(
-            r"/econres/notes/feds-notes/[^/\"]*-(\d{4})(\d{2})(\d{2})\.html?$"
+            r"/econres(?:data)?/notes/feds-notes/(?:\d{4}/)?"
+            r"[^/\"]+?-(\d{4})(\d{2})(\d{2})\.html?$"
         )
 
         index_urls = ["https://www.federalreserve.gov/econres/notes/feds-notes/"]
         # Per-year archive pages exist (e.g. .../feds-notes/2024-index.htm) and
-        # serve as a fallback if the main archive ever gets paginated.
+        # serve as the canonical discovery path for legacy-URL notes.
         for year in range(start.year, end.year + 1):
             index_urls.append(
                 f"https://www.federalreserve.gov/econres/notes/feds-notes/{year}-index.htm"

@@ -91,7 +91,12 @@ def test_whitelist_loads_and_has_required_outlets():
 def test_keyword_seed_has_minimum_coverage():
     from mnd.utils.config import load_yaml
     kw = load_yaml("config/topic_filter_keywords.yaml")
-    n = sum(len(v) for v in kw["categories"].values())
+    n = 0
+    for v in kw["categories"].values():
+        if isinstance(v, list):
+            n += len(v)
+        elif isinstance(v, dict):
+            n += len(v.get("keywords", []))
     assert n >= 100, f"keyword set looks thin: only {n} terms"
 
 

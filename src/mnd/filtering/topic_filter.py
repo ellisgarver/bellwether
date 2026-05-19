@@ -27,9 +27,20 @@ log = get_logger(__name__)
 
 
 def _load_keywords(keywords_yaml: dict[str, Any]) -> list[str]:
+    """Flatten every category's keyword list into a single lowercased list.
+
+    Supports two YAML shapes:
+      - schema_version 1.x (legacy): ``categories: {name: [kw, ...]}``
+      - schema_version 2.x (ADR-015): ``categories: {name: {jel: [...],
+        keywords: [kw, ...]}}`` — JEL annotations are metadata only and
+        are not included in the keyword list.
+    """
     keywords: list[str] = []
-    for kw_list in keywords_yaml.get("categories", {}).values():
-        keywords.extend(kw_list)
+    for category in keywords_yaml.get("categories", {}).values():
+        if isinstance(category, list):
+            keywords.extend(category)
+        elif isinstance(category, dict):
+            keywords.extend(category.get("keywords", []))
     return [kw.lower() for kw in keywords]
 
 
