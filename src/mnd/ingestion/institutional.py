@@ -1351,15 +1351,16 @@ class CBOIngestor(Ingestor):
             if not published or published < start or published > end:
                 continue
             title = fetched_title or ""
-            if not title or not self._is_relevant(title):
-                continue
+            # ADR-016: no Stage 1 topic filter. Single canonical topic filter
+            # operates at Stage 2 over title+body, where the body provides the
+            # signal a title-only filter would miss asymmetrically.
             if not body or len(body.split()) < 50:
                 continue
             yield _make_article(
                 source_id=self.source_id,
                 url=url,
                 published_at=published.isoformat() + "T00:00:00Z",
-                title=title,
+                title=title or "CBO publication",
                 body=body,
                 author="CBO",
                 section="cbo_publication",
@@ -1370,10 +1371,16 @@ class CBOIngestor(Ingestor):
             time.sleep(0.5)
 
         if yielded == 0:
-            log.info(
-                "CBO: 0 publications yielded from sitemap path (likely "
-                "residential IP block on publication pages). Falling back "
-                "to legacy archive scrape + RSS — recent content only."
+            # ADR-016: do not introduce source-specific fallback paths (Wayback
+            # snapshots, third-party mirrors) just to close one gap. CBO is a
+            # documented coverage gap until cbo.gov direct retrieval works.
+            # Legacy archive + RSS scrapes are retained ONLY for recent
+            # content; they share the same DataDome backend and typically
+            # fail too, but cost is bounded.
+            log.warning(
+                "CBO: 0 publications from cbo.gov (DataDome-blocked). "
+                "Trying legacy archive + RSS — recent items only if they "
+                "happen to slip past DataDome. Documented coverage gap."
             )
             for article in self._fetch_archive(start, end, seen):
                 yield article
@@ -1497,9 +1504,7 @@ class CBOIngestor(Ingestor):
                     past_window = True
                     continue
 
-                if not self._is_relevant(title):
-                    continue
-
+                # ADR-016: no Stage 1 topic filter.
                 if url in seen:
                     continue
                 seen.add(url)
@@ -1536,8 +1541,7 @@ class CBOIngestor(Ingestor):
                 continue
             seen.add(url)
             title = entry.get("title", "CBO publication")
-            if not self._is_relevant(title):
-                continue
+            # ADR-016: no Stage 1 topic filter.
             body = _extract_body(url) or BeautifulSoup(entry.get("summary", ""), "lxml").get_text(strip=True)
             if not body or len(body.split()) < 50:
                 continue
@@ -1554,9 +1558,6 @@ class CBOIngestor(Ingestor):
             )
             time.sleep(0.5)
 
-    def _is_relevant(self, title: str) -> bool:
-        # ADR-015: canonical Stage-1 == Stage-2 keyword set.
-        return _title_matches_canonical(title)
 
 
 class TreasuryOFRIngestor(Ingestor):
@@ -1959,9 +1960,7 @@ class VoxEUIngestor(Ingestor):
                 title_el = art.select_one("h3, h2, .c-card__title")
                 title = title_el.get_text(strip=True) if title_el else ""
 
-                if not self._is_macro_relevant(title):
-                    continue
-
+                # ADR-016: no Stage 1 topic filter — content-neutral ingest.
                 body, fetched_title, author, _ = _fetch_page_full(url, min_words=50)
                 if not body or len(body.split()) < 50:
                     continue
@@ -1992,10 +1991,6 @@ class VoxEUIngestor(Ingestor):
 
             page += 1
             time.sleep(1.0)
-
-    def _is_macro_relevant(self, title: str) -> bool:
-        # ADR-015: canonical Stage-1 == Stage-2 keyword set.
-        return _title_matches_canonical(title)
 
 
 # ---------------------------------------------------------------------------
@@ -2031,9 +2026,7 @@ class BrookingsIngestor(Ingestor):
                 title_raw.get("rendered", "") if isinstance(title_raw, dict) else str(title_raw)
             )
 
-            if not self._is_macro_relevant(title):
-                continue
-
+            # ADR-016: no Stage 1 topic filter — content-neutral ingest.
             seen.add(url)
             article = _wp_post_to_article(
                 post,
@@ -2048,10 +2041,6 @@ class BrookingsIngestor(Ingestor):
             if article:
                 yield article
                 time.sleep(1.0)
-
-    def _is_macro_relevant(self, title: str) -> bool:
-        # ADR-015: canonical Stage-1 == Stage-2 keyword set.
-        return _title_matches_canonical(title)
 
 
 class PIIEIngestor(Ingestor):
@@ -2206,25 +2195,12 @@ class CFRIngestor(Ingestor):
     _RELEVANT_SECTIONS = ("articles", "backgrounders", "reports")
     _RSS_URL = "https://www.cfr.org/feed"
 
-    # URL slugs are hyphenated lowercase — use a hyphen-aware substring set
-    # so we don't accidentally match too-short tokens. Sourced from the title-
-    # level terms above and trimmed of words with too many false positives
-    # (e.g. bare "market" matches every market-anything slug).
-    _URL_MACRO_TOKENS = {
-        "inflation", "monetary", "interest-rate", "federal-reserve",
-        "central-bank", "exchange-rate", "recession", "unemployment",
-        "fiscal", "dollar", "debt", "currency", "bond", "yield", "economy",
-        "economic", "banking", "treasury", "imf", "tariff", "stimulus",
-        "deficit", "stagflation", "deflation", "trade-war", "trade-deal",
-        "monetary-policy", "world-bank", "g20", "g7", "stocks", "equities",
-        "credit", "mortgage", "housing-market",
-    }
-
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
         candidates = list(self._enumerate_sitemap_candidates(start, end))
         log.info("CFR: sitemap enumeration returned %d in-window candidates "
-                 "after URL-slug pre-filter", len(candidates))
+                 "(structural section filter only; no topic pre-filter)",
+                 len(candidates))
         yielded = 0
         for url, pub_date in candidates:
             if url in seen:
@@ -2237,15 +2213,14 @@ class CFRIngestor(Ingestor):
             if not published or published < start or published > end:
                 continue
             title = fetched_title or ""
-            if not title or not self._is_macro_relevant(title):
-                continue
+            # ADR-016: no Stage 1 topic filter — content-neutral ingest.
             if not body or len(body.split()) < 50:
                 continue
             yield _make_article(
                 source_id=self.source_id,
                 url=url,
                 published_at=published.isoformat() + "T00:00:00Z",
-                title=title,
+                title=title or "CFR publication",
                 body=body,
                 author=author,
                 section="cfr_publication",
@@ -2312,15 +2287,13 @@ class CFRIngestor(Ingestor):
                 # 2026-XX-XX as of 2026-05) — not the publication date. We
                 # drop the lastmod window check and rely on the page-level
                 # date extracted by _fetch_page_full to filter into window.
-                # The URL-slug pre-filter does the heavy lifting (drops ~92%
-                # of articles before fetch).
-                slug = loc.rsplit("/", 1)[-1].lower()
-                if not any(tok in slug for tok in self._URL_MACRO_TOKENS):
-                    continue
+                # ADR-016: no URL-slug topic pre-filter either — section-level
+                # filter (_RELEVANT_SECTIONS) is the only structural gate;
+                # topic relevance is decided at Stage 2 over title+body.
                 section_yielded += 1
                 yield loc, None
-            log.info("CFR sitemap %s: scanned %d urls, %d macro-slug candidates",
-                     sm_url.rsplit("/", 2)[-2], section_count, section_yielded)
+            log.info("CFR sitemap %s: %d urls in section (no topic pre-filter)",
+                     sm_url.rsplit("/", 2)[-2], section_count)
             time.sleep(0.3)
 
     def _fetch_rss(
@@ -2334,8 +2307,7 @@ class CFRIngestor(Ingestor):
             if not url or url in seen:
                 continue
             title = entry.get("title", "")
-            if not self._is_macro_relevant(title):
-                continue
+            # ADR-016: no Stage 1 topic filter.
             seen.add(url)
 
             body = _extract_body(url) or BeautifulSoup(
@@ -2356,10 +2328,6 @@ class CFRIngestor(Ingestor):
                 document_type="cfr_brief",
             )
             time.sleep(1.0)
-
-    def _is_macro_relevant(self, title: str) -> bool:
-        # ADR-015: canonical Stage-1 == Stage-2 keyword set.
-        return _title_matches_canonical(title)
 
 
 # ---------------------------------------------------------------------------
@@ -2631,54 +2599,26 @@ class CongressionalIngestor(Ingestor):
         return None
 
     # Congressional appearance markers — these aren't topic keywords, they
-    # signal that a release IS a testimony / committee appearance regardless
-    # of subject. Kept alongside the canonical topic filter so we admit
-    # process-level appearances (confirmation hearings, etc.) that may not
-    # carry topic vocabulary in the title.
-    _APPEARANCE_MARKERS = (
-        "testimony", "before the", "subcommittee", "senate banking",
-        "house financial services", "appropriations", "ways and means",
-        "joint economic committee", "committee on finance",
-        "remarks by", "statement by", "secretary",
-    )
-
     def _is_relevant(self, title: str) -> bool:
-        """Keep Secretary-level testimony plus macro-relevant Secretary remarks.
+        """Structural role guard only (ADR-016).
 
-        Layered predicate (the ADR-015 canonical keyword filter is one layer):
+        Tier-1 Congressional ingest is by definition Secretary-level — drop
+        releases by under/assistant secretaries and deputies. Everything else
+        (topic relevance, sanctions-vs-macro-framing disambiguation) is
+        delegated to Stage 2's canonical filter where the BODY of each
+        release is available, not just the title.
 
-          1. Role guard — drop sub-Secretary-level releases (under/assistant
-             secretary, deputy). Tier-1 ingest is Secretary-level only.
-          2. Sanctions de-dup — drop foreign-actor sanctions announcements
-             unless the title also carries a macro-financial signal. Preserves
-             "Sanctions Test Iran Oil Market Outlook"; drops "Treasury
-             Sanctions Five IRGC Operatives". This is a role/content interaction
-             specific to Treasury and stays in this ingestor.
-          3. Appearance OR canonical topic — admit if the title contains
-             either a congressional-appearance marker OR any canonical
-             Stage-1/Stage-2 keyword (ADR-015). Appearance markers catch
-             confirmation hearings that may not carry topic vocabulary.
-
-        Pre-fix bug (2026-05-13): the filter hardcoded "economic fury" as an
-        exclusion. "Economic Fury" is Treasury's policy-branding label under
-        Bessent (2025+) — it appears on releases that ARE macro-financial
-        discourse. The narrower sanctions-only filter below preserves the
-        foreign-actor exclusion without misclassifying macro framing.
+        Pre-2026-05-13 the filter additionally hardcoded a "sanctions"
+        exclusion that misfired on Treasury's "Economic Fury" branding (which
+        IS macro-financial discourse — Iran oil sanctions framing, banking
+        penalties). Removing the title-only sanctions gate avoids that whole
+        class of mis-rejection; the canonical Stage 2 filter sees the full
+        body and applies the same keyword + embedding gates as everywhere else.
         """
         tl = title.lower()
-        # (1) Role guard.
         if re.search(r"\bunder ?secretary\b|\bassistant secretary\b|\bdeputy\b", tl):
             return False
-        # (2) Sanctions de-dup — use canonical keywords as the macro-signal proxy.
-        is_sanctions = bool(
-            re.search(r"\btreasury sanctions\b|\bsanctions\b|\bdisrupts\b", tl)
-        )
-        if is_sanctions and not _title_matches_canonical(title):
-            return False
-        # (3) Appearance marker OR canonical topic match.
-        if any(m in tl for m in self._APPEARANCE_MARKERS):
-            return True
-        return _title_matches_canonical(title)
+        return True
 
 
 # ---------------------------------------------------------------------------

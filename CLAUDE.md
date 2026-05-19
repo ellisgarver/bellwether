@@ -64,7 +64,7 @@ modify pilot code. Resume instructions below are retained for reference only.
 5. **ADR-015 implementation:** `config/topic_filter_keywords.yaml` schema 2.0.0 with JEL annotations + ~50 keyword additions + `named_events` category (234 total). Inline `_MACRO_TERMS`/`_KEEP_KEYWORDS` deleted from CBO/VoxEU/Brookings/CFR; NBER and Congressional keep their specialised role/JEL logic but delegate topic relevance to `_title_matches_canonical()`. Tests pass: 47/47.
 - [ ] Phase 4 — pre-registration finalized, full anchor + fizzled validation
 - [ ] Phase 5 — Streamlit dashboard, Hugging Face Spaces deploy
-- [ ] Phase 6 — weekly cron update pipeline (AP News RSS + RavenPack live)
+- [ ] Phase 6 — weekly cron update pipeline (Tier 1/2 re-ingest + Media Cloud Premium live, ADR-016)
 - [ ] Phase 7 — technical report, reproducibility audit
 
 ### Open work (priority order)
@@ -80,7 +80,7 @@ modify pilot code. Resume instructions below are retained for reference only.
   - Set `MND_MAX_SEQ_LEN=512` in `.env` to avoid OOM on Qwen3-Embedding-0.6B (ADR-006)
 - Full corpus runs: UChicago RCC (CUDA) — `MND_EMBEDDING_DEVICE=cuda` or set in `.env`; use SLURM scripts in `scripts/rcc/`
 - FRED key: `FRED_API_KEY` in `.env` (validation only)
-- WRDS: `WRDS_USERNAME` and `WRDS_PASSWORD` in `.env` for RavenPack dynamics layer queries
+- WRDS: NOT REQUIRED. The prior RavenPack-via-WRDS plan was replaced by Media Cloud Premium (ADR-016, 2026-05-18). Any lingering `WRDS_*` mentions in older docs are obsolete.
 - Media Cloud: `MEDIACLOUD_API_KEY` in `.env` for Layer 2 detection
 
 ## Phase 2 corpus architecture (updated 2026-05-13, ADR-012)
@@ -92,24 +92,30 @@ modify pilot code. Resume instructions below are retained for reference only.
 | 1 — Institutional policy | Federal Reserve (all: FOMC, speeches incl. Jackson Hole, Beige Book, FEDS Notes, MPR, FSR), Regional Feds (NY/SF/Chicago/Atlanta), BIS (QR/WPs), CBO, Treasury/OFR/FSOC, Congressional testimony (Treasury Sec) | Direct fetch / institutional RSS |
 | 2 — Academic analytical + policy | VoxEU/CEPR (full posts), Brookings, PIIE, CFR | Direct fetch / RSS |
 
-**Removed from semantic corpus (ADR-010, 2026-05-11):** AP News, Reuters, MarketWatch. Their journalism propagation signal is captured by RavenPack (Layer 1B, dynamics only). Raw ingested JSONL retained in `data/raw/articles/`; excluded from embedding by `run_pipeline.py filter-pre-embed`.
+**Removed from semantic corpus (ADR-010, 2026-05-11):** AP News, Reuters, MarketWatch. Their journalism propagation signal is captured by Media Cloud Premium Press (Layer 1B, dynamics only — see below). Raw ingested JSONL retained in `data/raw/articles/`; excluded from embedding by `run_pipeline.py filter-pre-embed`.
 
 **Historical corpus only (NBER, SSRN):** Historical bulk retrieval failed; both are Phase 6 live RSS only. `NBERIngestor` and `SSRNIngestor` remain in code but commented out of `InstitutionalIngestor` for historical runs.
 
-**Stated limitation:** Premium analytical press — WSJ opinion, Bloomberg Opinion, FT — is not represented in text form. Their volume signal is captured by the RavenPack dynamics layer. Disclosed in pre-registration and methodology.
+**Stated limitation:** Premium analytical press — WSJ opinion, Bloomberg Opinion, FT — is not represented in text form. Their VOLUME signal is captured by the Media Cloud Premium Press dynamics layer (single API surface, see below).
 
-### Layer 2 — Detection (story counts only, no embedding)
+### Layer 1B — Dynamics layer (volume time series for SIR/logistic fitting) — ADR-016
 
-**Source: Media Cloud API.** Daily story count time series by keyword/topic query across thousands of outlets. Fires candidate narrative emergence flags before institutional sources have characterized it. API key: `MEDIACLOUD_API_KEY` in `.env`. Output: `data/detection/mediacloud/`. Code: `src/mnd/detection/mediacloud.py`.
+**Source: Media Cloud API, premium-tier query.** Daily story counts by keyword/entity across the curated premium-press outlet collection (WSJ, Bloomberg, FT, Reuters, NYT, Barron's, Dow Jones Newswires, MarketWatch, etc.). Same Media Cloud API as Layer 2; the only difference is the outlet collection scoped to in the query.
 
-### Dynamics layer — Layer 1B (volume time series for SIR/logistic fitting)
+- Output: weekly article volume time series per narrative cluster, written to `data/dynamics/mediacloud_premium/`.
+- Use for: SIR/logistic parameter estimation, propagation-into-journalism analysis.
+- Do NOT feed Media Cloud records into embedding or clustering — dynamics layer only.
+- API key: `MEDIACLOUD_API_KEY` in `.env`.
 
-**Source: RavenPack RPA 1.0 Global Macro, Dow Jones Edition via WRDS.**
+**RavenPack is NOT used. The prior plan (ADR-010, ADR-008) to source dynamics from RavenPack via WRDS was abandoned 2026-05-18 in favor of Media Cloud Premium because (a) Media Cloud is free and academically accessible without a WRDS subscription, (b) using one API surface for both Layer 1B and Layer 2 reduces architecture surface area, (c) Media Cloud has no monthly-vintage delivery lag. `src/mnd/ingestion/ravenpack.py` is retained in the repo as deprecated reference code; do not import it.**
 
-- Metadata and event records only (not full text) for WSJ, Barron's, Dow Jones Newswires, MarketWatch, PR Newswire, and ~800 other sources
-- ~5-week lag, monthly vintage by design (look-ahead bias protection). Dashboard labels all RavenPack metrics "as of [last delivered month]"
-- Use for: historical volume time series on known narrative clusters; broader press propagation estimates
-- Do NOT feed RavenPack records into embedding or clustering — dynamics layer only
+### Layer 2 — Detection (story counts only, broad outlets)
+
+**Source: Media Cloud API, broad-tier query.** Same API as Layer 1B, queried against thousands of outlets across the wider Media Cloud collection. Fires candidate narrative emergence flags before institutional sources have characterized a topic in embeddable text. Output: `data/detection/mediacloud/`. Code: `src/mnd/detection/mediacloud.py`.
+
+### Continuous update (Phase 6) — re-ingest, not RSS
+
+New items detection uses periodic re-ingest of Tier 1 + Tier 2 sources (not RSS). The same `run_pipeline.py ingest --sources institutional` job that powers the historical run, scheduled weekly, with checkpoint-based dedup catching new publications since the prior run. RSS-only ingestors (SSRN, Atlanta macroblog) supplement where institutional sites lack bulk historical access. This replaces the prior "AP News RSS + RavenPack live" Phase 6 plan.
 
 ### Anchor narratives (FINAL — 10 narratives)
 
@@ -144,7 +150,7 @@ Removed from prior version: FTX collapse, GameStop short squeeze (out of macro s
 
 **Calendar event markers:** Render vertical dotted lines at calendar-flagged weeks on volume curves, with event label on hover ("FOMC Meeting", "CPI Release", etc.). Users see the annotation rather than interpreting calendar-driven spikes as organic narrative growth.
 
-**RavenPack lag labeling:** All panels sourcing data from RavenPack must display "as of [last delivered month]" prominently. Emergence detection panels source from own-corpus Tier 4 volume — label these as real-time.
+**Media Cloud freshness labeling:** Layer 1B and Layer 2 panels both source Media Cloud (premium tier and broad tier respectively). Label data-as-of with the most recent ingest timestamp from `data/dynamics/mediacloud_premium/` / `data/detection/mediacloud/`. Media Cloud has near-realtime indexing — typically ≤24h lag — but the dashboard should still show the explicit timestamp.
 
 **Raw vs. smoothed series:** Volume curve primary trace = smoothed_combined (stratified-smoothed). Background trace = raw_combined. Both always visible.
 
@@ -164,8 +170,8 @@ python scripts/run_pipeline.py filter-pre-embed
 # Corpus composition QA (run after filter)
 python scripts/run_pipeline.py corpus-composition --by-tier --output data/processed/corpus_composition.csv
 
-# Dynamics layer (RavenPack via WRDS — separate from semantic corpus)
-python scripts/run_pipeline.py ingest-dynamics --start 2010-01-01 --end auto
+# Dynamics layer (Media Cloud Premium — separate from semantic corpus; ADR-016)
+python scripts/run_pipeline.py ingest-dynamics --source mediacloud_premium --start 2010-01-01 --end auto
 python scripts/run_pipeline.py smooth-dynamics        # source-stratified smoothing
 python scripts/run_pipeline.py annotate-calendar      # ±3d economic calendar flags
 python scripts/run_pipeline.py normalize-dynamics
@@ -183,7 +189,7 @@ python scripts/run_pipeline.py normalize-dynamics
 | Architecture decisions | `docs/architecture_decisions.md` |
 | Project specification (supersedes CLAUDE.md on architecture) | `MND_PROJECT_SPEC.md` |
 | Pre-registration draft | `prereg/PREREGISTRATION.md` |
-| Media Cloud detection module | `src/mnd/detection/mediacloud.py` |
-| RavenPack dynamics ingestor | `src/mnd/ingestion/ravenpack.py` |
+| Media Cloud module (Layer 1B premium dynamics + Layer 2 broad detection) | `src/mnd/detection/mediacloud.py` |
+| ~~RavenPack dynamics ingestor~~ (deprecated, ADR-016) | `src/mnd/ingestion/ravenpack.py` |
 | RCC SLURM scripts | `scripts/rcc/` |
 | Archived / superseded code | `scripts/archive/` |

@@ -1,4 +1,17 @@
-"""RavenPack RPA 1.0 Global Macro, Dow Jones Edition — dynamics layer ingestion.
+"""DEPRECATED (ADR-016, 2026-05-18): RavenPack via WRDS is no longer the
+dynamics layer. The Layer 1B dynamics signal is now sourced from Media Cloud
+Premium Press via `src/mnd/detection/mediacloud.py`. Same Media Cloud API as
+Layer 2; different outlet collection scope. No WRDS subscription needed.
+
+This module is retained as reference code for the historical ADR-010/ADR-008
+design. Do not import or invoke. Do not pass WRDS_* environment variables;
+they are obsolete.
+
+---
+
+ORIGINAL DOCSTRING (for reference):
+
+RavenPack RPA 1.0 Global Macro, Dow Jones Edition — dynamics layer ingestion.
 
 This module provides the DYNAMICS LAYER for the project: weekly article volume
 counts per narrative cluster, normalized before SIR/logistic fitting (ADR-008).
