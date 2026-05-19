@@ -43,6 +43,7 @@ FOMC minutes = release date. NBER papers = posting date.
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
 import time
@@ -60,6 +61,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random_
 
 from mnd.ingestion.base import Article, Ingestor, _now_utc_iso, _stable_article_id
 from mnd.ingestion.fed import FederalReserveIngestor
+from mnd.utils.config import load_yaml
 from mnd.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -69,6 +71,33 @@ _HEADERS = {"User-Agent": USER_AGENT}
 
 # JEL codes that indicate macro/finance relevance for NBER filtering
 _NBER_JEL_PREFIXES = ("E", "F", "G")
+
+
+@functools.lru_cache(maxsize=1)
+def _canonical_topic_keywords() -> frozenset[str]:
+    """Lowercased union of every keyword in `config/topic_filter_keywords.yaml`.
+
+    ADR-015: the per-source inline Stage-1 filters were replaced with this
+    single canonical set so the same keyword list is applied at ingest time
+    and at the Stage-2 canonical filter. Both schema_version 1.x (flat list
+    per category) and 2.x (JEL-annotated dict per category) are supported.
+    """
+    data = load_yaml("config/topic_filter_keywords.yaml")
+    kws: set[str] = set()
+    for category in data.get("categories", {}).values():
+        if isinstance(category, list):
+            for kw in category:
+                kws.add(str(kw).lower())
+        elif isinstance(category, dict):
+            for kw in category.get("keywords", []):
+                kws.add(str(kw).lower())
+    return frozenset(kws)
+
+
+def _title_matches_canonical(title: str) -> bool:
+    """Stage-1 inline filter: any canonical keyword present in title."""
+    tl = title.lower()
+    return any(kw in tl for kw in _canonical_topic_keywords())
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -821,8 +850,12 @@ class FedRegionalIngestor(Ingestor):
     Sources and retrieval strategies:
       Liberty Street Economics (NY Fed) — WordPress REST API
       FRBSF Economic Letter/Working Papers — sffed_publications WP REST API
-      Chicago Fed Letter — XML sitemap URL discovery + trafilatura extraction
-      Atlanta macroblog — RSS (historical listing is JS-gated; no static archive)
+      Chicago Fed publications — XML sitemap URL discovery across multiple
+        series (chicago-fed-letter, economic-perspectives, working-papers,
+        policy-discussion-papers, profitwise, insights)
+      Atlanta Fed publications — sitemap walk via curl_cffi (atlantafed.org
+        bot-protects stdlib `requests`) across working papers, policy hub,
+        macroblog, and economy matters; RSS fallback for the macroblog.
 
     The main FederalReserveIngestor (fed.py) covers Board communications.
     This ingestor captures regional analytical content.
@@ -830,8 +863,59 @@ class FedRegionalIngestor(Ingestor):
 
     source_id = "fed_regional"
 
-    # RSS fallback for Atlanta (historical gap documented)
     _ATLANTA_RSS = "https://www.atlantafed.org/blogs/macroblog/rss"
+    _ATLANTA_SITEMAP = "https://www.atlantafed.org/sitemap.xml"
+
+    # atlantafed.org returns 403 to stdlib `requests` from RCC/residential IPs
+    # — same TLS-fingerprint class as IMF/CBO. curl_cffi with Chrome
+    # impersonation defeats it; falling back to stdlib `requests` is intentional
+    # so missing-dependency failures surface loudly.
+    _ATLANTA_HEADERS: dict = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/avif,image/webp,*/*;q=0.8"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+    }
+
+    # Atlanta Fed publication URL patterns. Captures from sitemap walk.
+    # The `(\d{4})` group captures year for window filtering.
+    _ATLANTA_URL_PATTERNS: list[tuple[str, str]] = [
+        (r"/research/publications/wp/(\d{4})/", "working_paper"),
+        (r"/research/publications/policy-hub/(\d{4})/", "policy_hub"),
+        (r"/blogs/macroblog/(\d{4})/", "macroblog"),
+        (r"/economy-matters/[a-z\-/]*?/(\d{4})/", "economy_matters"),
+    ]
+
+    @classmethod
+    def _atlanta_get(cls, url: str, **kwargs):
+        """HTTP GET for atlantafed.org URLs, impersonating Chrome.
+
+        Falls back to stdlib `requests` if curl_cffi is missing (will likely
+        403) — intentional so missing-dependency failures surface loudly.
+        """
+        try:
+            from curl_cffi import requests as cffi_requests
+            kwargs.setdefault("impersonate", "chrome131")
+            kwargs.setdefault("headers", cls._ATLANTA_HEADERS)
+            return cffi_requests.get(url, **kwargs)
+        except ImportError:
+            log.error(
+                "curl_cffi not installed; Atlanta Fed fetches will likely 403. "
+                "Install with `pip install curl_cffi` (see requirements.txt)."
+            )
+            kwargs.setdefault("headers", cls._ATLANTA_HEADERS)
+            return requests.get(url, **kwargs)
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
@@ -898,10 +982,33 @@ class FedRegionalIngestor(Ingestor):
     # Chicago Fed Letter — sitemap URL discovery
     # ------------------------------------------------------------------
 
+    # Chicago Fed publication URL patterns, each captured as
+    # (regex with a year-group, section_label).  The sitemap walk dispatches
+    # on the first matching pattern. Prior code matched only
+    # `/chicago-fed-letter/YYYY/NNN`, so it captured ~246 records vs. the
+    # ~3,000+ available across all series.
+    _CHICAGO_URL_PATTERNS: list[tuple[str, str]] = [
+        (r"/publications/chicago-fed-letter/(\d{4})/[^/]+$", "chicago_fed_letter"),
+        (r"/publications/economic-perspectives/(\d{4})/[^/]+$", "economic_perspectives"),
+        (r"/publications/working-papers/(\d{4})/[^/]+$", "working_paper"),
+        (r"/publications/policy-discussion-papers/(\d{4})/[^/]+$", "policy_discussion_paper"),
+        (r"/publications/public-policy-papers/(\d{4})/[^/]+$", "public_policy_paper"),
+        (r"/publications/profitwise-news-and-views/(\d{4})/[^/]+$", "profitwise"),
+        (r"/publications/insights/(\d{4})/[^/]+$", "insights"),
+        (r"/publications/blogs/chicago-fed-insights/(\d{4})/[^/]+$", "insights_blog"),
+    ]
+
     def _fetch_chicago_fed_letter(
         self, start: date, end: date, seen: set[str]
     ) -> Iterator[Article]:
-        """Discover letter URLs from chicagofed.org sitemap, filter by year in URL path."""
+        """Walk chicagofed.org sitemap across all publication series.
+
+        Prior code matched only Chicago Fed Letter URLs and captured ~246
+        articles. The full publication catalog (working papers, Economic
+        Perspectives, policy discussion papers, etc.) is enumerated by the
+        same sitemap; we now dispatch on a list of URL patterns to expand
+        coverage to all Chicago Fed publication series.
+        """
         sitemap_url = "https://www.chicagofed.org/sitemap.xml"
         try:
             resp = requests.get(sitemap_url, headers=_HEADERS, timeout=30.0)
@@ -912,17 +1019,26 @@ class FedRegionalIngestor(Ingestor):
             return
 
         ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-        # Collect letter URLs grouped by year extracted from path
+        compiled = [(re.compile(p), s) for p, s in self._CHICAGO_URL_PATTERNS]
+
         for url_el in tree.findall("s:url", ns):
             loc_el = url_el.find("s:loc", ns)
             if loc_el is None:
                 continue
             url = loc_el.text or ""
-            # Pattern: /publications/chicago-fed-letter/YYYY/NNN
-            m = re.search(r"/chicago-fed-letter/(\d{4})/\d+$", url)
-            if not m:
+            year = None
+            section = None
+            for pat, sec in compiled:
+                m = pat.search(url)
+                if m:
+                    try:
+                        year = int(m.group(1))
+                    except ValueError:
+                        year = None
+                    section = sec
+                    break
+            if year is None or section is None:
                 continue
-            year = int(m.group(1))
             if year < start.year or year > end.year:
                 continue
             if url in seen:
@@ -933,11 +1049,11 @@ class FedRegionalIngestor(Ingestor):
             if not body or len(body.split()) < 50:
                 continue
 
-            # URL year is reliable (Chicago Fed Letter is letter-numbered by year).
-            # trafilatura's meta_date sometimes returns the page-modified date
-            # (today) instead of publication date — accept it only when it
-            # agrees with the URL year, otherwise mid-year is a safer fallback
-            # than Jan 1 for weekly aggregation.
+            # URL year is reliable (publications are year-numbered).
+            # trafilatura's meta_date sometimes returns the page-modified
+            # date (today) instead of publication date — accept it only when
+            # it agrees with the URL year. Otherwise mid-year is a safer
+            # fallback than Jan 1 for weekly aggregation.
             pub_date = date(year, 6, 15)
             if meta_date and meta_date.year == year:
                 pub_date = meta_date
@@ -949,10 +1065,10 @@ class FedRegionalIngestor(Ingestor):
                 source_id="fed_chicago",
                 url=url,
                 published_at=pub_date.isoformat() + "T00:00:00Z",
-                title=title or f"Chicago Fed Letter {year}",
+                title=title or f"Chicago Fed {section.replace('_', ' ').title()} {year}",
                 body=body,
                 author=author,
-                section="chicago_fed_letter",
+                section=section,
                 tier=1,
                 document_type="fed_regional_research",
             )
@@ -965,39 +1081,140 @@ class FedRegionalIngestor(Ingestor):
     def _fetch_atlanta(
         self, start: date, end: date, seen: set[str]
     ) -> Iterator[Article]:
-        """Atlanta macroblog RSS — provides recent content only.
+        """Walk atlantafed.org sitemap across working papers, policy hub,
+        macroblog, and economy matters; fall back to macroblog RSS.
 
-        The historic macroblog content (pre-2022) is behind a JS-gated listing
-        and old URLs were removed during the site redesign. RSS covers
-        approximately the last 30–60 days.
+        Prior code used only the macroblog RSS, which (a) covers ~30 days,
+        (b) was returning 403 on RCC because atlantafed.org bot-protects
+        stdlib `requests`. Result: 0 atlanta records in the production
+        corpus.
+
+        Sitemap discovery via curl_cffi reaches the full working-paper
+        archive (~150 papers/year × 15 years) and the policy hub backlog.
+        Macroblog historical content (pre-2022) was removed during the
+        site redesign; recent macroblog posts come from the sitemap if
+        present, otherwise RSS.
         """
-        for entry in _parse_rss(self._ATLANTA_RSS):
-            pub_date = _entry_date(entry)
-            if not pub_date or pub_date < start or pub_date > end:
-                continue
-            url = entry.get("link", "")
-            if not url or url in seen:
-                continue
-            seen.add(url)
-            title = entry.get("title", "Atlanta Fed macroblog")
-            body = _extract_body(url) or BeautifulSoup(
-                entry.get("summary", ""), "lxml"
-            ).get_text(strip=True)
-            if not body or len(body.split()) < 50:
-                continue
-            yield _make_article(
-                source_id="fed_atlanta",
-                url=url,
-                published_at=pub_date.isoformat() + "T00:00:00Z",
-                title=title,
-                body=body,
-                author=entry.get("author"),
-                section="macroblog",
-                tier=1,
-                document_type="fed_regional_research",
-                extra_meta={"historical_gap": True},
+        yielded_from_sitemap = 0
+
+        try:
+            resp = self._atlanta_get(self._ATLANTA_SITEMAP, timeout=30.0)
+            if getattr(resp, "status_code", 200) >= 400:
+                raise RuntimeError(f"sitemap HTTP {resp.status_code}")
+            tree = ET.fromstring(resp.content)
+        except Exception as exc:
+            log.warning("Atlanta Fed sitemap fetch failed: %s — will fall back to RSS", exc)
+            tree = None
+
+        if tree is not None:
+            ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+            # Handle both flat sitemap and sitemap index.
+            child_sitemaps: list[str] = [
+                (s.findtext("s:loc", default="", namespaces=ns) or "")
+                for s in tree.findall("s:sitemap", ns)
+            ]
+            if not child_sitemaps:
+                child_sitemaps = [self._ATLANTA_SITEMAP]
+            else:
+                child_sitemaps = [s for s in child_sitemaps if s]
+
+            compiled = [(re.compile(p), s) for p, s in self._ATLANTA_URL_PATTERNS]
+            candidate_urls: list[tuple[str, int, str]] = []  # (url, year, section)
+
+            for sm in child_sitemaps:
+                try:
+                    if sm == self._ATLANTA_SITEMAP:
+                        sub_tree = tree
+                    else:
+                        sub_resp = self._atlanta_get(sm, timeout=30.0)
+                        sub_tree = ET.fromstring(sub_resp.content)
+                except Exception as exc:
+                    log.debug("Atlanta child sitemap %s failed: %s", sm, exc)
+                    continue
+                for url_el in sub_tree.findall("s:url", ns):
+                    loc = url_el.findtext("s:loc", default="", namespaces=ns) or ""
+                    if not loc:
+                        continue
+                    for pat, section in compiled:
+                        m = pat.search(loc)
+                        if not m:
+                            continue
+                        try:
+                            year = int(m.group(1))
+                        except ValueError:
+                            continue
+                        if year < start.year or year > end.year:
+                            break
+                        candidate_urls.append((loc, year, section))
+                        break
+
+            for url, year, section in candidate_urls:
+                if url in seen:
+                    continue
+                seen.add(url)
+                try:
+                    page = self._atlanta_get(url, timeout=30.0)
+                    if getattr(page, "status_code", 200) >= 400:
+                        log.debug("Atlanta page %s: HTTP %s", url, page.status_code)
+                        continue
+                    body, title, author, meta_date = _fetch_page_full(
+                        url, min_words=50,
+                        getter=lambda u, **kw: self._atlanta_get(u, **kw),
+                    )
+                except Exception as exc:
+                    log.debug("Atlanta page %s fetch failed: %s", url, exc)
+                    continue
+                if not body or len(body.split()) < 50:
+                    continue
+                pub_date = meta_date if (meta_date and meta_date.year == year) else date(year, 6, 15)
+                if pub_date < start or pub_date > end:
+                    continue
+                yield _make_article(
+                    source_id="fed_atlanta",
+                    url=url,
+                    published_at=pub_date.isoformat() + "T00:00:00Z",
+                    title=title or f"Atlanta Fed {section.replace('_',' ').title()} {year}",
+                    body=body,
+                    author=author,
+                    section=section,
+                    tier=1,
+                    document_type="fed_regional_research",
+                )
+                yielded_from_sitemap += 1
+                time.sleep(0.5)
+
+        if yielded_from_sitemap == 0:
+            log.info(
+                "Atlanta Fed: 0 articles from sitemap walk — falling back to "
+                "macroblog RSS (recent content only)."
             )
-            time.sleep(0.5)
+            for entry in _parse_rss(self._ATLANTA_RSS):
+                pub_date = _entry_date(entry)
+                if not pub_date or pub_date < start or pub_date > end:
+                    continue
+                url = entry.get("link", "")
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                title = entry.get("title", "Atlanta Fed macroblog")
+                body = _extract_body(url) or BeautifulSoup(
+                    entry.get("summary", ""), "lxml"
+                ).get_text(strip=True)
+                if not body or len(body.split()) < 50:
+                    continue
+                yield _make_article(
+                    source_id="fed_atlanta",
+                    url=url,
+                    published_at=pub_date.isoformat() + "T00:00:00Z",
+                    title=title,
+                    body=body,
+                    author=entry.get("author"),
+                    section="macroblog",
+                    tier=1,
+                    document_type="fed_regional_research",
+                    extra_meta={"historical_gap": True},
+                )
+                time.sleep(0.5)
 
 
 class CBOIngestor(Ingestor):
@@ -1074,14 +1291,6 @@ class CBOIngestor(Ingestor):
             )
             kwargs.setdefault("headers", cls._CBO_HEADERS)
             return requests.get(url, **kwargs)
-
-    _KEEP_KEYWORDS = {
-        "budget and economic outlook", "economic outlook", "working paper",
-        "budget outlook", "long-term budget", "monthly budget review",
-        "economic effects", "labor market", "inflation", "fiscal", "recession",
-        "interest rate", "deficit", "debt", "gdp", "growth", "monetary",
-        "macroeconomic", "tax", "tariff",
-    }
 
     # Slop applied to lastmod window — CBO edits older publications, and
     # they appear to do periodic sitemap-wide rebuilds (~6000 items show
@@ -1346,8 +1555,8 @@ class CBOIngestor(Ingestor):
             time.sleep(0.5)
 
     def _is_relevant(self, title: str) -> bool:
-        tl = title.lower()
-        return any(kw in tl for kw in self._KEEP_KEYWORDS)
+        # ADR-015: canonical Stage-1 == Stage-2 keyword set.
+        return _title_matches_canonical(title)
 
 
 class TreasuryOFRIngestor(Ingestor):
@@ -1616,15 +1825,12 @@ class NBERIngestor(Ingestor):
         return [a.get_text(strip=True) for a in author_el.find_all("a") if a.get_text(strip=True)]
 
     def _is_macro_relevant(self, jel_codes: list[str], title: str, abstract: str) -> bool:
+        # JEL primary signal: paper self-declares macro/finance scope.
         if jel_codes:
             return any(code.startswith(prefix) for code in jel_codes for prefix in self._JEL_PREFIXES)
-        macro_terms = {
-            "inflation", "monetary policy", "interest rate", "federal reserve",
-            "exchange rate", "gdp", "recession", "unemployment", "credit",
-            "financial stability", "central bank", "fiscal", "yield curve",
-        }
-        text_lower = (title + " " + abstract).lower()
-        return any(term in text_lower for term in macro_terms)
+        # No declared JEL → ADR-015 canonical keyword set on title+abstract.
+        text = (title + " " + abstract).lower()
+        return any(kw in text for kw in _canonical_topic_keywords())
 
 
 class SSRNIngestor(Ingestor):
@@ -1694,16 +1900,6 @@ class VoxEUIngestor(Ingestor):
     _SEARCH_URL = "https://cepr.org/voxeu/search-all-columns"
     _BASE = "https://cepr.org"
     _PAGE_TIMEOUT = 60.0
-
-    # Macro-relevance terms for VoxEU pre-filter (loose — most VoxEU columns
-    # are economics; this just excludes pure health/education posts)
-    _MACRO_TERMS = {
-        "inflation", "monetary", "interest rate", "federal reserve", "central bank",
-        "exchange rate", "gdp", "recession", "unemployment", "credit", "fiscal",
-        "financial", "bank", "debt", "trade", "currency", "bond", "yield",
-        "growth", "economy", "economics", "market", "policy", "capital",
-        "covid", "pandemic", "crisis", "shock", "risk", "investment",
-    }
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
@@ -1798,8 +1994,8 @@ class VoxEUIngestor(Ingestor):
             time.sleep(1.0)
 
     def _is_macro_relevant(self, title: str) -> bool:
-        tl = title.lower()
-        return any(term in tl for term in self._MACRO_TERMS)
+        # ADR-015: canonical Stage-1 == Stage-2 keyword set.
+        return _title_matches_canonical(title)
 
 
 # ---------------------------------------------------------------------------
@@ -1822,31 +2018,6 @@ class BrookingsIngestor(Ingestor):
     source_id = "brookings"
 
     _API_BASE = "https://www.brookings.edu"
-
-    # Compound phrases and high-signal single terms only.
-    # Single words like "policy", "market", "growth", "bond", "crisis",
-    # "investment", "trade", "covid", "pandemic" are excluded — too broad for
-    # Brookings which covers education, health, governance, and foreign policy.
-    _MACRO_TERMS = {
-        # High-signal single words
-        "inflation", "monetary", "gdp", "recession", "unemployment", "stagflation",
-        "macroeconomic", "macrofinancial", "deficit", "surplus",
-        # Compound phrases (require exact substring)
-        "central bank", "interest rate", "federal reserve", "exchange rate",
-        "bond yield", "yield curve", "credit risk", "financial stability",
-        "monetary policy", "fiscal policy", "fiscal stimulus", "fiscal cliff",
-        "trade deficit", "trade surplus", "current account", "balance of payments",
-        "quantitative easing", "forward guidance", "tapering", "taper tantrum",
-        "treasury market", "treasury yield", "sovereign debt", "public debt",
-        "credit spread", "systemic risk", "financial regulation", "bank capital",
-        "stress test", "economic growth", "economic outlook", "economic forecast",
-        "labor market", "wage growth", "productivity growth",
-        "housing market", "mortgage rate",
-        "stock market crash", "equity market", "bond market",
-        "global economy", "world economy", "emerging market",
-        "financial crisis", "banking crisis", "debt crisis",
-        "hutchins center", "hamilton project",
-    }
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
@@ -1879,8 +2050,8 @@ class BrookingsIngestor(Ingestor):
                 time.sleep(1.0)
 
     def _is_macro_relevant(self, title: str) -> bool:
-        tl = title.lower()
-        return any(term in tl for term in self._MACRO_TERMS)
+        # ADR-015: canonical Stage-1 == Stage-2 keyword set.
+        return _title_matches_canonical(title)
 
 
 class PIIEIngestor(Ingestor):
@@ -2035,15 +2206,6 @@ class CFRIngestor(Ingestor):
     _RELEVANT_SECTIONS = ("articles", "backgrounders", "reports")
     _RSS_URL = "https://www.cfr.org/feed"
 
-    _MACRO_TERMS = {
-        "inflation", "monetary", "interest rate", "federal reserve", "central bank",
-        "exchange rate", "gdp", "recession", "unemployment", "credit", "fiscal",
-        "financial", "dollar", "debt", "trade", "currency", "bond", "yield",
-        "growth", "economy", "economics", "market", "policy", "capital",
-        "banking", "treasury", "fed", "imf",
-        "tariff", "tax", "stimulus", "deficit", "stagflation", "deflation",
-    }
-
     # URL slugs are hyphenated lowercase — use a hyphen-aware substring set
     # so we don't accidentally match too-short tokens. Sourced from the title-
     # level terms above and trimmed of words with too many false positives
@@ -2196,8 +2358,8 @@ class CFRIngestor(Ingestor):
             time.sleep(1.0)
 
     def _is_macro_relevant(self, title: str) -> bool:
-        tl = title.lower()
-        return any(term in tl for term in self._MACRO_TERMS)
+        # ADR-015: canonical Stage-1 == Stage-2 keyword set.
+        return _title_matches_canonical(title)
 
 
 # ---------------------------------------------------------------------------
@@ -2468,54 +2630,55 @@ class CongressionalIngestor(Ingestor):
                     return parsed
         return None
 
-    def _is_relevant(self, title: str) -> bool:
-        """Keep Secretary-level testimony, congressional statements, and the
-        broader macro-relevant secretary remarks (FOMC events, fiscal/debt,
-        confirmation hearings, Treasury-led economic conferences).
+    # Congressional appearance markers — these aren't topic keywords, they
+    # signal that a release IS a testimony / committee appearance regardless
+    # of subject. Kept alongside the canonical topic filter so we admit
+    # process-level appearances (confirmation hearings, etc.) that may not
+    # carry topic vocabulary in the title.
+    _APPEARANCE_MARKERS = (
+        "testimony", "before the", "subcommittee", "senate banking",
+        "house financial services", "appropriations", "ways and means",
+        "joint economic committee", "committee on finance",
+        "remarks by", "statement by", "secretary",
+    )
 
-        Treasury's Secretary Statements & Remarks category mixes congressional
-        testimony with conference remarks. The filter keeps the
-        narrative-relevant content while excluding lower-level official press
-        releases and pure foreign-actor sanctions announcements.
+    def _is_relevant(self, title: str) -> bool:
+        """Keep Secretary-level testimony plus macro-relevant Secretary remarks.
+
+        Layered predicate (the ADR-015 canonical keyword filter is one layer):
+
+          1. Role guard — drop sub-Secretary-level releases (under/assistant
+             secretary, deputy). Tier-1 ingest is Secretary-level only.
+          2. Sanctions de-dup — drop foreign-actor sanctions announcements
+             unless the title also carries a macro-financial signal. Preserves
+             "Sanctions Test Iran Oil Market Outlook"; drops "Treasury
+             Sanctions Five IRGC Operatives". This is a role/content interaction
+             specific to Treasury and stays in this ingestor.
+          3. Appearance OR canonical topic — admit if the title contains
+             either a congressional-appearance marker OR any canonical
+             Stage-1/Stage-2 keyword (ADR-015). Appearance markers catch
+             confirmation hearings that may not carry topic vocabulary.
 
         Pre-fix bug (2026-05-13): the filter hardcoded "economic fury" as an
         exclusion. "Economic Fury" is Treasury's policy-branding label under
         Bessent (2025+) — it appears on releases that ARE macro-financial
-        discourse (Iran oil sanctions framing, banking penalties, etc.). The
-        narrower sanctions-only filter below preserves the foreign-policy
-        actor-targeting exclusion while keeping the macro framing content.
+        discourse. The narrower sanctions-only filter below preserves the
+        foreign-actor exclusion without misclassifying macro framing.
         """
         tl = title.lower()
-        # Exclude lower-level officials — Tier-1 ingestion is Secretary-level
+        # (1) Role guard.
         if re.search(r"\bunder ?secretary\b|\bassistant secretary\b|\bdeputy\b", tl):
             return False
-        # Exclude foreign-actor sanctions announcements only when no other
-        # macro-financial term is present — keeps "Sanctions Test Iran Oil
-        # Market Outlook" but drops "Treasury Sanctions Five IRGC Operatives".
+        # (2) Sanctions de-dup — use canonical keywords as the macro-signal proxy.
         is_sanctions = bool(
             re.search(r"\btreasury sanctions\b|\bsanctions\b|\bdisrupts\b", tl)
         )
-        macro_signal_terms = (
-            "monetary policy", "inflation", "fiscal", "debt", "economy",
-            "economic outlook", "treasury market", "financial stability",
-            "interest rate", "recession", "growth", "gdp", "banking",
-        )
-        if is_sanctions and not any(t in tl for t in macro_signal_terms):
+        if is_sanctions and not _title_matches_canonical(title):
             return False
-        relevant_terms = (
-            # Testimony / congressional appearances
-            "testimony", "before the", "subcommittee", "senate banking",
-            "house financial services", "appropriations", "ways and means",
-            "joint economic committee", "committee on finance",
-            # Secretary remarks of macro relevance
-            "remarks by", "statement by", "secretary",
-            "monetary policy", "inflation", "fiscal", "debt", "economy",
-            "economic outlook", "treasury market", "financial stability",
-            # Broader macro-financial discourse (Bessent era + earlier)
-            "interest rate", "recession", "growth", "banking", "credit",
-            "tariff", "trade", "currency", "dollar", "tax",
-        )
-        return any(term in tl for term in relevant_terms)
+        # (3) Appearance marker OR canonical topic match.
+        if any(m in tl for m in self._APPEARANCE_MARKERS):
+            return True
+        return _title_matches_canonical(title)
 
 
 # ---------------------------------------------------------------------------
