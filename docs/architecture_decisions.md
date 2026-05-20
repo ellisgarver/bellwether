@@ -1353,6 +1353,106 @@ After implementation:
 
 ---
 
+## ADR-020: Basis-set corpus framing; NBER restored, CFR dropped, CEA added; pre-clustering JEL keyword filter removed
+
+- **Status**: Accepted
+- **Date**: 2026-05-20
+- **Supersedes (partially)**: ADR-010 (corpus scope), ADR-015 (JEL-anchored canonical filter), ADR-016 (single-stage Stage-2 keyword filter), ADR-017 (NBER/SSRN removal), ADR-018 (named_events keyword category), ADR-019 (NBERIngestor deletion). The methodology lock-in from ADR-019 (chunker, BERTopic, dynamics, validation) remains in force.
+
+### Context
+
+ADR-010 / 012 / 016 / 017 incrementally evolved the Phase 2 corpus by tier (Tier 1 institutional, Tier 2 academic-analytical) and patched coverage failures source-by-source. The set was justifiable in aggregate but lacked a single architectural principle to point at when a reviewer asks "why these sources and not others?" — and prior decisions had accumulated researcher-derived edge cases (per-source title filters, 213-keyword JEL-anchored Stage-2 gate, named-event keyword category) that are hard to defend cleanly in pre-registration.
+
+Re-examining the corpus under a basis-set lens (minimal sources spanning every independent dimension of US macro discourse, no redundancy, no researcher-introduced filters):
+
+1. **Source selection.** The eight independent dimensions of US macro discourse are (1) US monetary authority, (2) US monetary research voice, (3) international macro authority, (4) international central-bank network, (5) US fiscal authority, (6) US financial-stability research, (7) US policy think-tank commentary, (8) academic primary work (with academic-policy column commentary as a sub-axis). Each source in the corpus should map to one or more dimensions; sources whose dimensional coverage is wholly captured by another source are redundancy.
+
+2. **CFR is redundancy.** Council on Foreign Relations output is ~80% foreign-policy non-macro; the macro subset (dollar dynamics, sovereign debt, global monetary policy) is covered by PIIE on the same international-policy dimension (dimension 7). Keeping CFR adds noise without adding a dimension.
+
+3. **CEA is a basis hole.** The Council of Economic Advisers is the executive-branch primary fiscal-and-macro voice (dimension 5), distinct from CBO (legislative-branch fiscal). The annual Economic Report of the President is the US executive analog to IMF WEO. CEA was a notes-only stub in `whitelist.yaml` with no working ingestor.
+
+4. **NBER deletion was premature.** ADR-017/019 deleted `NBERIngestor` because the search API path was bot-protected. A 30-minute 2026-05-20 spike confirmed the `/papers/wNNNNN` paper-detail endpoints are NOT bot-protected — plain Drupal/nginx, `citation_*` meta tags in Google Scholar convention, clean HTTP 200 across years. Direct URL enumeration restores access. NBER is the only open source for academic primary working papers (dimension 8); without it, the basis set has no academic-primary axis.
+
+5. **CBO via govinfo.gov was investigated and rejected.** A spike on 2026-05-20 confirmed govinfo.gov has a CBO corpus accessible via the JSON API (filter on `governmentAuthor:"Congressional Budget Office"`) — 772 publications total, but unevenly distributed by year (41 records 2010 → 6 records 2024). The unevenness reflects GPO's deposit policy, not CBO's publication rate, and would introduce a non-random, time-varying selection filter into the CBO volume time series — exactly the kind of researcher-introduced artifact we're trying to eliminate. The existing Playwright + curl_cffi cbo.gov ingestor (ADR-017) covers the full ~25,000-URL CBO archive directly; its operational complexity is an engineering cost, not a methodological one. Retain.
+
+6. **The pre-clustering JEL keyword filter is double-filtering.** The basis-set source selection is already a coarse macro-content filter (every basis-set source's institutional mandate is in macro scope by construction). Stacking a 213-keyword JEL-anchored Stage-2 gate on top adds researcher choices about which keywords represent each JEL category — exactly the kind of decision reviewers will dig into. In practice `scripts/run_pipeline.py` already does not invoke the topic filter (`filter_cmd` runs date-range + dedup only), and `_title_matches_canonical` in `institutional.py` has had zero call sites since ADR-016 removed the per-source Stage-1 filters. The cleanest move is to remove the apparatus entirely and shift JEL classification to post-clustering.
+
+### Decision
+
+**Source set (the basis set).** Twelve active ingestors in `InstitutionalIngestor._sub_ingestors`:
+
+| Basis dimension | Ingestor(s) |
+|---|---|
+| 1. US monetary authority | `FederalReserveIngestor` |
+| 2. US monetary research voice | `FedRegionalIngestor` (NY, SF, Chicago, Atlanta) |
+| 3. International macro authority | `IMFIngestor` |
+| 4. International central-bank network | `BISIngestor` |
+| 5. US fiscal authority | `CBOIngestor` + `CEAIngestor` (NEW) |
+| 6. US financial-stability research | `TreasuryOFRIngestor` |
+| 7. US policy think-tank | `BrookingsIngestor` + `PIIEIngestor` |
+| 8. Academic primary work / column | `NBERIngestor` (RESTORED) + `VoxEUIngestor` |
+| Cross-cutting Q&A register | `CongressionalIngestor` (Treasury Sec testimony) |
+
+**Changes from ADR-019 baseline:**
+- **Add `CEAIngestor`** — govinfo.gov ERP collection via `api.govinfo.gov` JSON API. Walks ERP packages and emits one Article per chapter-level granule. PDF text extraction via `pypdf` (added to `requirements.txt`). API key in `GOVINFO_API_KEY` env var; `DEMO_KEY` fallback with warning. 61 historical ERPs (1947-present) with ~3,040 chapter-level granules.
+- **Restore `NBERIngestor`** — direct sequential enumeration of `/papers/wNNNNN`. Year-floor paper-number table calibrated 2026-05-20. Extracts metadata from `citation_*` HTML meta tags; body from trafilatura over the abstract block. Polite 0.6s per request; one-time ~8h enumeration for 2010-2026 ≈ 30,000 IDs.
+- **Drop `CFRIngestor` from `InstitutionalIngestor._sub_ingestors`** — class file retained in `src/mnd/ingestion/institutional.py` (unwired) so existing pre-ADR-020 data files can still be re-read for QA; not run in any new ingest.
+
+**Filtering.** Pre-clustering JEL keyword filter removed entirely:
+- Delete `src/mnd/filtering/topic_filter.py` and its `__init__.py` export.
+- Archive `config/topic_filter_keywords.yaml` → `scripts/archive/topic_filter_keywords_archived_adr020.yaml`.
+- Remove the `filtering.topic` block from `config/config.yaml`.
+- Remove the keyword-coverage check from `scripts/preflight_check.py` and `tests/test_scaffold.py`.
+- Remove the `_title_matches_canonical` / `_canonical_topic_keywords` helpers and the `load_yaml` / `functools` imports they required from `src/mnd/ingestion/institutional.py`.
+
+The `filter` stage in `run_pipeline.py` now does date-range filtering and MinHash near-duplicate removal only — nothing else.
+
+**Post-clustering JEL classification.** New module `src/mnd/clustering/jel_classifier.py` (`classify_clusters` function, `ClusterJELAssignment` dataclass). For each BERTopic cluster, embed the c-TF-IDF top terms in the same Qwen3 space used for the clustering itself; embed each top-level JEL code's official AEA description as a prototype; assign the primary JEL code by maximum cosine similarity. Macro-finance scope defaults to {E, F, G, H} per AEA's published taxonomy. Out-of-scope clusters are reported with their JEL label and excluded from SIR/logistic dynamics analysis only — they are NOT dropped from the embedded corpus.
+
+**Symmetry.** No source receives a different pre-clustering filter from any other. Every basis-set source is ingested in full; macro/non-macro determination is made once at the cluster level using a published external taxonomy.
+
+### Consequences
+
+**Positive:**
+- One-sentence corpus justification: *"The semantic corpus is the minimum set of sources spanning the eight independent dimensions of US macro discourse, with no redundant or noise-dominated entries."* Answers every "why X / why not Y" reviewer question without invoking researcher judgment over specific sources.
+- One-sentence filtering justification: *"No pre-clustering topical filter is applied. The basis-set source selection is the only macro-scope constraint at ingest. Topic relevance is decided post-clustering by assigning each BERTopic cluster a primary JEL code from the AEA's published JEL taxonomy, applied symmetrically across sources."* Reviewer cannot ask "why these 213 keywords?" — we don't use any.
+- NBER restored, closing the academic-primary-work basis gap.
+- CEA added, closing the executive-fiscal basis gap.
+- CFR dropped, removing ~22,000 sitemap candidates of which ~80% are foreign-policy non-macro noise.
+- ~600 lines of code (topic_filter.py, topic_filter_keywords.yaml, dead helpers) removed.
+
+**Negative / risks:**
+- NBER enumeration is slow (~8h one-time at 0.6s/request × 30k papers). One-time cost on RCC.
+- CEA depends on a free GovInfo API key; `DEMO_KEY` fallback only sustains integration tests, not the full ingest.
+- Corpus volume grows. NBER alone adds ~24,000 working papers over 2010-2026, ~70% of which are non-macro (J, I, D, L, …). They are embedded and clustered, then excluded from dynamics by the post-clustering JEL classifier. Compute cost on RCC: bounded; user has explicitly accepted compute-cost-for-cleaner-methodology trades.
+- Post-clustering JEL classifier accuracy is empirically validated only after the first full ingest. Sensitivity analysis on the runner-up gap (`ClusterJELAssignment.runner_up_gap`) is the planned diagnostic; if median gap is <0.05 across clusters, the classification is ambiguous and we'll need to revisit (likely by expanding the JEL prototype to include sub-code descriptions).
+
+### Verification
+
+After implementation:
+- `python -c "from mnd.ingestion import InstitutionalIngestor; ing=InstitutionalIngestor(); print(len(ing._sub_ingestors))"` returns 12.
+- `from mnd.filtering.topic_filter import TopicFilter` raises `ImportError`.
+- `tests/test_filtering.py`, `tests/test_scaffold.py` pass with the new assertions (CFR absent, CEA present, NBER present, TopicFilter removal asserted).
+- Per-source integration battery (`pytest tests/integration/test_source_coverage.py -m integration -v`) passes coverage floors for all 25 cases including the new NBER + CEA cases and the 2010-window historical-edge cases for Brookings / IMF / BIS / Treasury OFR. Run on RCC where curl_cffi, playwright, and pypdf are installed.
+- `python scripts/preflight_check.py --skip-embedding` reports 6/6 OK (no keyword-coverage step).
+- Post-clustering JEL classifier returns sensible scope labels on a 50-cluster sanity check after the first full re-ingest (≥40% in-scope for E/F/G/H given the basis-set composition).
+
+### Implementation notes
+
+The actual code changes live in:
+- `src/mnd/ingestion/institutional.py` — new `NBERIngestor`, new `CEAIngestor`, updated `InstitutionalIngestor._sub_ingestors`, dead helpers removed.
+- `src/mnd/filtering/__init__.py` — `TopicFilter` export removed.
+- `src/mnd/clustering/jel_classifier.py` — NEW.
+- `config/whitelist.yaml` — header rewritten under basis-set framing; CEA entry expanded; CBO entry updated to clarify Playwright path is canonical (govinfo rejected); NBER entry restored to active; CFR entry removed.
+- `config/config.yaml` — `filtering.topic` block removed.
+- `requirements.txt` — `pypdf==5.0.1` added.
+- `tests/test_filtering.py`, `tests/test_scaffold.py` — assertions updated.
+- `tests/integration/test_source_coverage.py` — CFR case removed; NBER + CEA cases added; 2010-window historical-edge cases added for Brookings / IMF / BIS / Treasury OFR.
+- `scripts/preflight_check.py` — keyword check removed; sub-ingestor count updated to 12.
+- `docs/METHODOLOGY.md`, `CLAUDE.md`, `docs/filter_audit_jel.md` — updated to reference ADR-020 as the canonical filtering and source-selection authority.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

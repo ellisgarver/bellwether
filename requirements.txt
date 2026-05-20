@@ -42,6 +42,7 @@ datasketch==1.6.5         # MinHash near-duplicate detection
 mmh3==5.0.1               # Fast hashing
 trafilatura==1.12.2       # Article text extraction from raw HTML
 tiktoken==0.7.0           # BPE tokenizer for 600-token document chunking
+pypdf==5.0.1              # PDF text extraction (CEA Economic Report of the President via govinfo); ADR-020
 
 # Data ingestion ------------------------------------------------------------
 fredapi==0.5.2

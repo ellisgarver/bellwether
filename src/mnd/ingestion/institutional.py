@@ -1,50 +1,70 @@
 """Institutional, academic, and policy-analytical ingestors.
 
-Covers the semantic corpus tiers defined in ADR-012 / MND_PROJECT_SPEC (1).md rev3
-and config/whitelist.yaml:
+Covers the eight-dimension basis-set semantic corpus defined in ADR-020
+(2026-05-20) — one ingestor per dimension of US macro discourse, no
+redundant sources, no pre-clustering topic keyword filter. See
+config/whitelist.yaml.
 
-  Tier 1 — Institutional policy
-    FederalReserveIngestor  fed.py — FOMC, speeches, Beige Book, FEDS Notes
-                            NOTE: Fed Chair Jackson Hole speeches are published on
-                            federalreserve.gov and captured here — no separate ingestor needed.
-    FedRegionalIngestor     Regional Fed blogs and Economic Letters
-    CongressionalIngestor   Treasury Secretary testimony (Senate Banking, HFSC)
-    IMFIngestor             imf.org — WEO, GFSR, F&D, Working Papers, IMF Blog
-                            (Coveo Search API; curl_cffi Chrome impersonation)
-    BISIngestor             bis.org — Quarterly Review + Working Papers
-    TreasuryOFRIngestor     OFR Working Papers and Briefs, FSOC Annual Reports
-    CBOIngestor             cbo.gov — Budget/Economic Outlook (may 403 from residential IPs)
+  Basis dimension → ingestor mapping (ADR-020)
 
-  Tier 2 — Academic-analytical
-    VoxEUIngestor           cepr.org/voxeu — full posts
-    BrookingsIngestor       brookings.edu — macro-filtered articles
-    PIIEIngestor            piie.com — policy briefs, working papers, blog posts
-    CFRIngestor             cfr.org — reports, backgrounders, expert briefs (macro-filtered)
+    1. US monetary authority           FederalReserveIngestor (fed.py)
+    2. US monetary research voice      FedRegionalIngestor (NY, SF, Chicago, Atlanta)
+    3. International macro authority   IMFIngestor (curl_cffi + Coveo, ADR-014)
+    4. International CB network        BISIngestor (multi-section, ADR-017)
+    5. US fiscal authority             CBOIngestor (Playwright + curl_cffi, ADR-017)
+                                       CEAIngestor (govinfo ERP, ADR-020)
+    6. US financial stability          TreasuryOFRIngestor
+    7. US policy think-tank            BrookingsIngestor + PIIEIngestor
+    8. Academic primary work           NBERIngestor (direct URL enum, ADR-020)
+       Academic-policy column          VoxEUIngestor
 
-  InstitutionalIngestor   Composite: runs all active ingestors and merges output.
+  Cross-cutting:
+    CongressionalIngestor   Treasury Secretary testimony — distinct Q&A register
+                            over dimension 1 + dimension 5 content.
+
+  InstitutionalIngestor   Composite: runs every basis-set ingestor and merges output.
+
+Pre-clustering topic relevance filtering was removed in ADR-020. The basis-set
+source selection is the only macro-content scope constraint at ingest time;
+JEL classification is applied post-clustering by mnd.clustering.jel_classifier
+to label clusters with their primary JEL code, and non-macro clusters
+(primary JEL ∉ {E, F, G, H}) are excluded from dynamics analysis only — not
+dropped from the embedded corpus.
+
+Removed (ADR-020):
+  CFRIngestor — basis-set redundancy with PIIE on the international-policy
+                dimension. ~80% of CFR output is foreign-policy non-macro;
+                the macro subset overlaps PIIE almost completely. Class
+                retained in this file (unwired from InstitutionalIngestor)
+                so existing data files can be re-read for QA; not run
+                in any new ingest.
+
+Restored (ADR-020):
+  NBERIngestor — academic primary-work dimension. Direct URL enumeration
+                 of /papers/wNNNNN (no search-API bot wall; citation_*
+                 meta tags give clean structured metadata). The original
+                 search-API-based ingestor (deleted in ADR-019) is
+                 superseded — that path is irrelevant.
+
+Added (ADR-020):
+  CEAIngestor — Council of Economic Advisers. govinfo.gov ERP collection
+                (Economic Report of the President, 61 packages back to 1947;
+                granule-level chapter access with PDF text extraction).
 
 Removed (ADR-012 / MND_PROJECT_SPEC rev3):
-  JacksonHoleIngestor — redundant; Jackson Hole speeches are on federalreserve.gov
-                        and captured by FederalReserveIngestor. Separate ingestor
-                        created duplicates.
-  ArxivIngestor       — cut from scope: 2017-only coverage, low macro volume.
-                        Archived at scripts/archive/arxiv_ingestor.py.
+  JacksonHoleIngestor — covered by FederalReserveIngestor.
+  ArxivIngestor       — 2017-only coverage; archived in scripts/archive/.
 
-Removed (ADR-017 / ADR-019):
-  NBERIngestor, SSRNIngestor — Phase 6 = Tier 1/2 re-ingest + Media Cloud
-                               Premium only; NBER historical access blocked
-                               and SSRN exposes no historical archive.
-
-Journalism tier (AP News, Reuters, MarketWatch) removed in ADR-010.
-Ingestors archived in scripts/archive/.
+Removed (ADR-010):
+  AP News, Reuters, MarketWatch journalism tier — archived in scripts/archive/.
 
 All timestamps follow the ADR-008 rule: publication/release date only.
 FOMC minutes = release date.
 """
 from __future__ import annotations
 
-import functools
 import json
+import os
 import re
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -61,40 +81,12 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random_
 
 from mnd.ingestion.base import Article, Ingestor, _now_utc_iso, _stable_article_id
 from mnd.ingestion.fed import FederalReserveIngestor
-from mnd.utils.config import load_yaml
 from mnd.utils.logging import get_logger
 
 log = get_logger(__name__)
 
 USER_AGENT = "MacroNarrativeDynamics/0.1 (academic research; contact via project repo)"
 _HEADERS = {"User-Agent": USER_AGENT}
-
-
-@functools.lru_cache(maxsize=1)
-def _canonical_topic_keywords() -> frozenset[str]:
-    """Lowercased union of every keyword in `config/topic_filter_keywords.yaml`.
-
-    ADR-015: the per-source inline Stage-1 filters were replaced with this
-    single canonical set so the same keyword list is applied at ingest time
-    and at the Stage-2 canonical filter. Both schema_version 1.x (flat list
-    per category) and 2.x (JEL-annotated dict per category) are supported.
-    """
-    data = load_yaml("config/topic_filter_keywords.yaml")
-    kws: set[str] = set()
-    for category in data.get("categories", {}).values():
-        if isinstance(category, list):
-            for kw in category:
-                kws.add(str(kw).lower())
-        elif isinstance(category, dict):
-            for kw in category.get("keywords", []):
-                kws.add(str(kw).lower())
-    return frozenset(kws)
-
-
-def _title_matches_canonical(title: str) -> bool:
-    """Stage-1 inline filter: any canonical keyword present in title."""
-    tl = title.lower()
-    return any(kw in tl for kw in _canonical_topic_keywords())
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -1903,9 +1895,16 @@ class BrookingsIngestor(Ingestor):
     articles accessible via date-range filter. Individual article pages are
     fetched for full body text.
 
-    Macro-relevance pre-filter uses compound phrases and high-confidence single
-    terms. Single words (policy, market, growth, bond, crisis) are excluded
-    because they match Brookings content on education, health, and governance.
+    ADR-020: ingestion is content-neutral — every Brookings article in the
+    date window is yielded, regardless of program (Economic Studies, Foreign
+    Policy, Global Economy & Development, Governance Studies, Metropolitan
+    Policy). Topical relevance is decided post-clustering by
+    ``mnd.clustering.jel_classifier``: clusters whose Brookings content lands
+    in non-macro JEL codes (I, J, K, L, R, …) are reported but excluded
+    from dynamics analysis only. The section label
+    ``brookings_economic_studies`` is a pre-ADR-020 cosmetic identifier
+    retained for downstream code that grouped by section; it does NOT
+    indicate a pre-clustering filter to that program.
     """
 
     source_id = "brookings"
@@ -2537,16 +2536,467 @@ class CongressionalIngestor(Ingestor):
 
 
 # ---------------------------------------------------------------------------
+# Tier 1 — US fiscal authority (executive branch)
+# ---------------------------------------------------------------------------
+
+
+class CEAIngestor(Ingestor):
+    """Council of Economic Advisers — Economic Report of the President.
+
+    Sources the executive-branch macro voice (basis-set dimension 5 in
+    ADR-020). Retrieval via the govinfo.gov JSON API against the ERP
+    collection, which contains every Economic Report of the President
+    back to 1947 with chapter-level granules (61 packages / ~3,040
+    granules in total).
+
+    Why govinfo and not whitehouse.gov:
+      - govinfo.gov is the canonical GPO-deposited record, not bot-protected,
+        and has a documented JSON API with stable package/granule URIs.
+      - whitehouse.gov/cea/ pages are bot-protected (Cloudflare/JS) and
+        their URL structure changes between administrations. The govinfo
+        ERP collection captures the same authoritative annual document
+        without that operational risk.
+
+    Coverage:
+      - One ``Article`` per chapter-level granule. The whole ERP
+        is ~400 pages/year split into ~15-25 chapters; chapter granularity
+        is what gives meaningful narrative-level documents for clustering
+        (the full-report monolith would dominate one cluster).
+      - PDF text via pypdf. The ERP PDFs are text-layered (not scanned),
+        so extraction is clean.
+
+    API key:
+      - ``GOVINFO_API_KEY`` env var. Falls back to ``DEMO_KEY`` (30 req/hr)
+        with a loud warning — fine for integration tests, NOT for the
+        full ingest. Free signup at https://api.govinfo.gov/signup/.
+    """
+
+    source_id = "cea"
+
+    _GOVINFO_BASE = "https://api.govinfo.gov"
+    _COLLECTION = "ERP"
+    _PUBLISH_DATE_FMT = "%Y-%m-%d"
+    _DEMO_KEY = "DEMO_KEY"
+
+    @classmethod
+    def _api_key(cls) -> str:
+        key = os.environ.get("GOVINFO_API_KEY")
+        if not key:
+            log.warning(
+                "GOVINFO_API_KEY not set — using DEMO_KEY (30 req/hr). "
+                "For the full ingest, sign up at https://api.govinfo.gov/signup/ "
+                "(free) and set GOVINFO_API_KEY in .env."
+            )
+            return cls._DEMO_KEY
+        return key
+
+    def fetch(self, start: date, end: date) -> Iterator[Article]:
+        api_key = self._api_key()
+        # Walk packages in the ERP collection within the date window.
+        for package in self._list_packages(api_key, start, end):
+            package_id = package.get("packageId")
+            if not package_id:
+                continue
+            issued = self._parse_iso_date(package.get("dateIssued"))
+            if not issued or issued < start or issued > end:
+                continue
+            yield from self._fetch_granules(api_key, package_id, issued)
+            time.sleep(0.5)
+
+    def _list_packages(
+        self, api_key: str, start: date, end: date,
+    ) -> Iterator[dict]:
+        """Yield ERP package summaries with dateIssued in [start, end].
+
+        Uses the published-since endpoint with year-prior buffer to catch
+        ERPs whose lastModified is later than dateIssued.
+        """
+        # The collection-published endpoint requires an ISO start. Pad to
+        # one year before the window opens so we don't miss a delayed
+        # ingest of a prior-year ERP.
+        anchor = max(date(2009, 1, 1), date(start.year - 1, 1, 1))
+        anchor_iso = anchor.isoformat() + "T00:00:00Z"
+        url = (
+            f"{self._GOVINFO_BASE}/collections/{self._COLLECTION}/{anchor_iso}"
+            f"?api_key={api_key}&pageSize=100&offsetMark=*"
+        )
+        offset = "*"
+        page = 0
+        while True:
+            page += 1
+            paged_url = re.sub(r"offsetMark=[^&]+", f"offsetMark={offset}", url)
+            try:
+                resp = _get(paged_url, timeout=60.0)
+                data = resp.json()
+            except Exception as exc:
+                log.warning("CEA package list fetch failed (page %d): %s", page, exc)
+                return
+            packages = data.get("packages", [])
+            if not packages:
+                return
+            for pkg in packages:
+                yield pkg
+            next_offset = data.get("nextPage") or data.get("offsetMark")
+            # offsetMark in the response is the next cursor; if absent, stop.
+            if not next_offset or next_offset == offset:
+                return
+            offset = next_offset
+            time.sleep(0.5)
+            # Safety bound — ERP has ~61 packages historical; should fit in
+            # one or two pages. Bail at 10 pages to avoid an infinite loop
+            # if the API contract drifts.
+            if page > 10:
+                log.warning("CEA package list exceeded 10 pages — bailing")
+                return
+
+    def _fetch_granules(
+        self, api_key: str, package_id: str, issued: date,
+    ) -> Iterator[Article]:
+        """Yield one Article per chapter-level granule of one ERP package."""
+        url = (
+            f"{self._GOVINFO_BASE}/packages/{package_id}/granules"
+            f"?api_key={api_key}&pageSize=200&offsetMark=*"
+        )
+        try:
+            resp = _get(url, timeout=60.0)
+            data = resp.json()
+        except Exception as exc:
+            log.warning("CEA granule list %s failed: %s", package_id, exc)
+            return
+        granules = data.get("granules", [])
+        log.info("CEA: package %s issued=%s — %d granules",
+                 package_id, issued.isoformat(), len(granules))
+        for gran in granules:
+            granule_id = gran.get("granuleId")
+            if not granule_id:
+                continue
+            article = self._build_article(
+                api_key=api_key,
+                package_id=package_id,
+                granule_id=granule_id,
+                granule=gran,
+                issued=issued,
+            )
+            if article is not None:
+                yield article
+            time.sleep(0.3)
+
+    def _build_article(
+        self,
+        *,
+        api_key: str,
+        package_id: str,
+        granule_id: str,
+        granule: dict,
+        issued: date,
+    ) -> Article | None:
+        """Download granule PDF, extract text, return an Article (or None)."""
+        title = (granule.get("title") or "").strip()
+        # govinfo URL convention: granule HTML page on the public site.
+        public_url = (
+            f"https://www.govinfo.gov/app/details/{package_id}/{granule_id}"
+        )
+        pdf_url = (
+            f"{self._GOVINFO_BASE}/packages/{package_id}/granules/{granule_id}"
+            f"/pdf?api_key={api_key}"
+        )
+        body = self._extract_pdf_text(pdf_url)
+        if not body or len(body.split()) < 100:
+            log.debug("CEA: %s/%s skipped — PDF text < 100 words", package_id, granule_id)
+            return None
+        return _make_article(
+            source_id=self.source_id,
+            url=public_url,
+            published_at=issued.isoformat() + "T00:00:00Z",
+            title=title or f"ERP {issued.year} — {granule_id}",
+            body=body,
+            author="Council of Economic Advisers",
+            section="cea_erp_chapter",
+            tier=1,
+            document_type="cea_erp_chapter",
+            extra_meta={
+                "package_id": package_id,
+                "granule_id": granule_id,
+                "govinfo_collection": self._COLLECTION,
+            },
+        )
+
+    @staticmethod
+    def _extract_pdf_text(pdf_url: str) -> str:
+        """Download a PDF and return its extracted text (best-effort)."""
+        try:
+            from pypdf import PdfReader
+            from io import BytesIO
+        except ImportError:
+            log.error(
+                "pypdf not installed — CEA PDF text extraction disabled. "
+                "Install with `pip install pypdf` (see requirements.txt / ADR-020)."
+            )
+            return ""
+        try:
+            resp = _get(pdf_url, timeout=60.0)
+        except Exception as exc:
+            log.debug("CEA PDF fetch %s failed: %s", pdf_url, exc)
+            return ""
+        try:
+            reader = PdfReader(BytesIO(resp.content))
+            pages = [page.extract_text() or "" for page in reader.pages]
+            return "\n".join(p.strip() for p in pages if p.strip())
+        except Exception as exc:
+            log.debug("CEA PDF parse %s failed: %s", pdf_url, exc)
+            return ""
+
+    @staticmethod
+    def _parse_iso_date(value: str | None) -> date | None:
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+
+
+# ---------------------------------------------------------------------------
+# Tier 2 — academic primary work (NBER restored, ADR-020)
+# ---------------------------------------------------------------------------
+
+
+class NBERIngestor(Ingestor):
+    """NBER working papers via direct URL enumeration.
+
+    Restored by ADR-020 (2026-05-20). The prior NBERIngestor (deleted in
+    ADR-019) relied on the search API, which is bot-protected. This
+    implementation enumerates ``/papers/wNNNNN`` directly — the spike
+    on 2026-05-20 confirmed every probe returned HTTP 200, plain
+    Drupal/nginx, no Cloudflare or DataDome, with citation_* meta tags
+    (Google Scholar convention) providing structured metadata.
+
+    Strategy:
+      - Use a per-year paper-number floor (calibrated 2026-05-20) so the
+        ingest doesn't pay the cost of enumerating every wNNNNN ID since
+        1973.
+      - Enumerate forward from the start-year floor through the end-year
+        ceiling (capped at the head of NBER's series, discovered by
+        probing forward until N consecutive misses).
+      - Read citation_publication_date from each paper's meta tags;
+        drop papers outside [start, end].
+      - Body = title + abstract (NBER's working papers page exposes
+        the abstract in the page body; trafilatura extracts it cleanly).
+
+    Pre-clustering filter NOT applied (ADR-020). Every NBER paper in the
+    window is ingested; post-clustering JEL classification decides which
+    clusters are macro for dynamics analysis. This is symmetric with the
+    other basis-set sources.
+
+    Politeness: ~1 second between requests. Full 2010-2026 enumeration
+    is ~30,000 IDs at 1 req/sec ≈ 8 hours wall clock; that's a one-time
+    cost on RCC.
+    """
+
+    source_id = "nber"
+
+    _PAPER_URL_TEMPLATE = "https://www.nber.org/papers/{paper_id}"
+
+    # Calibrated by probing /papers/wNNNNN dates on 2026-05-20.
+    # Each entry is the first paper ID whose citation_publication_date
+    # is on or after January 1 of that year. Conservative starting
+    # points (a few hundred IDs early so we don't miss late-published
+    # papers from the prior year).
+    _PAPER_FLOOR_BY_YEAR: dict[int, int] = {
+        2010: 15500,   # w15500 = 2009-11-12 (Nov 2009)
+        2011: 16700,
+        2012: 17600,
+        2013: 18700,
+        2014: 19800,   # w20000 = 2014-03-20
+        2015: 20800,
+        2016: 21800,
+        2017: 22900,   # w23000 = 2017-01-02
+        2018: 24100,
+        2019: 25400,
+        2020: 26500,
+        2021: 28100,   # w29000 = 2021-07-05
+        2022: 29500,
+        2023: 30800,
+        2024: 31900,   # w32000 = 2024-01-01
+        2025: 33000,
+        2026: 33900,
+    }
+
+    # Stop enumeration after this many consecutive 404s — indicates we've
+    # walked past the head of the series.
+    _STOP_AFTER_CONSECUTIVE_404S = 30
+
+    # Hard upper bound, refreshed periodically. Calibration on 2026-05-20:
+    # w33500 ≈ Feb 2025. NBER publishes ~1500 working papers/year. A
+    # ceiling of (latest_floor + 3000) is generous through 2026.
+    _ABSOLUTE_CEILING = 38000
+
+    def fetch(self, start: date, end: date) -> Iterator[Article]:
+        floor_year = start.year
+        ceiling_year = end.year
+        floor = self._PAPER_FLOOR_BY_YEAR.get(
+            floor_year, min(self._PAPER_FLOOR_BY_YEAR.values()),
+        )
+        # Ceiling: one year past the requested end, capped at absolute ceiling.
+        # If end is in the current year, use the absolute ceiling — we don't
+        # know the head without probing.
+        ceiling = min(
+            self._PAPER_FLOOR_BY_YEAR.get(ceiling_year + 1, self._ABSOLUTE_CEILING),
+            self._ABSOLUTE_CEILING,
+        )
+        log.info(
+            "NBER: enumerating paper IDs w%d..w%d for window %s..%s",
+            floor, ceiling, start.isoformat(), end.isoformat(),
+        )
+
+        consecutive_404 = 0
+        yielded = 0
+        examined = 0
+        for n in range(floor, ceiling + 1):
+            paper_id = f"w{n}"
+            url = self._PAPER_URL_TEMPLATE.format(paper_id=paper_id)
+            try:
+                resp = _get(url, timeout=30.0)
+            except requests.exceptions.HTTPError as exc:
+                status = getattr(exc.response, "status_code", None)
+                if status == 404:
+                    consecutive_404 += 1
+                    if consecutive_404 >= self._STOP_AFTER_CONSECUTIVE_404S:
+                        log.info(
+                            "NBER: stopping at %s — %d consecutive 404s "
+                            "(walked off head of series)",
+                            paper_id, consecutive_404,
+                        )
+                        break
+                    continue
+                log.debug("NBER %s HTTP %s: %s", paper_id, status, exc)
+                continue
+            except Exception as exc:
+                log.debug("NBER %s fetch failed: %s", paper_id, exc)
+                continue
+            consecutive_404 = 0
+            examined += 1
+
+            article = self._parse_paper(paper_id, url, resp.text, start, end)
+            if article is not None:
+                yield article
+                yielded += 1
+            time.sleep(0.6)  # politeness
+
+        log.info(
+            "NBER: examined %d papers, yielded %d in window %s..%s",
+            examined, yielded, start.isoformat(), end.isoformat(),
+        )
+
+    def _parse_paper(
+        self,
+        paper_id: str,
+        url: str,
+        html: str,
+        start: date,
+        end: date,
+    ) -> Article | None:
+        """Parse one NBER paper HTML page; return an Article or None."""
+        # citation_publication_date is YYYY/MM/DD (Google Scholar convention).
+        m_date = re.search(
+            r'name="citation_publication_date"[^>]+content="(\d{4})/(\d{2})/(\d{2})"',
+            html,
+        )
+        if not m_date:
+            return None
+        try:
+            pub_date = date(int(m_date.group(1)), int(m_date.group(2)), int(m_date.group(3)))
+        except ValueError:
+            return None
+        if pub_date < start or pub_date > end:
+            return None
+
+        m_title = re.search(
+            r'name="citation_title"[^>]+content="([^"]+)"', html,
+        )
+        title = (m_title.group(1) if m_title else "").strip()
+
+        authors: list[str] = re.findall(
+            r'name="citation_author"[^>]+content="([^"]+)"', html,
+        )
+        author = "; ".join(authors) if authors else None
+
+        m_doi = re.search(
+            r'name="citation_doi"[^>]+content="([^"]+)"', html,
+        )
+        doi = m_doi.group(1) if m_doi else None
+
+        m_pdf = re.search(
+            r'name="citation_pdf_url"[^>]+content="([^"]+)"', html,
+        )
+        pdf_url = m_pdf.group(1) if m_pdf else None
+
+        # Body = title + abstract extracted by trafilatura. The abstract
+        # is in the main page body on NBER. For papers with no extractable
+        # abstract, fall back to title-only.
+        try:
+            body_text = trafilatura.extract(
+                html,
+                include_comments=False,
+                include_tables=False,
+            ) or ""
+        except Exception:
+            body_text = ""
+        body = body_text.strip()
+        if len(body.split()) < 50:
+            # NBER's abstract is sometimes inside a JS-rendered region. Fall
+            # back to a structural BS4 lookup for the abstract block.
+            try:
+                soup = BeautifulSoup(html, "lxml")
+                # Common patterns: <div class="page_header_subtitle"> for
+                # the citation block; <p> tags inside an article container.
+                abstract_p = None
+                for header in soup.find_all(["h2", "h3", "strong"]):
+                    if header.get_text(strip=True).lower().startswith("abstract"):
+                        nxt = header.find_next("p")
+                        if nxt:
+                            abstract_p = nxt
+                            break
+                if abstract_p is not None:
+                    body = f"{title}\n\n{abstract_p.get_text(strip=True)}"
+            except Exception:
+                pass
+        if not body:
+            body = title  # last-resort metadata-only record
+
+        return _make_article(
+            source_id=self.source_id,
+            url=url,
+            published_at=pub_date.isoformat() + "T00:00:00Z",
+            title=title or paper_id,
+            body=body,
+            author=author,
+            section="nber_working_paper",
+            tier=2,
+            document_type="nber_working_paper",
+            extra_meta={
+                "paper_id": paper_id,
+                "doi": doi,
+                "pdf_url": pdf_url,
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
 # Composite ingestor
 # ---------------------------------------------------------------------------
 
 
 class InstitutionalIngestor(Ingestor):
-    """Composite: runs all institutional, academic, and policy-journalism ingestors.
+    """Composite: runs all basis-set institutional ingestors.
 
-    Also delegates to FederalReserveIngestor for Board communications (FOMC,
-    speeches, Beige Book). Use this as the single entry point for the full
-    Phase 2 semantic corpus ingestion.
+    ADR-020 (2026-05-20) — basis-set source selection:
+      Fed Board + 4 regional Feds + IMF + BIS + CBO + CEA + Treasury OFR +
+      Brookings + PIIE + NBER + VoxEU + Congressional Treasury Sec testimony.
+      CFR removed (redundant with PIIE on the international-policy dimension).
+
+    Use this as the single entry point for the full Phase 2 semantic corpus
+    ingestion.
 
     Checkpoint/resume: if checkpoint_path is given, a JSON file is written after
     each sub-ingestor completes. On restart, completed sub-ingestors are skipped
@@ -2567,10 +3017,11 @@ class InstitutionalIngestor(Ingestor):
             BISIngestor(),
             TreasuryOFRIngestor(),
             CBOIngestor(),
+            CEAIngestor(),
             VoxEUIngestor(),
             BrookingsIngestor(),
             PIIEIngestor(),
-            CFRIngestor(),
+            NBERIngestor(),
         ]
 
     def _load_checkpoint(self) -> dict:

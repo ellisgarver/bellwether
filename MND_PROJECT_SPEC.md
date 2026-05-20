@@ -149,7 +149,7 @@ These are where macro narratives originate. Think tanks are downstream of this l
 |--------|---------|--------|
 | Media Cloud API, premium-press outlet collection | Daily/weekly article count time series per keyword/entity across ~30 curated premium financial outlets, 2010–present | `MEDIACLOUD_API_KEY` in `.env` (free academic access) |
 
-**Implementation:** `src/mnd/detection/mediacloud.py` (extends Layer 2 module). Query Media Cloud `/stories/count` endpoint scoped to the premium-press collection. Filter to macro-relevant keyword set (the canonical filter at `config/topic_filter_keywords.yaml`). Output weekly volume time series per narrative keyword to `data/dynamics/mediacloud_premium/`. Store entirely separately from the Layer 1A document pipeline — these are time series, not documents.
+**Implementation:** `src/mnd/detection/mediacloud.py` (extends Layer 2 module). Query Media Cloud `/stories/count` endpoint scoped to the premium-press collection. **Query terms come from each cluster's top c-TF-IDF terms** joined with Boolean OR — fully reproducible from clustering output (ADR-016, restated under ADR-020). No keyword-list file is consulted; the pre-clustering `config/topic_filter_keywords.yaml` was archived by ADR-020. Output weekly volume time series per narrative cluster to `data/dynamics/mediacloud_premium/`. Store entirely separately from the Layer 1A document pipeline — these are time series, not documents.
 
 **Deprecated:** `src/mnd/ingestion/ravenpack.py` remains in the repo for reference but is NOT imported or invoked. Do not pass `WRDS_*` env vars; they are obsolete.
 

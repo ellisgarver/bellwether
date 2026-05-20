@@ -1,4 +1,20 @@
-# Filter audit — JEL E/F/G/H standardization
+# Filter audit — JEL E/F/G/H standardization (HISTORICAL — SUPERSEDED BY ADR-020)
+
+> **This document is historical reference only.** ADR-020 (2026-05-20)
+> removed the pre-clustering JEL keyword filter entirely. The basis-set
+> source selection is now the only macro-scope constraint at ingest, and
+> JEL classification is applied **post-clustering** by
+> `src/mnd/clustering/jel_classifier.py` using the AEA's published
+> top-level JEL descriptions as nearest-neighbor prototypes. The keyword
+> YAML and `TopicFilter` class no longer exist.
+>
+> Canonical authority for filter methodology: ADR-020 in
+> `docs/architecture_decisions.md` and the Stage 2 / Stage 5b sections of
+> `docs/METHODOLOGY.md`. The text below is preserved unchanged for
+> historical context and to explain what the project tried before
+> landing on the post-clustering approach.
+
+---
 
 Audit of the corpus topic filter, mapping current keyword categories to the
 JEL (Journal of Economic Literature) Classification System maintained by the
@@ -7,11 +23,12 @@ classification for economics research; anchoring the filter to JEL subcodes
 makes the operational definition of "macro narrative content" pre-registration
 defensible and replication-friendly.
 
-**Status:** ratified by ADR-015 (canonical filter, 2026-05-18), ADR-016
-(single-stage filtering, 2026-05-18), and ADR-018 (removal of `named_events`
-to eliminate anchor-recovery circularity, 2026-05-19). Originally drafted
-2026-05-18 during Phase 2 closeout; the historical section below preserves
-the pre-ADR architecture for reference.
+**Status:** SUPERSEDED BY ADR-020 (2026-05-20). Historical chain: drafted
+2026-05-18 during Phase 2 closeout; ratified by ADR-015 (canonical filter,
+2026-05-18), ADR-016 (single-stage filtering, 2026-05-18), ADR-018
+(removal of `named_events` to eliminate anchor-recovery circularity,
+2026-05-19); apparatus removed by ADR-020 (basis-set framing eliminates
+the need for keyword-level filtering, 2026-05-20).
 
 ---
 

@@ -61,18 +61,15 @@ def check_configs() -> tuple[bool, str]:
     from mnd.utils.config import load_config, load_yaml
     cfg = load_config()
     wl = load_yaml("config/whitelist.yaml")
-    kw = load_yaml("config/topic_filter_keywords.yaml")
     issues = []
-    if cfg.get("schema_version") != "1.0.0":
-        issues.append(f"config schema_version={cfg.get('schema_version')}")
-    # Whitelist keys per ADR-010: tier_1_institutional_policy + tier_2_*
+    if cfg.get("schema_version") != "2.0.0":
+        issues.append(f"config schema_version={cfg.get('schema_version')} (expected 2.0.0 per ADR-019)")
+    # Whitelist keys per ADR-020: tier_1_institutional_policy + tier_2_*
     if not wl.get("tier_1_institutional_policy"):
         issues.append("whitelist tier_1_institutional_policy empty")
     if not wl.get("tier_2_academic_analytical"):
         issues.append("whitelist tier_2_academic_analytical empty")
-    n_kw = sum(len(v) for v in kw.get("categories", {}).values())
-    if n_kw < 50:
-        issues.append(f"only {n_kw} keywords loaded")
+    # ADR-020: topic_filter_keywords.yaml archived; no keyword check at this stage.
     return not issues, "all configs OK" if not issues else "; ".join(issues)
 
 
@@ -115,10 +112,10 @@ def check_institutional_ingestor() -> tuple[bool, str]:
         from mnd.ingestion import InstitutionalIngestor
         ing = InstitutionalIngestor()
         n_sub = len(ing._sub_ingestors)
-        # Expected 11 active sub-ingestors per ADR-014: Fed, FedRegional,
-        # Congressional, IMF, BIS, TreasuryOFR, CBO, VoxEU, Brookings, PIIE, CFR.
-        # (NBER/SSRN are Phase 6 live RSS only.)
-        return n_sub >= 11, f"InstitutionalIngestor with {n_sub} sub-ingestors"
+        # Expected 12 active sub-ingestors per ADR-020: Fed, FedRegional,
+        # Congressional, IMF, BIS, TreasuryOFR, CBO, CEA, VoxEU, Brookings,
+        # PIIE, NBER. (CFR removed, CEA + NBER added.)
+        return n_sub == 12, f"InstitutionalIngestor with {n_sub} sub-ingestors"
     except Exception as exc:
         return False, f"failed to instantiate InstitutionalIngestor: {exc}"
 

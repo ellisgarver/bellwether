@@ -43,10 +43,11 @@ from mnd.ingestion.institutional import (
     BISIngestor,
     BrookingsIngestor,
     CBOIngestor,
-    CFRIngestor,
+    CEAIngestor,
     CongressionalIngestor,
     FedRegionalIngestor,
     IMFIngestor,
+    NBERIngestor,
     PIIEIngestor,
     TreasuryOFRIngestor,
     VoxEUIngestor,
@@ -80,6 +81,14 @@ def requires_playwright() -> None:
         pytest.skip(
             "playwright not installed — required for CBO (DataDome JS challenge). "
             "Install with `pip install playwright && python -m playwright install chromium`."
+        )
+
+
+def requires_pypdf() -> None:
+    if not _have("pypdf"):
+        pytest.skip(
+            "pypdf not installed — required for CEA (govinfo ERP PDF text). "
+            "Install with `pip install pypdf` (see requirements.txt / ADR-020)."
         )
 
 
@@ -337,17 +346,108 @@ CASES: list[CoverageCase] = [
         expected_sections={"piie_publication"},
         min_date_span_days=90,
     ),
+    # CFR removed by ADR-020 (basis-set redundancy with PIIE on the
+    # international-policy dimension). CFRIngestor class is retained in
+    # institutional.py for backwards-compat data reads but is not run in
+    # any new ingest — no coverage test.
+    # -----------------------------------------------------------------
+    # ADR-020 additions: NBER (academic primary work) and CEA (executive
+    # fiscal voice). Each is tested with a narrow window so the integration
+    # battery stays under ~30 minutes per source.
+    # -----------------------------------------------------------------
     CoverageCase(
-        name="cfr_2023",
-        iterator_factory=lambda s, e: CFRIngestor().fetch(s, e),
+        name="nber_2023h2_direct_url_enum",
+        iterator_factory=lambda s, e: NBERIngestor().fetch(s, e),
+        # 2023 Q3-Q4 hits w31500..w32000 — a few hundred papers, manageable
+        # to scan within max_records cap.
+        window_start=date(2023, 7, 1),
+        window_end=date(2023, 9, 30),
+        floor_count=30,
+        max_records=400,
+        expected_sections={"nber_working_paper"},
+        min_date_span_days=45,
+    ),
+    CoverageCase(
+        name="nber_2014_historical_edge",
+        iterator_factory=lambda s, e: NBERIngestor().fetch(s, e),
+        # 2014 Q1 hits w19800..w20100 — sanity check that the year-floor
+        # table is calibrated correctly for the historical edge.
+        window_start=date(2014, 1, 1),
+        window_end=date(2014, 3, 31),
+        floor_count=20,
+        max_records=300,
+        expected_sections={"nber_working_paper"},
+        min_date_span_days=30,
+    ),
+    CoverageCase(
+        name="cea_erp_2023_govinfo",
+        iterator_factory=lambda s, e: CEAIngestor().fetch(s, e),
+        # ERP-2023 was published in March 2023; chapter granules span the
+        # year. Each ERP is ~15-25 chapters so the floor is modest.
         window_start=date(2023, 1, 1),
         window_end=date(2023, 12, 31),
-        # Pre-fix CFR RSS-only fallback yielded 0 historical records.
-        # Any non-trivial 2023 count proves the sitemap walk works.
-        floor_count=15,
-        max_records=120,
-        expected_sections={"cfr_publication"},
-        min_date_span_days=90,
+        floor_count=10,
+        max_records=60,
+        expected_sections={"cea_erp_chapter"},
+        min_date_span_days=1,  # all chapters share the same dateIssued
+        skip_check=requires_pypdf,
+    ),
+    CoverageCase(
+        name="cea_erp_2014_historical",
+        iterator_factory=lambda s, e: CEAIngestor().fetch(s, e),
+        window_start=date(2014, 1, 1),
+        window_end=date(2014, 12, 31),
+        floor_count=10,
+        max_records=60,
+        expected_sections={"cea_erp_chapter"},
+        min_date_span_days=1,
+        skip_check=requires_pypdf,
+    ),
+    # -----------------------------------------------------------------
+    # Tier 1/2 historical-edge cross-check: confirm each historically-
+    # significant source still yields content in 2010 (the corpus floor).
+    # 2010 is the most failure-prone window because many sites' URL
+    # patterns and feed formats changed between then and now.
+    # -----------------------------------------------------------------
+    CoverageCase(
+        name="brookings_2010_historical_edge",
+        iterator_factory=lambda s, e: BrookingsIngestor().fetch(s, e),
+        window_start=date(2010, 1, 1),
+        window_end=date(2010, 12, 31),
+        floor_count=20,
+        max_records=300,
+        expected_sections={"brookings_economic_studies"},
+        min_date_span_days=120,
+    ),
+    CoverageCase(
+        name="imf_2010_historical_edge",
+        iterator_factory=lambda s, e: IMFIngestor().fetch(s, e),
+        window_start=date(2010, 1, 1),
+        window_end=date(2010, 12, 31),
+        floor_count=20,
+        max_records=300,
+        expected_sections=set(),
+        min_date_span_days=120,
+        skip_check=requires_curl_cffi,
+    ),
+    CoverageCase(
+        name="bis_2010_historical_edge",
+        iterator_factory=lambda s, e: BISIngestor().fetch(s, e),
+        window_start=date(2010, 1, 1),
+        window_end=date(2010, 12, 31),
+        floor_count=30,
+        max_records=400,
+        expected_sections=set(),
+        min_date_span_days=120,
+    ),
+    CoverageCase(
+        name="treasury_ofr_2016_historical_edge",
+        iterator_factory=lambda s, e: TreasuryOFRIngestor().fetch(s, e),
+        window_start=date(2016, 1, 1),
+        window_end=date(2016, 12, 31),
+        floor_count=3,
+        max_records=40,
+        min_date_span_days=60,
     ),
 ]
 

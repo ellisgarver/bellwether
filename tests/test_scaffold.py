@@ -84,31 +84,30 @@ def test_whitelist_loads_and_has_required_outlets():
     tier_1_ids = {e["id"] for e in wl["tier_1_institutional_policy"]}
     tier_2_ids = {e["id"] for e in wl["tier_2_academic_analytical"]}
     tier_2_policy_ids = {e["id"] for e in wl["tier_2_policy_analytical"]}
-    for required in ("fed_board", "imf", "bis"):
+    # ADR-020 basis-set Tier 1 institutional + CEA added as fiscal-executive voice
+    for required in ("fed_board", "imf", "bis", "cea"):
         assert required in tier_1_ids, f"missing required tier-1 source: {required}"
     # arxiv removed in ADR-012 (2017-only coverage, low macro volume)
     assert "arxiv" not in tier_2_ids, "arxiv should not be in semantic corpus (ADR-012)"
     # jackson_hole removed in ADR-012 (covered by fed_board speeches ingestor)
     assert "jackson_hole" not in tier_1_ids, "jackson_hole separate entry should not exist (ADR-012)"
-    assert "voxeu" in tier_2_ids, "missing required tier-2 academic source: voxeu"
-    for required in ("brookings", "piie", "cfr"):
+    # ADR-020: NBER restored to academic Tier 2 via direct-URL enumeration
+    for required in ("voxeu", "nber"):
+        assert required in tier_2_ids, f"missing required tier-2 academic source: {required}"
+    for required in ("brookings", "piie"):
         assert required in tier_2_policy_ids, f"missing required tier-2 policy source: {required}"
+    # ADR-020: CFR dropped — basis-set redundancy with PIIE on international-policy
+    assert "cfr" not in tier_2_policy_ids, "cfr removed by ADR-020 (basis-set redundancy with PIIE)"
     # Journalism sources must be absent from all active semantic corpus tiers
     all_active_ids = tier_1_ids | tier_2_ids | tier_2_policy_ids
     for removed in ("apnews", "reuters", "marketwatch"):
         assert removed not in all_active_ids, f"{removed} should not be in semantic corpus (ADR-010)"
 
 
-def test_keyword_seed_has_minimum_coverage():
-    from mnd.utils.config import load_yaml
-    kw = load_yaml("config/topic_filter_keywords.yaml")
-    n = 0
-    for v in kw["categories"].values():
-        if isinstance(v, list):
-            n += len(v)
-        elif isinstance(v, dict):
-            n += len(v.get("keywords", []))
-    assert n >= 100, f"keyword set looks thin: only {n} terms"
+# Pre-clustering JEL keyword filter and topic_filter_keywords.yaml were
+# removed by ADR-020 (2026-05-20). Tier-anchored macro scope is now the only
+# pre-clustering filter; JEL classification is post-clustering. No
+# keyword-coverage test at this stage.
 
 
 # ---------------------------------------------------------------------------

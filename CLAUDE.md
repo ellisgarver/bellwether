@@ -28,7 +28,8 @@ Supporting docs:
 - **After any dry-run, window change, or schema change, re-submit `submit_full_pipeline.sh` with `NUKE_RAW=1`.** Default archive mode does NOT touch `data/raw/` — including `.institutional_checkpoint.json`. A stale checkpoint from a smaller-window prior run will silently SKIP sub-ingestors marked "completed" in that prior context, producing an incomplete corpus. This bit us on 2026-05-17/18: job 49737806 was submitted with default args, loaded the May-13 2024-dry-run checkpoint, and skipped Fed/FedRegional/BIS/Treasury/OFR/VoxEU/Brookings/PIIE with 2024-only counts. Cancelled and re-submitted as job 49740251 with `NUKE_RAW=1`. The script ARCHIVES (not deletes) under archive mode, so prior data is recoverable.
 - **CBO closed via Playwright + curl_cffi hybrid (ADR-017, 2026-05-19).** DataDome's JS-execution challenge defeats every `curl_cffi` impersonation. Solution: `CBOIngestor._acquire_cookies()` launches headless Chromium once per ingest run to clear the challenge and capture clearance cookies (~3-5s), then `_cbo_get()` uses curl_cffi-with-cookies for the ~25k-URL sitemap walk. On 50 consecutive 403s mid-walk, cookies are invalidated and re-acquired up to 3 times. Requires `playwright==1.48.0` + `python -m playwright install chromium` (one-time per env; ~300MB). Setup: `scripts/install_playwright_for_cbo.sh`.
 - **HTTP timeouts must be tuples, not single floats.** stdlib `requests` single-value timeouts only enforce inter-byte gaps as the read timeout; a server dripping bytes never trips a 30s timeout. The 2026-05-18 patch ingest hung 2+ hours on a single Fed speech URL in exactly that state. Both `_get` helpers (`fed.py`, `institutional.py`) now normalize float timeouts to `(connect=10, read=30)` tuples. Don't bypass this normalization in new ingestor code.
-- **Filter methodology is JEL-anchored and single-stage (ADR-015 → ADR-016 → ADR-018).** The canonical `config/topic_filter_keywords.yaml` (schema 2.1.0, 213 keywords across 11 categories, JEL-annotated, no anchor-named entities) applies at **Stage 2 ONLY**. ADR-016 removed every per-source Stage 1 topic filter; ingestion is content-neutral. Topic relevance is decided exactly once at Stage 2 over title+body. Do NOT reintroduce per-source `_MACRO_TERMS` / `_KEEP_KEYWORDS` / `_title_matches_canonical()` style helpers. Audit in `docs/filter_audit_jel.md`.
+- **No pre-clustering topical filter (ADR-020, 2026-05-20).** ADR-020 removed the JEL keyword filter apparatus entirely. The basis-set source selection is now the only macro-scope constraint at ingest. Topic relevance is decided post-clustering by `src/mnd/clustering/jel_classifier.py` — each BERTopic cluster gets a primary JEL code from the AEA's published taxonomy via nearest-prototype matching in Qwen3 embedding space; non-macro clusters (primary JEL ∉ {E, F, G, H}) are excluded from dynamics analysis only, not from the embedded corpus. Do NOT reintroduce per-source title filters, `_MACRO_TERMS`, `_title_matches_canonical()`, `TopicFilter`, or any pre-clustering keyword gate. `config/topic_filter_keywords.yaml` is archived at `scripts/archive/topic_filter_keywords_archived_adr020.yaml`; `docs/filter_audit_jel.md` is historical reference only.
+- **Corpus is the basis set, not a tier hierarchy (ADR-020).** Twelve active sub-ingestors map 1:1 to the eight independent dimensions of US macro discourse — see `docs/architecture_decisions.md` ADR-020 for the dimension table. CFR was dropped by ADR-020 (basis redundancy with PIIE on the international-policy dimension); `CFRIngestor` is retained in `institutional.py` unwired, do NOT re-add to `_sub_ingestors` without a new ADR. CEA added (ADR-020) via the govinfo.gov ERP collection — `GOVINFO_API_KEY` env var, free signup at https://api.govinfo.gov/signup/, DEMO_KEY fallback for integration tests only. NBER restored (ADR-020) via direct `/papers/wNNNNN` enumeration — paper detail pages are not bot-protected, citation_* meta tags give clean metadata. CBO stays on the Playwright + curl_cffi path (ADR-017, confirmed by ADR-020): govinfo.gov was investigated and rejected because GPO-deposit coverage is uneven over time and would introduce a non-random time-varying filter into the CBO volume signal.
 - Any deviation from the above requires a new ADR in `docs/architecture_decisions.md` first.
 
 ## Communication style
@@ -83,17 +84,17 @@ modify pilot code. Resume instructions below are retained for reference only.
 
 ### Open work (priority order)
 
-1. **One-time RCC setup:** install playwright + chromium in the mnd conda env.
+1. **One-time RCC setup:** install playwright + chromium + pypdf in the mnd conda env, and obtain a free GovInfo API key.
    ```bash
    conda activate mnd
-   pip install -r requirements.txt
+   pip install -r requirements.txt          # now includes pypdf==5.0.1 (ADR-020)
    bash scripts/install_playwright_for_cbo.sh
+   # Sign up at https://api.govinfo.gov/signup/ and add GOVINFO_API_KEY=... to .env
    ```
-2. **Per-source ingestion integration tests on RCC.** `pytest tests/integration/test_source_coverage.py -m integration` — 18-case battery validating each sub-ingestor against a narrow window. Catches silent-zero failures before the 48h re-ingest.
-3. **ADR-019 methodology lock-in.** Apply the comprehensive field-anchored parameter changes documented in `docs/METHODOLOGY.md`: switch chunker to Qwen3 tokenizer @ 512 tokens, fix 5 BERTopic parameters to library defaults, remove 3-tier granularity, remove comparator look-ahead apparatus, remove kill-criterion thresholds, bump bootstrap replicates to 1000, etc. Plus dead-code cleanup (delete `ravenpack.py`, `wayback.py`; remove `NBERIngestor`/`SSRNIngestor` classes; remove `prepare_text_for_embedding`).
-4. **Full re-ingest (NUKE_RAW=1) with ADR-019 methodology baked in.** After steps 1-3, submit `scripts/rcc/submit_full_pipeline.sh` with `NUKE_RAW=1`. Bump the institutional ingest SLURM time limit to 48h.
-5. **Post-re-ingest validation:** filter → embed → cluster → validate. Report anchor recovery rate; no pass/fail threshold (ADR-019). If recovery looks reasonable, tick Phase 2 and Phase 3 boxes.
-6. **Phase 4** — pre-registration finalize, citing METHODOLOGY.md and ADRs 015 / 016 / 017 / 018 / 019 as the methodology lock-in. Blocked by items 1-5.
+2. **Per-source ingestion integration tests on RCC (25-case battery, ADR-020).** `pytest tests/integration/test_source_coverage.py -m integration -v` — validates each of the 12 active sub-ingestors against a narrow window. Now includes NBER 2014 + 2023h2 historical-edge cases, CEA ERP 2014 + 2023 cases, plus 2010-window historical-edge cases for Brookings / IMF / BIS and 2016 for Treasury OFR. Catches silent-zero failures before the 48h re-ingest. CEA cases skip gracefully if `pypdf` is missing.
+3. **Full re-ingest (NUKE_RAW=1) with ADR-019 methodology + ADR-020 basis-set corpus baked in.** Submit `scripts/rcc/submit_full_pipeline.sh` with `NUKE_RAW=1`. Bump institutional ingest SLURM time limit to 48h (the NBER direct-URL enumeration is the new long pole — ~30,000 paper IDs × 0.6s polite delay ≈ 5-8 wall-clock hours).
+4. **Post-re-ingest validation:** filter → embed → cluster → JEL post-classify → dynamics. Report anchor recovery rate; no pass/fail threshold (ADR-019). Run `mnd.clustering.jel_classifier.classify_clusters` on the BERTopic output and confirm sensible scope labels (≥40% in-scope for E/F/G/H given basis-set composition). If recovery looks reasonable, tick Phase 2 and Phase 3 boxes.
+5. **Phase 4** — pre-registration finalize, citing METHODOLOGY.md and ADRs 015 / 016 / 017 / 018 / 019 / 020 as the methodology lock-in. Blocked by items 1-4.
 
 ## Environment
 
@@ -101,21 +102,33 @@ modify pilot code. Resume instructions below are retained for reference only.
   - Set `MND_MAX_SEQ_LEN=512` in `.env` to avoid OOM on Qwen3-Embedding-0.6B (ADR-006)
 - Full corpus runs: UChicago RCC (CUDA) — `MND_EMBEDDING_DEVICE=cuda` or set in `.env`; use SLURM scripts in `scripts/rcc/`
 - FRED key: `FRED_API_KEY` in `.env` (validation only)
+- GovInfo key: `GOVINFO_API_KEY` in `.env` (free signup at https://api.govinfo.gov/signup/; required by CEAIngestor via ADR-020 for ERP collection access; DEMO_KEY fallback is rate-limited to 30 req/hr and is for integration tests only — not the full ingest)
 - WRDS: NOT REQUIRED. The prior RavenPack-via-WRDS plan was replaced by Media Cloud Premium (ADR-016, 2026-05-18). Any lingering `WRDS_*` mentions in older docs are obsolete.
 - Media Cloud: `MEDIACLOUD_API_KEY` in `.env` for Layer 2 detection
 
-## Phase 2 corpus architecture (updated 2026-05-13, ADR-012)
+## Phase 2 corpus architecture (updated 2026-05-20, ADR-020)
 
-### Semantic corpus (text for embedding and clustering)
+### Semantic corpus = basis set (ADR-020)
 
-| Tier | Sources | Retrieval |
+The corpus is a basis set, not a tier hierarchy: the minimum set of sources spanning every independent dimension of US macro discourse, with no redundancy.
+
+| Dimension | Ingestor(s) | Retrieval |
 |---|---|---|
-| 1 — Institutional policy | Federal Reserve (all: FOMC, speeches incl. Jackson Hole, Beige Book, FEDS Notes, MPR, FSR), Regional Feds (NY/SF/Chicago/Atlanta), BIS (QR/WPs), CBO, Treasury/OFR/FSOC, Congressional testimony (Treasury Sec) | Direct fetch / institutional RSS |
-| 2 — Academic analytical + policy | VoxEU/CEPR (full posts), Brookings, PIIE, CFR | Direct fetch / RSS |
+| 1. US monetary authority | `FederalReserveIngestor` | Fed direct |
+| 2. US monetary research | `FedRegionalIngestor` (NY, SF, Chicago, Atlanta) | Institutional RSS + sitemap |
+| 3. International macro authority | `IMFIngestor` | Coveo + curl_cffi (ADR-014) |
+| 4. International CB network | `BISIngestor` | Multi-section sitemap (ADR-017) |
+| 5. US fiscal authority | `CBOIngestor` (legislative) + `CEAIngestor` (executive, NEW ADR-020) | Playwright+curl_cffi (CBO) / govinfo.gov ERP (CEA) |
+| 6. US financial-stability research | `TreasuryOFRIngestor` | Direct fetch |
+| 7. US policy think-tank | `BrookingsIngestor` + `PIIEIngestor` | WP REST + sitemap |
+| 8. Academic primary work + column | `NBERIngestor` (RESTORED ADR-020) + `VoxEUIngestor` | Direct URL enum / CEPR full posts |
+| Cross-cutting Q&A | `CongressionalIngestor` (Treasury Sec testimony) | Treasury press releases |
 
-**Removed from semantic corpus (ADR-010, 2026-05-11):** AP News, Reuters, MarketWatch. Their journalism propagation signal is captured by Media Cloud Premium Press (Layer 1B, cross-validation only — see below). Raw ingested JSONL retained in `data/raw/articles/`; excluded from embedding by `run_pipeline.py filter-pre-embed`.
+**Dropped by ADR-020:** CFR — basis-set redundancy with PIIE on dimension 7 (~80% of CFR output is foreign-policy non-macro). `CFRIngestor` class retained in `institutional.py` (unwired) for backwards-compat reads of pre-ADR-020 data.
 
-**Removed entirely (NBER, SSRN):** Historical bulk retrieval failed and live RSS support was also dropped (ADR-017, 2026-05-18). Per ADR-019 the classes were deleted from `src/mnd/ingestion/institutional.py`; Phase 6 = Tier 1/2 re-ingest + Media Cloud Premium only.
+**Removed from semantic corpus (ADR-010, 2026-05-11):** AP News, Reuters, MarketWatch. Their journalism propagation signal is captured by Media Cloud Premium Press (Layer 1B, cross-validation only). Raw ingested JSONL retained in `data/raw/articles/`; excluded from embedding by `run_pipeline.py filter-pre-embed`.
+
+**No pre-clustering topic filter (ADR-020).** The basis-set source selection is the only macro-scope constraint at ingest. Topic relevance is decided post-clustering by `mnd.clustering.jel_classifier.classify_clusters` — each BERTopic cluster gets a primary JEL code from the AEA's published taxonomy via nearest-prototype matching in the same Qwen3 embedding space used for the clustering itself. Out-of-scope clusters (primary JEL ∉ {E, F, G, H}) are excluded from dynamics analysis only, NOT dropped from the embedded corpus. This is symmetric across sources and uses an externally-maintained taxonomy.
 
 **Stated limitation:** Premium analytical press — WSJ opinion, Bloomberg Opinion, FT — is not represented in text form. Their VOLUME signal is captured by the Media Cloud Premium Press dynamics layer (single API surface, see below).
 
@@ -158,8 +171,10 @@ Removed from prior version: FTX collapse, GameStop short squeeze (out of macro s
 
 ### Locked architectural decisions
 
+- **Source selection (ADR-020):** Basis set as tabled above. Twelve active ingestors mapping 1:1 to the eight dimensions of US macro discourse.
+- **Pre-clustering filter (ADR-020):** None. Topical relevance is decided post-clustering via `mnd.clustering.jel_classifier`.
 - **Timestamps:** Publication/release date throughout. FOMC minutes = release date.
-- **Document chunking (pending ADR-019):** All documents chunked at **512 Qwen3 tokens** with ~64-token overlap (BEIR convention; Thakur et al. 2021). Chunker uses Qwen3's own SentencePiece tokenizer (not tiktoken cl100k). Count by document (not chunk) for dynamics. The prior 600-cl100k / 100-overlap / >2000-word rule is superseded.
+- **Document chunking (ADR-019):** All documents chunked at **512 Qwen3 tokens** with ~64-token overlap (BEIR convention; Thakur et al. 2021). Chunker uses Qwen3's own SentencePiece tokenizer (not tiktoken cl100k). Count by document (not chunk) for dynamics. The prior 600-cl100k / 100-overlap / >2000-word rule is superseded.
 - **Volume normalization:** Weekly counts per cluster / total corpus articles that week, before SIR/logistic fitting.
 - **Smoothing:** 7-day centered moving average on weekly volume curves (natural weekly cycle for daily news count data; Shumway & Stoffer). Single combined series — source-stratified smoothing removed by ADR-019 as researcher-introduced complexity without literature anchor.
 - **Economic calendar annotation:** Flag weeks within ±3 days of FOMC decisions, CPI, PCE, GDP advance, NFP, and Fed MPR releases. `calendar_event` (bool) and `calendar_event_label` (str) columns added to weekly series. Do not exclude flagged weeks from fitting — report count of flagged weeks in growth phase as a quality indicator. `src/mnd/dynamics/calendar.py`.
