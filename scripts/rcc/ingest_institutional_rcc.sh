@@ -47,7 +47,7 @@
 #SBATCH --partition=caslake
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
-#SBATCH --time=36:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=logs/ingest_institutional_rcc_%j.log
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ehgarver@uchicago.edu
