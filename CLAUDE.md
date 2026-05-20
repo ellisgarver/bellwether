@@ -4,9 +4,16 @@
 
 Quantitative study of narrative lifecycle dynamics in U.S. macro-financial media
 discourse. Methodology: embed articles → cluster with BERTopic → fit SIR/logistic
-ODE to cluster volume time series → classify lifecycle stage. Full plan and all
-architectural decisions are in `docs/handoff_to_claude_code.md` and
-`docs/architecture_decisions.md`. Read those before making any structural changes.
+ODE to cluster volume time series → classify lifecycle stage.
+
+**Canonical methodology reference:** `docs/METHODOLOGY.md` — plain-English
+walkthrough of every pipeline stage and the field-accepted citation behind each
+methodological choice. Read this first.
+
+Supporting docs:
+- `MND_PROJECT_SPEC.md` — full project specification (scope, source list, phases).
+- `docs/architecture_decisions.md` — every methodological change is gated on an ADR here.
+- `docs/handoff_to_claude_code.md` — historical handoff (some sections superseded by later ADRs; treat as reference).
 
 ## Critical rules (do not violate without an ADR)
 
@@ -21,7 +28,7 @@ architectural decisions are in `docs/handoff_to_claude_code.md` and
 - **After any dry-run, window change, or schema change, re-submit `submit_full_pipeline.sh` with `NUKE_RAW=1`.** Default archive mode does NOT touch `data/raw/` — including `.institutional_checkpoint.json`. A stale checkpoint from a smaller-window prior run will silently SKIP sub-ingestors marked "completed" in that prior context, producing an incomplete corpus. This bit us on 2026-05-17/18: job 49737806 was submitted with default args, loaded the May-13 2024-dry-run checkpoint, and skipped Fed/FedRegional/BIS/Treasury/OFR/VoxEU/Brookings/PIIE with 2024-only counts. Cancelled and re-submitted as job 49740251 with `NUKE_RAW=1`. The script ARCHIVES (not deletes) under archive mode, so prior data is recoverable.
 - **CBO closed via Playwright + curl_cffi hybrid (ADR-017, 2026-05-19).** DataDome's JS-execution challenge defeats every `curl_cffi` impersonation. Solution: `CBOIngestor._acquire_cookies()` launches headless Chromium once per ingest run to clear the challenge and capture clearance cookies (~3-5s), then `_cbo_get()` uses curl_cffi-with-cookies for the ~25k-URL sitemap walk. On 50 consecutive 403s mid-walk, cookies are invalidated and re-acquired up to 3 times. Requires `playwright==1.48.0` + `python -m playwright install chromium` (one-time per env; ~300MB). Setup: `scripts/install_playwright_for_cbo.sh`.
 - **HTTP timeouts must be tuples, not single floats.** stdlib `requests` single-value timeouts only enforce inter-byte gaps as the read timeout; a server dripping bytes never trips a 30s timeout. The 2026-05-18 patch ingest hung 2+ hours on a single Fed speech URL in exactly that state. Both `_get` helpers (`fed.py`, `institutional.py`) now normalize float timeouts to `(connect=10, read=30)` tuples. Don't bypass this normalization in new ingestor code.
-- **Filter methodology is JEL-anchored (ADR-015 accepted+implemented, 2026-05-18).** Inline Stage 1 filters in six broad-source ingestors (CBO/NBER/VoxEU/Brookings/CFR/Congressional) are GONE. The canonical `config/topic_filter_keywords.yaml` (schema 2.0.0, 234 keywords across 12 categories with JEL annotations) applies at Stage 1 via the `_title_matches_canonical()` helper in `institutional.py` and at Stage 2 via the canonical filter step — same list at both stages. Do NOT reintroduce per-source `_MACRO_TERMS` / `_KEEP_KEYWORDS` sets. NBER retains a JEL-code primary check (papers self-declare JEL natively) and falls back to the canonical helper when JEL codes are absent. Congressional keeps its role-guard + sanctions-dedup logic but delegates topic relevance to the canonical helper. CFR's URL-slug `_URL_MACRO_TOKENS` pre-filter is preserved (URL-level not title-level). Audit in `docs/filter_audit_jel.md`.
+- **Filter methodology is JEL-anchored and single-stage (ADR-015 → ADR-016 → ADR-018).** The canonical `config/topic_filter_keywords.yaml` (schema 2.1.0, 213 keywords across 11 categories, JEL-annotated, no anchor-named entities) applies at **Stage 2 ONLY**. ADR-016 removed every per-source Stage 1 topic filter; ingestion is content-neutral. Topic relevance is decided exactly once at Stage 2 over title+body. Do NOT reintroduce per-source `_MACRO_TERMS` / `_KEEP_KEYWORDS` / `_title_matches_canonical()` style helpers. Audit in `docs/filter_audit_jel.md`.
 - Any deviation from the above requires a new ADR in `docs/architecture_decisions.md` first.
 
 ## Communication style
@@ -53,7 +60,7 @@ modify pilot code. Resume instructions below are retained for reference only.
 - [x] Phase 0 — scaffold, configs, anchor set, ingestors, embedding module
 - [x] Phase 1 — filtering, dedup, clustering, dynamics, stages, validation, CLI
 - [/] Phase 2 — initial chain COMPLETE 2026-05-18 (jobs 49740251–49740257, 21,289 articles, 63,600 chunks). Six coverage bugs identified by corpus-composition QA and patched in commit fc8fb60 (FEDS Notes regex, Beige Book historical enumeration, fed_chicago meta_date guard, VoxEU date-shard, CBO curl_cffi attempt). Tuple-timeout fix landed c47fb91. CBO fail-fast guard landed f9222ba. Patch ingest 49771521 ran 2026-05-18 16:01 with the partial fixes; post-patch corpus-composition QA on RCC surfaced four further coverage gaps that the patch did NOT close (FEDS Notes 2013-2015 still 0, Beige Book 2010-2016 still 0, fed_atlanta still 0, fed_chicago capped at 246). All four addressed in subsequent commits along with ADR-015 implementation — see "post-patch fixes" below. The next FULL re-ingest (NUKE_RAW=1) will run with everything baked in; the patch ingest is treated as a diagnostic run.
-- [/] Phase 3 — initial embedding + clustering COMPLETE 2026-05-18 (jobs 49740254/256/257, Qwen3 primary + mpnet comparator + BERTopic 624/60/15 topics, outlier 25.4%). **Stability PASS: mean NMI=0.880±0.003, ARI=0.612±0.012 across 19 bootstrap replicates** (kill criterion 1 cleared by 2.2× margin). Anchor recovery on pre-patch corpus: 6/10 (FAIL by one) — 4 failing anchors are all 2013-2020 events that land in BERTopic outlier bucket due to corpus undercoverage in that era. Re-validation deferred until after the post-patch full re-ingest.
+- [/] Phase 3 — initial embedding + clustering COMPLETE 2026-05-18 (jobs 49740254/256/257, Qwen3 primary, BERTopic single-level output, outlier 25.4%). Stability check: mean NMI=0.880±0.003, ARI=0.612±0.012 across 19 bootstrap replicates. Anchor recovery on pre-patch corpus: 6/10 — 4 failing anchors are all 2013-2020 events that land in BERTopic outlier bucket due to corpus undercoverage in that era. Re-validation deferred until after the post-patch full re-ingest with ADR-019 methodology lock-in applied.
 
 ### Pre-full-re-ingest fixes (2026-05-18 → 2026-05-19)
 
@@ -76,15 +83,17 @@ modify pilot code. Resume instructions below are retained for reference only.
 
 ### Open work (priority order)
 
-1. **One-time RCC setup:** install playwright + chromium in the mnd conda env. From the macro-narrative-dynamics repo root on RCC:
+1. **One-time RCC setup:** install playwright + chromium in the mnd conda env.
    ```bash
    conda activate mnd
    pip install -r requirements.txt
    bash scripts/install_playwright_for_cbo.sh
    ```
-2. **Full re-ingest (NUKE_RAW=1) with ALL fixes baked in.** This is the methodology-lock-in re-ingest. After step 1, submit `scripts/rcc/submit_full_pipeline.sh` with `NUKE_RAW=1`. Bump the institutional ingest SLURM time limit to 48h (ADR-016's content-neutral mode + ADR-017's CBO walk roughly double the prior wall-clock).
-3. **Post-re-ingest validation:** filter → embed → cluster → validate. Expect ≥8/10 anchor recovery given the JEL audit additions + CBO + BIS + PIIE coverage closures + content-neutral ingest. If achieved, tick Phase 2 and Phase 3 boxes.
-4. **Phase 4** — pre-registration finalize + full anchor validation (including 6 fizzled anchors). Cite ADRs 015 / 016 / 017 as the methodology lock-in. Blocked by items 1-3.
+2. **Per-source ingestion integration tests on RCC.** `pytest tests/integration/test_source_coverage.py -m integration` — 18-case battery validating each sub-ingestor against a narrow window. Catches silent-zero failures before the 48h re-ingest.
+3. **ADR-019 methodology lock-in.** Apply the comprehensive field-anchored parameter changes documented in `docs/METHODOLOGY.md`: switch chunker to Qwen3 tokenizer @ 512 tokens, fix 5 BERTopic parameters to library defaults, remove 3-tier granularity, remove comparator look-ahead apparatus, remove kill-criterion thresholds, bump bootstrap replicates to 1000, etc. Plus dead-code cleanup (delete `ravenpack.py`, `wayback.py`; remove `NBERIngestor`/`SSRNIngestor` classes; remove `prepare_text_for_embedding`).
+4. **Full re-ingest (NUKE_RAW=1) with ADR-019 methodology baked in.** After steps 1-3, submit `scripts/rcc/submit_full_pipeline.sh` with `NUKE_RAW=1`. Bump the institutional ingest SLURM time limit to 48h.
+5. **Post-re-ingest validation:** filter → embed → cluster → validate. Report anchor recovery rate; no pass/fail threshold (ADR-019). If recovery looks reasonable, tick Phase 2 and Phase 3 boxes.
+6. **Phase 4** — pre-registration finalize, citing METHODOLOGY.md and ADRs 015 / 016 / 017 / 018 / 019 as the methodology lock-in. Blocked by items 1-5.
 
 ## Environment
 
@@ -149,12 +158,13 @@ Removed from prior version: FTX collapse, GameStop short squeeze (out of macro s
 ### Locked architectural decisions
 
 - **Timestamps:** Publication/release date throughout. FOMC minutes = release date.
-- **Document chunking:** Docs >2,000 words split into 600-token chunks, 100-token overlap. Count by document (not chunk) for dynamics.
+- **Document chunking (pending ADR-019):** All documents chunked at **512 Qwen3 tokens** with ~64-token overlap (BEIR convention; Thakur et al. 2021). Chunker uses Qwen3's own SentencePiece tokenizer (not tiktoken cl100k). Count by document (not chunk) for dynamics. The prior 600-cl100k / 100-overlap / >2000-word rule is superseded.
 - **Volume normalization:** Weekly counts per cluster / total corpus articles that week, before SIR/logistic fitting.
-- **Source-stratified smoothing:** Before fitting, smooth each source tier (institutional / academic) separately with a centered rolling mean, then sum. The journalism tier is absent from the semantic corpus (ADR-010); `smooth.py` retains a third "journalism" bucket as a sentinel for unmapped sources only. Prevents single large institutional publications from masquerading as narrative acceleration. Store both raw and smoothed series in dynamics output. `src/mnd/dynamics/smooth.py`.
+- **Smoothing:** 7-day centered moving average on weekly volume curves (natural weekly cycle for daily news count data; Shumway & Stoffer). Single combined series — source-stratified smoothing removed by ADR-019 as researcher-introduced complexity without literature anchor.
 - **Economic calendar annotation:** Flag weeks within ±3 days of FOMC decisions, CPI, PCE, GDP advance, NFP, and Fed MPR releases. `calendar_event` (bool) and `calendar_event_label` (str) columns added to weekly series. Do not exclude flagged weeks from fitting — report count of flagged weeks in growth phase as a quality indicator. `src/mnd/dynamics/calendar.py`.
-- **Two-stage dynamics fitting:** Parametric models only when cluster exceeds 3 articles/week avg over 4 weeks AND 50 cumulative articles. Below threshold: descriptive stats only, labeled "pre-fitting".
-- **Source-type contamination check:** Flag clusters >90% one source type for manual review (post-hoc diagnostic only).
+- **Dynamics fitting gate:** Parametric SIR/logistic models fit only when cluster has sustained volume (thresholds in config). Below threshold: descriptive stats only.
+- **Stage classification:** Four stages keyed to R₀ direction: pre-emergence, growth (R₀>1), decay (R₀<1), dormant. Classical SIR threshold (Kermack & McKendrick 1927) — no arbitrary ±N-day windows or % thresholds.
+- **Bayesian priors:** Weakly informative, anchored to Bjørnstad 2018 *Epidemics: Models and Data using R* and Gelman et al. *BDA3* conventions.
 
 ### Phase 5 dashboard design notes (locked)
 
@@ -193,15 +203,17 @@ python scripts/run_pipeline.py normalize-dynamics
 
 | What | Where |
 |---|---|
-| Master config (locked) | `config/config.yaml` |
+| **Canonical methodology** | `docs/METHODOLOGY.md` |
+| Master config | `config/config.yaml` |
 | Outlet / source whitelist | `config/whitelist.yaml` |
 | Topic filter keywords | `config/topic_filter_keywords.yaml` |
-| Anchor narratives (locked) | `data/anchors/anchor_narratives.jsonl` |
+| Anchor narratives | `data/anchors/anchor_narratives.jsonl` |
 | Topic seed articles | `data/anchors/topic_seed_articles.jsonl` |
 | Architecture decisions | `docs/architecture_decisions.md` |
-| Project specification (supersedes CLAUDE.md on architecture) | `MND_PROJECT_SPEC.md` |
+| Project specification | `MND_PROJECT_SPEC.md` |
+| Filter audit (JEL anchoring) | `docs/filter_audit_jel.md` |
 | Pre-registration draft | `prereg/PREREGISTRATION.md` |
-| Media Cloud module (Layer 1B premium dynamics + Layer 2 broad detection) | `src/mnd/detection/mediacloud.py` |
-| ~~RavenPack dynamics ingestor~~ (deprecated, ADR-016) | `src/mnd/ingestion/ravenpack.py` |
+| Media Cloud module (premium dynamics + broad detection; not embedded) | `src/mnd/detection/mediacloud.py` |
 | RCC SLURM scripts | `scripts/rcc/` |
+| Integration test harness (per-source coverage) | `tests/integration/test_source_coverage.py` |
 | Archived / superseded code | `scripts/archive/` |

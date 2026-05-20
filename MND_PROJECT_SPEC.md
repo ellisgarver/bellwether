@@ -1,5 +1,24 @@
 # Macro Narrative Dynamics — Full Project Specification
-**For Claude Code. This document supersedes all prior CLAUDE.md content, architecture decisions, and source specifications. Read this entirely before touching any code.**
+
+> ## ⚠️ Document status (as of 2026-05-19)
+>
+> **The canonical methodology reference is now `docs/METHODOLOGY.md`** — a plain-English walkthrough of every pipeline stage and the field-accepted citation behind each methodological choice.
+>
+> This spec remains the operational reference for **scope, source list, anchor narratives, phase structure, and project framing** (sections 1-2, 4-5, 7-8). The methodology subsections of section 3 are PARTIALLY SUPERSEDED by subsequent ADRs (012, 015, 016, 017, 018, 019). Where this document and METHODOLOGY.md disagree on methodology, METHODOLOGY.md is canonical.
+>
+> Specifically superseded:
+> - Stage 3 Embedding — the **comparator (mpnet) look-ahead sensitivity check** is removed (ADR-019). The comparator architecture is a sensitivity-check apparatus that the new methodology principle (anchored-or-removed) excludes. Qwen3-Embedding-0.6B is the sole embedder.
+> - Stage 3 Embedding — chunking is **512 Qwen3 tokens with ~64-token overlap** (BEIR convention; Thakur et al. 2021), not 600 cl100k tokens with 100-token overlap. The chunker uses Qwen3's own SentencePiece tokenizer.
+> - Stage 4 Clustering — **single granularity** (BERTopic library-default HDBSCAN output, Grootendorst 2022). The three-tier "fine/medium/coarse" hierarchy with silhouette thresholds 0.30/0.45/0.60 is removed (ADR-019).
+> - Stage 4 Clustering — **no sensitivity sweep** on `hdbscan.min_cluster_size`. Fixed at the BERTopic library default of 10.
+> - Stage 4 Clustering — **no kill criterion** on NMI < 0.40. NMI is reported, not gated.
+> - Stage 5 Dynamics — **single 7-day centered MA on combined volume** (Shumway & Stoffer); source-stratified smoothing removed as researcher-introduced complexity without literature anchor.
+> - Stage 5 Dynamics — Institutional discourse is the **primary** volume signal (where narrative formation happens); Media Cloud premium and broad press are **secondary/cross-validation** signals (ADR-016 framing).
+> - Stage 6 Stages — **four stages** keyed to R₀ direction: pre-emergence, growth (R₀>1), decay (R₀<1), dormant. The arbitrary ±14d peak window, -30% decay threshold, ≤1/day dormant threshold are removed.
+> - Stage 7 Dashboard — **three pages** (Emerging Narratives, Narrative Landscape 2D UMAP, Timeline), not two. Each narrative card surfaces top-5 most-similar past narratives by three measures (semantic centroid cosine, top-term Jaccard, growth-curve Pearson). Per-narrative drill-down + compare mode + anchor validation transparency.
+> - Section 11 (Kill Criteria) — **no pass/fail kill criteria** on anchor recovery rate or bootstrap NMI. Rates are reported as outputs; no binary thresholds.
+>
+> **Read METHODOLOGY.md first; treat the methodology subsections of this document as historical record where they disagree.**
 
 ---
 

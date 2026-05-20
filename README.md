@@ -8,19 +8,15 @@ BERTopic, fits epidemiological growth models (SIR/logistic/Gompertz) to each
 narrative's life-cycle, and surfaces the analysis through a public web
 dashboard updated weekly.
 
-This is a **descriptive measurement system**, not a prediction engine. See
-[`MND_PROJECT_SPEC.md`](MND_PROJECT_SPEC.md) for full methodology and
-architecture, and [`docs/architecture_decisions.md`](docs/architecture_decisions.md)
-for every architectural choice as a dated ADR.
+This is a **descriptive, educational, historical, and analytical measurement system**, not a prediction engine. The methodology is anchored throughout to field-accepted citations or published library defaults — no researcher-tuned parameters, no sensitivity sweeps.
+
+**For methodology, read [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) first** — plain-English walkthrough of every pipeline stage and the citation behind each choice. Then see [`MND_PROJECT_SPEC.md`](MND_PROJECT_SPEC.md) for scope and phase structure, and [`docs/architecture_decisions.md`](docs/architecture_decisions.md) for every architectural decision as a dated ADR.
 
 ## Status
 
-- **Phase 0–1 complete.** Scaffold, configs, anchor set, ingestors, pilot
-  clustering (NMI = 1.000, soft-landing narrative recovered).
-- **Phase 2 in progress.** Full 2010–present institutional ingestion runs
-  on UChicago RCC via SLURM (`scripts/rcc/submit_full_pipeline.sh`).
-- **Phase 3+ ahead.** Full corpus embedding (Qwen3 primary + mpnet
-  comparator look-ahead check, ADR-011), dynamics fitting, validation.
+- **Phase 0–1 complete.** Scaffold, configs, anchor set, ingestors, pilot clustering.
+- **Phase 2 in progress.** Full 2010–present institutional ingestion on UChicago RCC via SLURM (`scripts/rcc/submit_full_pipeline.sh`). Methodology lock-in (ADR-019) pending before final re-ingest.
+- **Phase 3+ ahead.** Re-embedding + clustering with ADR-019 methodology, then anchor validation reporting, dashboard build (Phase 5), and weekly cron updates (Phase 6).
 
 ## Corpus architecture (ADR-010 / ADR-014 / ADR-015 / ADR-016, current)
 
@@ -60,25 +56,29 @@ make preflight                # skips embedding model download
 make preflight-full           # downloads Qwen3-Embedding-0.6B (~600 MB)
 ```
 
-## Locked methodology choices
+## Methodology choices (field-anchored)
 
-All values are pinned in `config/config.yaml`; do not modify without a new
-ADR in `docs/architecture_decisions.md`.
+Every parameter below is either a published library default or a citation from primary literature. The full citation list and rationale lives in [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) §10.
 
-| Choice | Value | Source |
+| Choice | Value | Anchor |
 |---|---|---|
-| Primary embedding | `Qwen/Qwen3-Embedding-0.6B` (1024-d, 32k context) | ADR-011 |
-| Comparator embedding | `all-mpnet-base-v2` (look-ahead sensitivity check only) | ADR-011 |
-| `max_seq_len` (Qwen3) | 1024 (RCC V100 16 GB OOM-safe; ADR-013) | ADR-013 |
-| Document chunking | 600-BPE-token chunks, 100-token overlap, > 2,000-word threshold | ADR-008 |
-| Clustering | BERTopic + UMAP + HDBSCAN; fine/medium/coarse hierarchy | spec §5 Stage 4 |
-| `min_cluster_size` sweep | {10, 20, 40}; production = 20 | spec §9 |
-| Dynamics models | SIR (primary), logistic, Gompertz, exponential | spec §3, ADR-002 |
-| Inference | PyMC, weakly-informative priors, 2000 draws × 4 chains | spec §5 Stage 5 |
-| Train/holdout split | 2010–2019 train, 2020–present held-out | spec §8 Phase 4 |
-| Bootstrap NMI threshold | ≥ 0.40 (kill criterion 1) | spec §11 |
-| Anchor recovery threshold | ≥ 7 / 10 within 14-day tolerance (kill criterion 2) | spec §11 |
-| Random seed | 42 throughout | `config/config.yaml` |
+| Embedding model | `Qwen/Qwen3-Embedding-0.6B` (1024-d, instruction-aware) | MTEB benchmark; Apache 2.0 |
+| Embedding context | 1024 tokens (RCC) / 512 tokens (local MPS) | Hardware constraint |
+| Document chunking | 512 Qwen3 tokens, ~64-token overlap | Thakur et al. 2021 *BEIR* (NeurIPS) |
+| Filter | JEL-anchored keyword list (213 keywords, 11 categories), ≥2 matches | AEA JEL Classification System |
+| Clustering | BERTopic with library defaults (UMAP + HDBSCAN + c-TF-IDF) | Grootendorst 2022 |
+| Granularity | Single-level HDBSCAN output (no merging tiers) | Bybee/Kelly/Manela/Xiu 2024; Hansen/McMahon/Prat 2018 |
+| Dynamics models | SIR and logistic | Kermack & McKendrick 1927; Verhulst 1838 |
+| Smoothing window | 7-day centered moving average | Shumway & Stoffer (weekly cycle for daily counts) |
+| Bayesian priors | Weakly informative, anchored to epidemic-modeling conventions | Bjørnstad 2018; Gelman et al. *BDA3* |
+| Stage classification | 4 stages keyed to R₀ direction | Kermack & McKendrick 1927 (R₀=1 epidemic threshold) |
+| Anchor tolerance | ±14 days | Brown & Warner 1985 (event-study convention) |
+| Bootstrap replicates | 1000 | Efron & Tibshirani 1993 |
+| Dedup | MinHash, 128 permutations, 0.85 Jaccard | Broder 1997; Henzinger 2006 |
+| FDR threshold | 0.05 | Benjamini & Hochberg 1995 |
+| Random seed | 42 throughout | Convention |
+
+**Anchor recovery is reported as a rate, not gated by a pass/fail threshold.** Per ADR-019, no kill criteria with researcher-set thresholds.
 
 ## Repository layout
 
@@ -88,16 +88,15 @@ data/anchors/          Validation ground truth (10 anchor narratives + fizzled s
 data/raw/              Ingested articles (gitignored except .gitkeep)
 data/processed/        Pipeline artifacts (gitignored except .gitkeep)
 src/mnd/               Python package
-  ingestion/             InstitutionalIngestor composite + Fed + FRED  (ravenpack.py deprecated per ADR-016)
-  processing/            tiktoken-based 600-token chunker (ADR-008)
-  filtering/             MinHash dedup; TopicFilter retained but not in active flow
-  embedding/             Qwen3 primary + mpnet comparator
-  clustering/            BERTopic pipeline with hierarchical merging + stability eval
-  dynamics/              SIR / logistic / Gompertz / exponential fitting, stratified
-                         smoothing, calendar annotation, volume normalization
-  stages/                Five-stage life-cycle classification
-  detection/             Media Cloud Layer 2 detection
-  validation/            Anchor recovery
+  ingestion/             InstitutionalIngestor composite + Fed + FRED
+  processing/            Document chunker (Qwen3 SentencePiece, 512 tokens per ADR-019)
+  filtering/             JEL-anchored canonical topic filter + MinHash dedup
+  embedding/             Qwen3-Embedding-0.6B (sole embedder, ADR-019)
+  clustering/            BERTopic with library-default UMAP/HDBSCAN/c-TF-IDF (Grootendorst 2022)
+  dynamics/              SIR + logistic fitting; 7-day MA smoothing; calendar annotation
+  stages/                Four-stage life-cycle classification (R₀-keyed)
+  detection/             Media Cloud module (Layer 1B premium dynamics + Layer 2 broad detection)
+  validation/            Anchor recovery (reporting only; no kill criteria)
   dashboard/             Streamlit dashboard (Phase 5)
   utils/                 Config loader, logging
 scripts/
@@ -141,18 +140,16 @@ cd /scratch/midway3/ehgarver/macro-narrative-dynamics
 bash scripts/rcc/submit_full_pipeline.sh                # 2010-today, archives prior outputs
 START=2010-01-01 END=2025-12-31 \
     bash scripts/rcc/submit_full_pipeline.sh            # custom window
-COMPARATOR=0 bash scripts/rcc/submit_full_pipeline.sh   # skip mpnet comparator
+NUKE_RAW=1 bash scripts/rcc/submit_full_pipeline.sh     # required on re-submit (see CLAUDE.md)
 ```
 
-The script chains six SLURM jobs (`afterok:`):
+The script chains four SLURM jobs (`afterok:`):
 
 ```
-ingest_institutional → filter-pre-embed → filter → embed (primary) → cluster
-                                              └→ embed (comparator) (parallel)
+ingest_institutional → filter → embed → cluster
 ```
 
-`curl_cffi==0.15.0` must be installed in the RCC `mnd` conda env for IMF
-fetches to clear Akamai (ADR-014).
+`curl_cffi==0.15.0` and `playwright==1.48.0` (with Chromium installed) must be installed in the RCC `mnd` conda env — see `scripts/install_playwright_for_cbo.sh` for one-time CBO setup.
 
 ## Reproducibility
 
