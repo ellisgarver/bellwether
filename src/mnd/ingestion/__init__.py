@@ -6,27 +6,22 @@ Semantic corpus sources (Tiers 1–2, per ADR-010 / ADR-012 / ADR-014):
                           Regional Feds, IMF (Coveo + curl_cffi, ADR-014),
                           BIS, CBO, Treasury/OFR, Congressional testimony,
                           VoxEU, Brookings, PIIE, CFR.
-                          NBER and SSRN remain in the codebase for Phase 6
-                          live RSS but are excluded from historical runs.
 
-Dynamics layer (not ingested as text):
-  RavenPack via WRDS — see src/mnd/ingestion/ravenpack.py
-
-Detection layer (story counts only, no text):
-  Media Cloud — see src/mnd/detection/mediacloud.py
+Dynamics + detection layers (not ingested as embeddable text):
+  Media Cloud — see src/mnd/detection/mediacloud.py (ADR-016/019: premium
+                tier for Layer 1B journalism dynamics, broad tier for
+                Layer 2 detection)
 
 Removed sources (do not reinstate without a new ADR):
-  ADR-010: AP News, Reuters, MarketWatch (journalism tier — replaced by
-           the RavenPack dynamics layer for journalism propagation signal).
+  ADR-010: AP News, Reuters, MarketWatch — journalism tier. Their volume
+           signal is captured by Media Cloud Premium (ADR-016).
   ADR-012: arXiv (2017-only coverage), separate Jackson Hole ingestor
            (covered by FederalReserveIngestor).
-  Archived code lives under scripts/archive/.
-
-WaybackIngestor (src/mnd/ingestion/wayback.py) is retained on disk for
-reference only. It discovered free-outlet article URLs for the now-archived
-journalism tier and reads whitelist keys that no longer exist; not imported
-here. Do not re-add to active flow without restoring the journalism tier
-(which requires a new ADR superseding ADR-010).
+  ADR-017/019: NBER + SSRN — Phase 6 = Tier 1/2 re-ingest + Media Cloud
+               only; NBER historical access is blocked and SSRN exposes
+               no historical archive. RavenPack via WRDS — abandoned in
+               ADR-016/019; Media Cloud Premium replaces it.
+  Archived ingestor code lives under scripts/archive/.
 """
 
 from mnd.ingestion.base import Article, Ingestor

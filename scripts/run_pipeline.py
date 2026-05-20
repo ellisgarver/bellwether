@@ -27,8 +27,8 @@ Phase 2 corpus QA (after full ingestion):
 
 Note: AP News, Reuters, and MarketWatch have been removed from the semantic corpus
 (ADR-010). Their raw JSONL is retained in data/raw/articles/ but excluded from
-embedding by the filter-pre-embed step. RavenPack provides the journalism dynamics
-signal (Layer 1B); see src/mnd/ingestion/ravenpack.py.
+embedding by the filter-pre-embed step. Media Cloud Premium provides the journalism
+dynamics signal (Layer 1B, cross-validation); see src/mnd/detection/mediacloud.py.
 """
 from __future__ import annotations
 
@@ -357,10 +357,9 @@ def embed(
         log.info("Saved %d chunks → %s", len(chunk_df), chunks_path)
 
     # Build the per-chunk text fed to the embedder. The chunker (chunk_corpus)
-    # has already enforced the 600-BPE-token chunk window; we therefore do NOT
-    # additionally call prepare_text_for_embedding (which would re-truncate to
-    # 600 *whitespace* tokens and defeat the long-context strategy on RCC).
-    # The embedder's max_seq_len + the model tokenizer handle final truncation.
+    # has already enforced the 512-Qwen3-token chunk window (ADR-019), so we
+    # just concatenate title + body here -- the embedder's max_seq_len + the
+    # model tokenizer handle any final truncation.
     texts: list[str] = []
     for row in chunk_df.to_dict("records"):
         title = str(row.get("title") or "").strip()
