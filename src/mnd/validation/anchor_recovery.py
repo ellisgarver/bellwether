@@ -1,14 +1,18 @@
-"""Anchor narrative recovery validation (plan §9, kill criterion 2).
+"""Anchor narrative recovery validation (ADR-019).
 
 For each anchor, locates articles published within its reference window in the
-clustered DataFrame and checks whether ≥50% fall in a single cluster at the
-medium granularity level. An anchor is considered recovered when that condition
-holds and the dominant cluster's key terms overlap with the anchor's key_terms.
+clustered DataFrame and checks whether >=50% fall in a single cluster. The
+dominant cluster is reported alongside the concentration; an anchor is marked
+"recovered" when concentration >= 0.50 and the dominant cluster is not the
+BERTopic outlier bucket (-1).
 
-Kill criterion 2: at least config.validation.required_anchors_recovered (7/10)
-must be recovered. If not, stop and debug before proceeding to Phase 2.
+ADR-019: recovery is reported as a rate, not gated. The prior kill criterion
+(`config.validation.required_anchors_recovered`, default 7/10) was removed
+because no field-accepted literature anchor exists for a specific cutoff --
+anchor recovery is a diagnostic quality signal, not a pre-registered pass/fail
+test.
 
-Configuration: config.validation.{anchor_tolerance_days, required_anchors_recovered}.
+Configuration: config.validation.anchor_tolerance_days.
 """
 from __future__ import annotations
 
@@ -72,8 +76,17 @@ def _check_recovery(
             "note": "no articles found in reference window",
         }
 
-    # Use medium-granularity clusters as specified in plan
-    cluster_col = "topic_medium" if "topic_medium" in anchor_df.columns else "topic_fine"
+    if "topic" in anchor_df.columns:
+        cluster_col = "topic"
+    elif "topic_medium" in anchor_df.columns:
+        cluster_col = "topic_medium"
+    elif "topic_fine" in anchor_df.columns:
+        cluster_col = "topic_fine"
+    else:
+        raise KeyError(
+            "anchor recovery: clustered DataFrame has no 'topic' column "
+            "(expected ADR-019 single-granularity column)"
+        )
     counts = anchor_df[cluster_col].value_counts()
     dominant = int(counts.index[0])
     concentration = float(counts.iloc[0] / n)
@@ -121,18 +134,13 @@ def validate_anchor_recovery(
         anchor_df = _find_anchor_articles(df, anchor, tolerance)
         result = _check_recovery(anchor_df, anchor)
         results.append(result)
-        status = "✓" if result["recovered"] else "✗"
-        log.info(
-            "%s %s — %s", status, anchor["id"], result["note"]
-        )
+        status = "+" if result["recovered"] else "-"
+        log.info("%s %s -- %s", status, anchor["id"], result["note"])
 
     n_recovered = sum(1 for r in results if r["recovered"])
-    required = cfg["validation"]["required_anchors_recovered"]
     log.info(
-        "Anchor recovery: %d/%d (required: %d) → %s",
+        "Anchor recovery rate: %d/%d (reported, not gated -- ADR-019)",
         n_recovered,
         len(results),
-        required,
-        "PASS" if n_recovered >= required else "FAIL",
     )
     return results
