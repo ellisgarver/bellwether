@@ -1,15 +1,15 @@
-"""Article embedding.
+"""Article embedding (ADR-019).
 
-Two-model strategy per ADR-001 (restored by ADR-011):
-  PRIMARY   — Qwen3-Embedding-0.6B (1024-d, 32,768-token context, instruction-aware)
-              Production model. Long context is essential for FOMC minutes, BIS reports,
-              Jackson Hole papers.
-  COMPARATOR — all-mpnet-base-v2 (768-d, 384-token context)
-              Used ONLY for the look-ahead sensitivity check (ADR-011): compare Qwen3
-              vs mpnet Δ_NMI(post-2021 − pre-2021) on anchor narrative sub-corpora.
-              If Qwen3 Δ_NMI > 0.15 and mpnet Δ_NMI ≤ 0.15 → flag look-ahead.
+Single embedder: Qwen3-Embedding-0.6B (1024-d, 32K-token context, Apache 2.0,
+instruction-aware). Top of MTEB clustering benchmark.
 
-The interface returns numpy arrays for downstream BERTopic compatibility.
+The comparator (mpnet) look-ahead sensitivity check from ADR-011 was removed
+by ADR-019 under the "anchored or removed" principle — sensitivity checks are
+researcher-introduced robustness apparatus that the field-anchored methodology
+excludes. The negative finding from the prior look-ahead run is preserved in
+the project history as evidence, not as an active methodology element.
+
+Returns numpy arrays for downstream BERTopic compatibility.
 """
 from __future__ import annotations
 
@@ -22,14 +22,13 @@ from mnd.utils.logging import get_logger
 
 log = get_logger(__name__)
 
-ModelRole = Literal["primary", "comparator"]
+ModelRole = Literal["primary"]
 
 
 class Embedder:
-    """Unified embedder for primary (Qwen3) or comparator (mpnet) model.
+    """Production embedder (Qwen3-Embedding-0.6B).
 
-    Use ``Embedder.from_config("primary")`` for all production pipeline runs.
-    Use ``Embedder.from_config("comparator")`` only for the look-ahead sensitivity check.
+    Use ``Embedder.from_config()`` to instantiate from project config.
     """
 
     def __init__(
@@ -39,10 +38,10 @@ class Embedder:
         revision: str = "main",
         instruction_aware: bool = False,
         instruction_prefix: str = "",
-        max_seq_len: int = 512,
+        max_seq_len: int = 1024,
         device: str = "auto",
         fp16: bool = True,
-        batch_size: int = 32,
+        batch_size: int = 8,
     ) -> None:
         self.model_name = model_name
         self.revision = revision
@@ -56,14 +55,24 @@ class Embedder:
 
     @classmethod
     def from_config(cls, role: ModelRole = "primary") -> "Embedder":
+        """Construct from `config.embedding.primary`. The role parameter is
+        retained for backwards compatibility but only ``"primary"`` is valid
+        after ADR-019 removed the comparator embedder.
+        """
         import os
+        if role != "primary":
+            raise ValueError(
+                f"Embedder role {role!r} is not supported. The comparator "
+                "(mpnet) look-ahead sensitivity check was removed by ADR-019; "
+                "only 'primary' (Qwen3-Embedding-0.6B) is available."
+            )
         cfg = load_config()
-        emb_cfg = cfg["embedding"][role]
+        emb_cfg = cfg["embedding"]["primary"]
         compute_cfg = cfg.get("compute", {})
         # MND_MAX_SEQ_LEN env var lets local MPS runs override the config value
-        # (config.yaml defaults to 32768 for RCC; set to 512 in .env for MacBook Air)
+        # (config.yaml defaults to 1024 for RCC; set to 512 in .env for MacBook Air).
         env_seq_len = os.environ.get("MND_MAX_SEQ_LEN")
-        max_seq_len = int(env_seq_len) if env_seq_len else emb_cfg.get("max_seq_len", 32768)
+        max_seq_len = int(env_seq_len) if env_seq_len else emb_cfg.get("max_seq_len", 1024)
         return cls(
             model_name=emb_cfg["model"],
             revision=emb_cfg.get("revision", "main"),
@@ -72,7 +81,7 @@ class Embedder:
             max_seq_len=max_seq_len,
             device=compute_cfg.get("embedding_device", "auto"),
             fp16=compute_cfg.get("embedding_fp16", True),
-            batch_size=compute_cfg.get("embedding_batch_size", 32),
+            batch_size=compute_cfg.get("embedding_batch_size", 8),
         )
 
     def _load(self) -> None:
@@ -132,16 +141,3 @@ class Embedder:
             normalize_embeddings=True,  # cosine via inner product downstream
         )
         return embeddings.astype(np.float32, copy=False)
-
-
-def prepare_text_for_embedding(title: str, body: str, max_tokens: int = 600) -> str:
-    """Combine headline + truncated body. Token-counted truncation is
-    handled by the model's tokenizer; we use a conservative whitespace-token
-    approximation here so we don't have to load the tokenizer to chunk.
-    """
-    text = title.strip()
-    if body:
-        words = body.split()
-        approx_body_words = max(0, max_tokens - len(text.split()))
-        text = f"{text}. {' '.join(words[:approx_body_words])}"
-    return text

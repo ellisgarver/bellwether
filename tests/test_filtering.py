@@ -1,10 +1,8 @@
-"""Smoke tests for filtering stage (no model load — uses stub embedder)."""
+"""Smoke tests for filtering stage (ADR-019: keyword-only, no embedding gate)."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from datetime import datetime
 
-import numpy as np
 import pytest
 
 from mnd.ingestion.base import Article
@@ -42,24 +40,10 @@ OFF_TOPIC_ARTICLE = _make_article(
 
 
 class TestTopicFilter:
-    def _make_filter_with_mock_embedder(self, similarity: float):
-        """Return a TopicFilter whose embedder returns controlled cosine similarities."""
-        from mnd.filtering.topic_filter import TopicFilter
-
-        mock_embedder = MagicMock()
-        # Encode seed articles → unit centroid
-        centroid = np.array([1.0, 0.0], dtype=np.float32)
-        # Article embeddings: first article matches centroid, second is orthogonal
-        mock_embedder.encode.side_effect = [
-            # seed encoding (called once during _get_seed_centroid)
-            np.tile(centroid, (32, 1)),
-            # article encoding — we override per-test below
-        ]
-        tf = TopicFilter(embedder=mock_embedder)
-        # Pre-populate centroid to skip seed encoding
-        tf._seed_centroid = centroid
-        tf._seed_articles = [{"title": "seed", "body": "seed"}]
-        return tf, mock_embedder, centroid
+    """Per ADR-019, the topic filter is keyword-only — the embedding-similarity
+    Gate 2 (cosine to seed-article centroid, threshold 0.55) was removed
+    because no field-accepted literature anchor exists for a fixed cosine
+    cutoff in dense-retrieval filtering."""
 
     def test_macro_article_passes_keyword_gate(self):
         from mnd.filtering.topic_filter import _keyword_gate, _load_keywords
@@ -86,31 +70,32 @@ class TestTopicFilter:
         from mnd.filtering.topic_filter import TopicFilter
 
         tf = TopicFilter()
-        # Disable embedding gate (no seeds loaded in fresh config path)
-        tf._seed_articles = []
-        tf._seed_centroid = None
-
-        articles = [MACRO_ARTICLE, OFF_TOPIC_ARTICLE]
-        # Give fresh copies so we don't mutate shared fixtures
         articles = [
-            _make_article(a.article_id, a.title, a.body) for a in articles
+            _make_article(a.article_id, a.title, a.body)
+            for a in (MACRO_ARTICLE, OFF_TOPIC_ARTICLE)
         ]
         tf.filter(articles)
-
         for a in articles:
             assert "passed_filter" in a.raw_metadata
             assert "filter_detail" in a.raw_metadata
+            assert "keyword_matches" in a.raw_metadata["filter_detail"]
+            assert "keyword_pass" in a.raw_metadata["filter_detail"]
 
-    def test_macro_article_passes_with_no_embedding_gate(self):
+    def test_macro_article_passes_keyword_only_filter(self):
         from mnd.filtering.topic_filter import TopicFilter
 
         tf = TopicFilter()
-        tf._seed_articles = []
-        tf._seed_centroid = None
-
         arts = [_make_article("m1", MACRO_ARTICLE.title, MACRO_ARTICLE.body)]
         tf.filter(arts)
         assert arts[0].raw_metadata["passed_filter"] is True
+
+    def test_off_topic_article_fails_keyword_only_filter(self):
+        from mnd.filtering.topic_filter import TopicFilter
+
+        tf = TopicFilter()
+        arts = [_make_article("o1", OFF_TOPIC_ARTICLE.title, OFF_TOPIC_ARTICLE.body)]
+        tf.filter(arts)
+        assert arts[0].raw_metadata["passed_filter"] is False
 
 
 datasketch = pytest.importorskip("datasketch", reason="datasketch not installed; run pip install -r requirements.txt")

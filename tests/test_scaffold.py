@@ -23,35 +23,46 @@ REPO = Path(__file__).resolve().parent.parent
 def test_master_config_loads():
     from mnd.utils.config import load_config
     cfg = load_config()
-    assert cfg["schema_version"] == "1.0.0"
+    assert cfg["schema_version"].startswith("2."), f"expected schema 2.x; got {cfg['schema_version']}"
     assert cfg["temporal"]["historical_start"] == "2010-01-01"
     assert cfg["temporal"]["train_test_split"] == "2020-01-01"
 
 
-def test_embedding_two_model_strategy():
-    """ADR-001 restored by ADR-011: Qwen3 primary + mpnet comparator for look-ahead check."""
+def test_embedding_single_model_post_adr019():
+    """ADR-019: sole production embedder is Qwen3-Embedding-0.6B. The mpnet
+    comparator look-ahead apparatus from ADR-011 was removed."""
     from mnd.utils.config import load_config
     cfg = load_config()
     assert "primary" in cfg["embedding"]
-    assert "comparator" in cfg["embedding"]
+    assert "comparator" not in cfg["embedding"], (
+        "comparator embedder removed by ADR-019"
+    )
     assert cfg["embedding"]["primary"]["model"].startswith("Qwen/Qwen3-Embedding")
     assert cfg["embedding"]["primary"]["dimensions"] == 1024
-    # max_seq_len reduced 2048 → 1024 in ADR-013 after a second V100-16GB OOM
-    # at (batch=32, seq=2048, fp16). 1024 still gives 1.7x headroom over the
-    # 600-BPE-token chunker output. See config.yaml for full rationale.
     assert cfg["embedding"]["primary"]["max_seq_len"] == 1024
-    assert "mpnet" in cfg["embedding"]["comparator"]["model"]
-    assert cfg["embedding"]["comparator"]["max_seq_len"] == 384
 
 
-def test_kill_criteria_thresholds_present():
-    """Kill criteria thresholds must be in config (not hardcoded)."""
+def test_kill_criteria_removed_per_adr019():
+    """ADR-019: all kill-criterion thresholds removed. Quantities are reported,
+    not gated, because no field-accepted literature anchor exists for the
+    specific cutoffs (NMI 0.40, R^2 0.30, anchor recovery 7/10, etc.)."""
     from mnd.utils.config import load_config
     cfg = load_config()
-    assert cfg["dynamics"]["min_r_squared"] == 0.30
-    assert cfg["dynamics"]["max_r0_ci_width"] == 2.0
-    assert cfg["validation"]["required_anchors_recovered"] == 7
-    assert cfg["validation"]["min_bootstrap_nmi"] == 0.40
+    assert "min_r_squared" not in cfg["dynamics"], (
+        "min_r_squared kill criterion removed by ADR-019"
+    )
+    assert "max_r0_ci_width" not in cfg["dynamics"], (
+        "max_r0_ci_width kill criterion removed by ADR-019"
+    )
+    assert "required_anchors_recovered" not in cfg["validation"], (
+        "required_anchors_recovered kill criterion removed by ADR-019"
+    )
+    assert "min_bootstrap_nmi" not in cfg["validation"], (
+        "min_bootstrap_nmi kill criterion removed by ADR-019"
+    )
+    assert "lookahead_check" not in cfg["validation"], (
+        "lookahead_check apparatus removed by ADR-019"
+    )
 
 
 def test_random_seed_pinned():
@@ -173,15 +184,16 @@ def test_mediacloud_detector_importable():
 # Embedding module shape (no model load)
 # ---------------------------------------------------------------------------
 
-def test_embedder_factory_produces_correct_config():
-    """ADR-011: Qwen3 primary (long context), mpnet comparator (look-ahead check)."""
+def test_embedder_factory_produces_primary_only_post_adr019():
+    """ADR-019: only the primary (Qwen3) embedder remains; comparator factory
+    path raises ValueError."""
+    import pytest
+
     from mnd.embedding import Embedder
     primary = Embedder.from_config("primary")
-    comparator = Embedder.from_config("comparator")
     assert "Qwen3" in primary.model_name
     assert primary.instruction_aware is True
-    # 1024 per ADR-013 (lowered from 2048 after the second V100-16GB OOM).
     assert primary.max_seq_len == 1024
-    assert "mpnet" in comparator.model_name
-    assert comparator.instruction_aware is False
-    assert comparator.max_seq_len == 384
+
+    with pytest.raises(ValueError, match="ADR-019"):
+        Embedder.from_config("comparator")
