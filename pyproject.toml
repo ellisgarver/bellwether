@@ -31,6 +31,9 @@ where = ["src"]
 testpaths = ["tests"]
 python_files = "test_*.py"
 addopts = "-ra -q --strict-markers"
+markers = [
+    "integration: network-dependent coverage tests against live upstream sources; not run by default. Invoke with `pytest -m integration`.",
+]
 
 [tool.ruff]
 line-length = 100
