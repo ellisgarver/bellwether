@@ -113,22 +113,23 @@ modify pilot code. Resume instructions below are retained for reference only.
 | 1 — Institutional policy | Federal Reserve (all: FOMC, speeches incl. Jackson Hole, Beige Book, FEDS Notes, MPR, FSR), Regional Feds (NY/SF/Chicago/Atlanta), BIS (QR/WPs), CBO, Treasury/OFR/FSOC, Congressional testimony (Treasury Sec) | Direct fetch / institutional RSS |
 | 2 — Academic analytical + policy | VoxEU/CEPR (full posts), Brookings, PIIE, CFR | Direct fetch / RSS |
 
-**Removed from semantic corpus (ADR-010, 2026-05-11):** AP News, Reuters, MarketWatch. Their journalism propagation signal is captured by Media Cloud Premium Press (Layer 1B, dynamics only — see below). Raw ingested JSONL retained in `data/raw/articles/`; excluded from embedding by `run_pipeline.py filter-pre-embed`.
+**Removed from semantic corpus (ADR-010, 2026-05-11):** AP News, Reuters, MarketWatch. Their journalism propagation signal is captured by Media Cloud Premium Press (Layer 1B, cross-validation only — see below). Raw ingested JSONL retained in `data/raw/articles/`; excluded from embedding by `run_pipeline.py filter-pre-embed`.
 
-**Removed entirely (NBER, SSRN):** Historical bulk retrieval failed and live RSS support was also dropped (ADR-017, 2026-05-18) — Phase 6 = Tier 1/2 re-ingest + Media Cloud Premium only. No new live sources beyond that. `NBERIngestor` and `SSRNIngestor` remain in code as inactive reference but are NOT called from any pipeline path.
+**Removed entirely (NBER, SSRN):** Historical bulk retrieval failed and live RSS support was also dropped (ADR-017, 2026-05-18). Per ADR-019 the classes were deleted from `src/mnd/ingestion/institutional.py`; Phase 6 = Tier 1/2 re-ingest + Media Cloud Premium only.
 
 **Stated limitation:** Premium analytical press — WSJ opinion, Bloomberg Opinion, FT — is not represented in text form. Their VOLUME signal is captured by the Media Cloud Premium Press dynamics layer (single API surface, see below).
 
-### Layer 1B — Dynamics layer (volume time series for SIR/logistic fitting) — ADR-016
+### Layer 1B — Dynamics layer (cross-validation signal, not the primary SIR fit target) — ADR-016 / ADR-019
 
 **Source: Media Cloud API, premium-tier query.** Daily story counts by keyword/entity across the curated premium-press outlet collection (WSJ, Bloomberg, FT, Reuters, NYT, Barron's, Dow Jones Newswires, MarketWatch, etc.). Same Media Cloud API as Layer 2; the only difference is the outlet collection scoped to in the query.
 
+- **Role (ADR-019):** Cross-validation signal — does the premium-press volume curve track the institutional volume curve? The SIR / logistic parameters are fit to the *institutional discourse volume* (the formation layer); Media Cloud premium and broad press volumes are reported alongside as independent traces. They are NOT averaged into the fit target. This separation lets us report propagation-into-journalism as an outcome, not bake it into the structural model.
 - Output: weekly article volume time series per narrative cluster, written to `data/dynamics/mediacloud_premium/`.
-- Use for: SIR/logistic parameter estimation, propagation-into-journalism analysis.
+- Use for: cross-validation, propagation-into-journalism analysis, dashboard overlay traces.
 - Do NOT feed Media Cloud records into embedding or clustering — dynamics layer only.
 - API key: `MEDIACLOUD_API_KEY` in `.env`.
 
-**RavenPack is NOT used. The prior plan (ADR-010, ADR-008) to source dynamics from RavenPack via WRDS was abandoned 2026-05-18 in favor of Media Cloud Premium because (a) Media Cloud is free and academically accessible without a WRDS subscription, (b) using one API surface for both Layer 1B and Layer 2 reduces architecture surface area, (c) Media Cloud has no monthly-vintage delivery lag. `src/mnd/ingestion/ravenpack.py` is retained in the repo as deprecated reference code; do not import it.**
+**RavenPack is NOT used.** The prior plan (ADR-010, ADR-008) to source dynamics from RavenPack via WRDS was abandoned 2026-05-18 in favor of Media Cloud Premium because (a) Media Cloud is free and academically accessible without a WRDS subscription, (b) using one API surface for both Layer 1B and Layer 2 reduces architecture surface area, (c) Media Cloud has no monthly-vintage delivery lag. `src/mnd/ingestion/ravenpack.py` was deleted by ADR-019.
 
 ### Layer 2 — Detection (story counts only, broad outlets)
 
