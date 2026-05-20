@@ -1,4 +1,4 @@
-"""Clustering stage: BERTopic pipeline with hierarchical merging and stability eval."""
+"""Clustering stage: single-granularity BERTopic pipeline with stability diagnostic (ADR-019)."""
 
 from mnd.clustering.bertopic_pipeline import BertopicPipeline
 

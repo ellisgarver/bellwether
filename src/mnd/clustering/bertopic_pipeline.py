@@ -1,10 +1,15 @@
-"""BERTopic clustering pipeline (plan §6).
+"""BERTopic clustering pipeline (ADR-019).
 
 Wraps BERTopic with UMAP + HDBSCAN parameters from config and adds:
-  - Three-level hierarchical merging (fine ≈ 200 / medium ≈ 60 / coarse ≈ 15 topics)
   - Class-based TF-IDF (c-TF-IDF) for cluster representation
-  - Bootstrap stability evaluation: NMI + ARI across 20 random-seed replicates
-    against a baseline fit — kill criterion 1 (min_bootstrap_nmi from config)
+  - Bootstrap stability evaluation: NMI + ARI across replicates
+
+Every UMAP / HDBSCAN / c-TF-IDF parameter is the BERTopic v0.16.4 library
+default (Grootendorst 2022, arXiv:2203.05794). The prior three-level
+granularity hierarchy and the NMI-threshold kill criterion were removed by
+ADR-019 -- single granularity is the field convention (Bybee et al. 2024 JF;
+Hansen et al. 2018 QJE; Larsen & Thorsrud 2019 JoE) and stability is now a
+reported diagnostic rather than a gate.
 
 All random seeds flow from config.reproducibility.global_random_seed.
 """
@@ -47,8 +52,8 @@ def _build_model(cfg: dict[str, Any], seed: int):
     )
     vectorizer = CountVectorizer(stop_words="english", ngram_range=(1, 2))
     ctfidf = ClassTfidfTransformer(
-        reduce_frequent_words=cc.get("reduce_frequent_words", True),
-        bm25_weighting=cc.get("bm25_weighting", True),
+        reduce_frequent_words=cc.get("reduce_frequent_words", False),
+        bm25_weighting=cc.get("bm25_weighting", False),
     )
     return BERTopic(
         umap_model=umap_model,
@@ -61,7 +66,7 @@ def _build_model(cfg: dict[str, Any], seed: int):
 
 
 class BertopicPipeline:
-    """Manages BERTopic fitting, hierarchical merging, and stability evaluation.
+    """Manages BERTopic fitting and bootstrap stability evaluation.
 
     Usage:
         pipeline = BertopicPipeline.from_config()
@@ -85,13 +90,12 @@ class BertopicPipeline:
     def fit_transform(
         self, documents: list[str], embeddings: np.ndarray
     ) -> dict[str, Any]:
-        """Fit BERTopic and return hierarchical cluster assignments.
+        """Fit BERTopic and return single-granularity cluster assignments.
 
         Returns:
-            topics      list[int] — fine-grained topic per document (-1 = noise)
+            topics      list[int] — topic per document (-1 = noise)
             topic_info  DataFrame — labels and representative terms
-            hierarchical dict    — {fine, medium, coarse} topic lists
-            n_topics    int      — topics found at fine level (excluding noise)
+            n_topics    int       — topics found (excluding noise)
         """
         log.info("Fitting BERTopic on %d documents", len(documents))
         self._model = _build_model(self._cfg, self._seed)
@@ -102,52 +106,14 @@ class BertopicPipeline:
         n_topics = int((topic_info["Topic"] >= 0).sum())
         log.info("Found %d topics (%d noise docs)", n_topics, topics.count(-1))
 
-        hierarchical = self._build_hierarchy(documents, topics)
-
         return {
             "topics": topics,
             "topic_info": topic_info,
-            "hierarchical": hierarchical,
             "n_topics": n_topics,
         }
 
     # ------------------------------------------------------------------
-    # Hierarchical merging
-    # ------------------------------------------------------------------
-
-    def _build_hierarchy(
-        self,
-        documents: list[str],
-        fine_topics: list[int],
-    ) -> dict[str, list[int]]:
-        gran = self._cfg["clustering"]["granularity"]
-        result: dict[str, list[int]] = {"fine": fine_topics}
-
-        current_topics = fine_topics
-        for level, target_key in [("medium", "medium_target"), ("coarse", "coarse_target")]:
-            target = gran[target_key]
-            n_current = len({t for t in current_topics if t >= 0})
-            if n_current <= target:
-                log.info(
-                    "%s merge: already at/below target (%d ≤ %d), skipping",
-                    level, n_current, target,
-                )
-                result[level] = current_topics
-                continue
-            try:
-                merged = self._model.reduce_topics(documents, nr_topics=target)
-                result[level] = list(merged.topics_)
-                n_merged = len({t for t in result[level] if t >= 0})
-                log.info("Merged to %s level: %d → %d topics", level, n_current, n_merged)
-                current_topics = result[level]
-            except Exception as exc:
-                log.warning("Hierarchy merge at %s level failed: %s", level, exc)
-                result[level] = current_topics
-
-        return result
-
-    # ------------------------------------------------------------------
-    # Bootstrap stability (kill criterion 1)
+    # Bootstrap stability (diagnostic, not a gate)
     # ------------------------------------------------------------------
 
     def evaluate_stability(
@@ -159,7 +125,10 @@ class BertopicPipeline:
         """NMI + ARI across bootstrap replicates vs. a baseline fit.
 
         Seeds: config.validation.bootstrap_random_seed through +n_replicates.
-        Kill criterion 1: mean NMI ≥ config.validation.min_bootstrap_nmi.
+        Replicate count: config.validation.bootstrap_replicates (Efron &
+        Tibshirani 1993 recommend B >= 500-1000 for confidence intervals).
+        Reported as a diagnostic; the prior NMI >= threshold kill criterion
+        was removed by ADR-019.
         """
         from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
@@ -188,14 +157,8 @@ class BertopicPipeline:
             except Exception as exc:
                 log.warning("Replicate %d failed: %s", i, exc)
 
-        threshold = val_cfg["min_bootstrap_nmi"]
         mean_nmi = float(np.mean(nmi_scores)) if nmi_scores else 0.0
-        passed = mean_nmi >= threshold
-
-        log.info(
-            "Stability: mean NMI=%.3f (threshold=%.2f) → %s",
-            mean_nmi, threshold, "PASS" if passed else "FAIL",
-        )
+        log.info("Stability: mean NMI=%.3f over %d replicates", mean_nmi, len(nmi_scores))
         return {
             "mean_nmi": mean_nmi,
             "std_nmi": float(np.std(nmi_scores)) if nmi_scores else 0.0,
@@ -204,6 +167,4 @@ class BertopicPipeline:
             "all_nmi": nmi_scores,
             "all_ari": ari_scores,
             "n_replicates": len(nmi_scores),
-            "min_nmi_threshold": threshold,
-            "passed": passed,
         }
