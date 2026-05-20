@@ -16,17 +16,12 @@ and config/whitelist.yaml:
     CBOIngestor             cbo.gov — Budget/Economic Outlook (may 403 from residential IPs)
 
   Tier 2 — Academic-analytical
-    NBERIngestor            nber.org — WP abstracts (Phase 6 live RSS only; historical blocked)
     VoxEUIngestor           cepr.org/voxeu — full posts
-    SSRNIngestor            ssrn.com — abstracts (Phase 6 live RSS only; no historical archive)
     BrookingsIngestor       brookings.edu — macro-filtered articles
     PIIEIngestor            piie.com — policy briefs, working papers, blog posts
     CFRIngestor             cfr.org — reports, backgrounders, expert briefs (macro-filtered)
 
   InstitutionalIngestor   Composite: runs all active ingestors and merges output.
-                          NBER and SSRN are EXCLUDED from historical corpus runs
-                          (historical_corpus=false in whitelist.yaml). They run in
-                          Phase 6 live RSS updates only.
 
 Removed (ADR-012 / MND_PROJECT_SPEC rev3):
   JacksonHoleIngestor — redundant; Jackson Hole speeches are on federalreserve.gov
@@ -35,11 +30,16 @@ Removed (ADR-012 / MND_PROJECT_SPEC rev3):
   ArxivIngestor       — cut from scope: 2017-only coverage, low macro volume.
                         Archived at scripts/archive/arxiv_ingestor.py.
 
+Removed (ADR-017 / ADR-019):
+  NBERIngestor, SSRNIngestor — Phase 6 = Tier 1/2 re-ingest + Media Cloud
+                               Premium only; NBER historical access blocked
+                               and SSRN exposes no historical archive.
+
 Journalism tier (AP News, Reuters, MarketWatch) removed in ADR-010.
 Ingestors archived in scripts/archive/.
 
 All timestamps follow the ADR-008 rule: publication/release date only.
-FOMC minutes = release date. NBER papers = posting date.
+FOMC minutes = release date.
 """
 from __future__ import annotations
 
@@ -68,9 +68,6 @@ log = get_logger(__name__)
 
 USER_AGENT = "MacroNarrativeDynamics/0.1 (academic research; contact via project repo)"
 _HEADERS = {"User-Agent": USER_AGENT}
-
-# JEL codes that indicate macro/finance relevance for NBER filtering
-_NBER_JEL_PREFIXES = ("E", "F", "G")
 
 
 @functools.lru_cache(maxsize=1)
@@ -1783,251 +1780,6 @@ class TreasuryOFRIngestor(Ingestor):
 # ---------------------------------------------------------------------------
 
 
-class NBERIngestor(Ingestor):
-    """NBER Working Papers: abstracts + introduction section.
-
-    Timestamp = paper posting date (when it enters public discourse).
-    Filter to JEL codes E (Macro/Monetary), F (International), G (Financial).
-
-    Uses the NBER Drupal API (paginated, newest-first) instead of the RSS feed
-    which 404s since the 2024 site redesign. Individual paper pages are fetched
-    only for macro-relevant papers (to get exact date and full abstract).
-    """
-
-    source_id = "nber"
-
-    _API_URL = "https://www.nber.org/api/v1/working_page_listing/contentType/working_paper/_/_/search"
-    _PAPER_BASE = "https://www.nber.org"
-    _JEL_PREFIXES = _NBER_JEL_PREFIXES
-    _PER_PAGE = 100
-
-    def fetch(self, start: date, end: date) -> Iterator[Article]:
-        start_year, end_year = start.year, end.year
-
-        # Estimate starting page to avoid scanning years we don't need.
-        # ~600 NBER papers/year on average; API returns newest-first.
-        from datetime import date as _date
-        current_year = _date.today().year
-        years_back_from_now = max(0, current_year - end_year)
-        start_page = max(1, int(years_back_from_now * 600 / self._PER_PAGE) - 2)
-        log.debug("NBER: starting at page %d (end_year=%d)", start_page, end_year)
-
-        page = start_page
-        passed_window = False  # True once we've seen a record with year < start_year
-        consecutive_failures = 0
-
-        while True:
-            # On timeout, retry up to 3 times then skip the page (do not abort pagination).
-            # Non-transient errors (4xx, connection errors beyond retries) abort pagination.
-            skip_page = False
-            for _attempt in range(3):
-                try:
-                    resp = requests.get(
-                        self._API_URL,
-                        params={"page": page, "perPage": self._PER_PAGE},
-                        headers=_HEADERS,
-                        timeout=60.0,
-                    )
-                    resp.raise_for_status()
-                    consecutive_failures = 0
-                    break
-                except requests.exceptions.Timeout:
-                    log.warning("NBER API page %d timeout (attempt %d/3)", page, _attempt + 1)
-                    if _attempt < 2:
-                        time.sleep(2 ** _attempt)
-                    else:
-                        log.warning("NBER API page %d: timed out 3 times, skipping", page)
-                        skip_page = True
-                except Exception as exc:
-                    log.warning("NBER API page %d failed: %s", page, exc)
-                    consecutive_failures += 1
-                    if consecutive_failures >= 3:
-                        log.error("NBER: %d consecutive failures, stopping pagination", consecutive_failures)
-                        return
-                    break
-            if skip_page:
-                page += 1
-                time.sleep(0.5)
-                continue
-
-            data = resp.json()
-            results = data.get("results", [])
-            if not results:
-                break  # exhausted corpus
-
-            for record in results:
-                display_date = record.get("displaydate", "") or ""
-                try:
-                    record_month = datetime.strptime(display_date, "%B %Y")
-                    record_year = record_month.year
-                except ValueError:
-                    continue
-
-                if record_year > end_year:
-                    continue  # still approaching our window (newest-first)
-                if record_year < start_year:
-                    passed_window = True
-                    continue  # finish this page, then stop
-
-                url_path = record.get("url", "")
-                if not url_path:
-                    continue
-                url = self._PAPER_BASE + url_path if url_path.startswith("/") else url_path
-
-                title = record.get("title", "NBER working paper")
-                api_abstract = BeautifulSoup(record.get("abstract", ""), "lxml").get_text(" ", strip=True)
-
-                # Quick relevance pre-filter on title + truncated API abstract
-                if not self._is_macro_relevant([], title, api_abstract):
-                    continue
-
-                # Fetch individual page for exact date, full abstract, JEL codes
-                try:
-                    exact_date, full_abstract, jel_codes, authors = self._fetch_paper_page(url)
-                except Exception as exc:
-                    log.debug("NBER page fetch failed %s: %s", url, exc)
-                    exact_date, full_abstract, jel_codes = None, api_abstract, []
-                    authors = self._parse_authors(record.get("authors", ""))
-
-                # Re-check with JEL codes now that we have them
-                if jel_codes and not self._is_macro_relevant(jel_codes, title, full_abstract):
-                    continue
-
-                pub_date = exact_date if exact_date else record_month.date().replace(day=1)
-                if pub_date < start or pub_date > end:
-                    continue
-
-                body = full_abstract or api_abstract
-                if not body or len(body.split()) < 30:
-                    continue
-
-                yield _make_article(
-                    source_id=self.source_id,
-                    url=url,
-                    published_at=pub_date.isoformat() + "T00:00:00Z",
-                    title=title,
-                    body=body,
-                    author=", ".join(authors) if authors else None,
-                    section="working_paper",
-                    tier=2,
-                    document_type="nber_working_paper",
-                    extra_meta={"jel_codes": jel_codes},
-                )
-                time.sleep(0.3)
-
-            if passed_window:
-                break  # all subsequent pages are older than start_year
-
-            page += 1
-            time.sleep(0.5)
-
-    def _fetch_paper_page(self, url: str) -> tuple[date | None, str, list[str], list[str]]:
-        """Return (exact_date, abstract_text, jel_codes, authors) from an NBER paper page."""
-        import re
-
-        resp = requests.get(url, headers=_HEADERS, timeout=60.0)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "lxml")
-
-        # Exact publication date from citation meta tag: "YYYY/MM/DD"
-        exact_date: date | None = None
-        meta_date = soup.find("meta", attrs={"name": "citation_publication_date"})
-        if meta_date and meta_date.get("content"):
-            try:
-                exact_date = datetime.strptime(meta_date["content"], "%Y/%m/%d").date()
-            except ValueError:
-                pass
-
-        # Full abstract from the page-header intro div
-        abstract_el = soup.select_one("div.page-header__intro-inner")
-        if not abstract_el:
-            abstract_el = soup.find("div", class_=lambda c: c and "abstract" in c.lower())
-        abstract_text = abstract_el.get_text(" ", strip=True) if abstract_el else ""
-
-        # JEL codes: look for text matching capital letter + 2 digits
-        jel_codes: list[str] = []
-        for tag in soup.find_all(string=lambda t: t and "JEL" in t):
-            code_text = tag.parent.get_text(" ", strip=True) if tag.parent else ""
-            found = re.findall(r"\b[A-Z]\d{2}\b", code_text)
-            if found:
-                jel_codes = found
-                break
-
-        # Authors: strip HTML from <a> tags in the author list
-        authors = self._parse_authors_from_soup(soup)
-
-        return exact_date, abstract_text, jel_codes, authors
-
-    def _parse_authors(self, authors_html: str) -> list[str]:
-        """Extract plain author names from NBER API HTML author list."""
-        if not authors_html:
-            return []
-        soup = BeautifulSoup(authors_html, "lxml")
-        return [a.get_text(strip=True) for a in soup.find_all("a") if a.get_text(strip=True)]
-
-    def _parse_authors_from_soup(self, soup: BeautifulSoup) -> list[str]:
-        author_el = soup.select_one(".page-header__authors")
-        if not author_el:
-            return []
-        return [a.get_text(strip=True) for a in author_el.find_all("a") if a.get_text(strip=True)]
-
-    def _is_macro_relevant(self, jel_codes: list[str], title: str, abstract: str) -> bool:
-        # JEL primary signal: paper self-declares macro/finance scope.
-        if jel_codes:
-            return any(code.startswith(prefix) for code in jel_codes for prefix in self._JEL_PREFIXES)
-        # No declared JEL → ADR-015 canonical keyword set on title+abstract.
-        text = (title + " " + abstract).lower()
-        return any(kw in text for kw in _canonical_topic_keywords())
-
-
-class SSRNIngestor(Ingestor):
-    """SSRN Financial Economics Network: abstract-only records via RSS.
-
-    Full text is not consistently accessible. Abstracts provide sufficient
-    semantic signal for macro-financial narrative clustering.
-
-    Historical limitation: SSRN does not expose a public bulk API for historical
-    papers. The RSS feeds carry only recent submissions (typically 30–90 days).
-    SSRN contributes primarily to the live-update pipeline (Phase 6), not the
-    historical corpus. This limitation is disclosed in the pre-registration.
-    """
-
-    source_id = "ssrn_finance"
-
-    _FEEDS = [
-        "https://papers.ssrn.com/sol3/Jrnls/jrnl.cfm?link=2",   # Financial Economics
-        "https://papers.ssrn.com/sol3/jrnls/jrnl.cfm?link=30",  # Macroeconomics
-    ]
-
-    def fetch(self, start: date, end: date) -> Iterator[Article]:
-        seen: set[str] = set()
-        for feed_url in self._FEEDS:
-            for entry in _parse_rss(feed_url):
-                pub_date = _entry_date(entry)
-                if not pub_date or pub_date < start or pub_date > end:
-                    continue
-                url = entry.get("link", "")
-                if not url or url in seen:
-                    continue
-                seen.add(url)
-                title = entry.get("title", "SSRN paper")
-                abstract = BeautifulSoup(entry.get("summary", ""), "lxml").get_text(strip=True)
-                if not abstract or len(abstract.split()) < 20:
-                    continue
-                yield _make_article(
-                    source_id=self.source_id,
-                    url=url,
-                    published_at=pub_date.isoformat() + "T00:00:00Z",
-                    title=title,
-                    body=abstract,
-                    author=entry.get("author"),
-                    section="working_paper",
-                    tier=2,
-                    document_type="ssrn_abstract",
-                )
-                time.sleep(0.2)
-
-
 class VoxEUIngestor(Ingestor):
     """VoxEU / CEPR columns: date-filtered archive search, sharded by year.
 
@@ -2815,10 +2567,6 @@ class InstitutionalIngestor(Ingestor):
             BISIngestor(),
             TreasuryOFRIngestor(),
             CBOIngestor(),
-            # NBER and SSRN excluded from historical corpus runs (historical_corpus=false).
-            # Uncomment for Phase 6 live RSS updates only:
-            # NBERIngestor(),
-            # SSRNIngestor(),
             VoxEUIngestor(),
             BrookingsIngestor(),
             PIIEIngestor(),
