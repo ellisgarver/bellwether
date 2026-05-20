@@ -9,7 +9,7 @@
 # the schema_version below.
 # =============================================================================
 
-schema_version: "1.0.0"
+schema_version: "2.0.0"  # bumped by ADR-019 (2026-05-20) — comprehensive methodology lock-in
 project_name: "macro-narrative-dynamics"
 
 # -----------------------------------------------------------------------------
@@ -46,73 +46,74 @@ embedding:
     model: "Qwen/Qwen3-Embedding-0.6B"
     revision: "main"               # Pin to specific commit hash before Phase 2
     dimensions: 1024
-    # max_seq_len was 32768 (the model's native max), reduced to 2048, and
-    # further reduced to 1024 after job 49622334 (2026-05-13) OOMed on V100-16GB
-    # at batch=32 + seq=2048. Cause: the Qwen3 transformers code clones the SDPA
-    # causal mask per-layer; combined with KV-cache + activations, the working
-    # set at (batch=32, seq=2048, fp16) blew past 16 GB. At (batch=8, seq=1024,
-    # fp16) the working set is ~1/16 of the prior config and fits comfortably.
-    # 1024 still gives 1.7× headroom over the 600-BPE-token chunker output
-    # (processing/chunker.py), so no truncation in practice.
+    # On RCC (CUDA V100 16 GB): max_seq_len=1024, batch_size=8, fp16 (ADR-013).
+    # On Apple Silicon (MPS): export MND_MAX_SEQ_LEN=512 to avoid OOM (ADR-006).
+    # Chunker (per ADR-019) produces 512-Qwen3-token chunks, well within both.
     max_seq_len: 1024
     instruction_aware: true
     instruction_prefix: "Instruct: Represent this financial policy document for narrative clustering\nQuery: "
     upgrade_path: "Qwen/Qwen3-Embedding-4B"  # If RCC capacity allows; identical interface
-  comparator:
-    model: "sentence-transformers/all-mpnet-base-v2"
-    revision: "main"
-    dimensions: 768
-    max_seq_len: 384
-    instruction_aware: false
-  # Article preprocessing applied before embedding
-  article:
-    truncation_tokens: 600         # Headline + first 600 tokens fed to model
-    include_headline: true
-    include_lead_paragraph: true   # First paragraph is high-signal
-    normalize_whitespace: true
+  # Comparator (mpnet) look-ahead sensitivity check removed by ADR-019 (2026-05-20).
+  # The negative finding from the prior look-ahead check (ADR-011) is preserved
+  # as historical evidence in the project record; the apparatus itself is not
+  # part of the active methodology under the "anchored or removed" principle.
 
 # -----------------------------------------------------------------------------
-# Clustering (locked, with sensitivity sweep values)
+# Document chunking (ADR-019) — pre-embedding processing
 # -----------------------------------------------------------------------------
+# Anchored to Thakur et al. 2021 BEIR (NeurIPS): 512 tokens is the field-standard
+# retrieval unit. Chunker uses the embedding model's own tokenizer (Qwen3
+# SentencePiece) so chunk size in tokens maps 1:1 to the model's context window.
+# Documents that fit within 512 tokens produce one chunk naturally; no
+# word-count gate.
+processing:
+  chunking:
+    chunk_tokens: 512
+    chunk_overlap: 64              # ~12.5%; LangChain/LlamaIndex 10-20% default band
+
+# -----------------------------------------------------------------------------
+# Clustering — BERTopic library defaults (ADR-019)
+# -----------------------------------------------------------------------------
+# Every parameter is the BERTopic v0.16.4 library default (Grootendorst 2022,
+# arXiv:2203.05794). No sensitivity sweeps; no researcher-tuned overrides. The
+# three-tier granularity hierarchy with silhouette thresholds (ADR-008) is
+# removed — published BERTopic narrative studies report at single granularity
+# (Bybee/Kelly/Manela/Xiu 2024 JF; Hansen/McMahon/Prat 2018 QJE; Larsen &
+# Thorsrud 2019 JoE; Bertsch et al. 2021 Economics Letters).
 clustering:
   framework: "bertopic"
   umap:
-    n_neighbors: 15
-    min_dist: 0.1
-    n_components: 5
-    metric: "cosine"
-    random_state: 42
+    n_neighbors: 15                # BERTopic default
+    min_dist: 0.0                  # BERTopic default (overrides umap-learn 0.1)
+    n_components: 5                # BERTopic default
+    metric: "cosine"               # BERTopic default
+    random_state: 42               # global_random_seed
   hdbscan:
-    min_cluster_size: 20           # default
-    min_samples: 5
-    cluster_selection_method: "eom"
-    metric: "euclidean"            # operates on UMAP-reduced space
-    # Sensitivity sweep — runs in parallel as the "strict / default / permissive"
-    # parameter triple referenced in plan §8.1
-    sweep_min_cluster_size: [10, 20, 40]
+    min_cluster_size: 10           # BERTopic default (was researcher-chosen 20)
+    # min_samples omitted: BERTopic + hdbscan default is None (falls back to min_cluster_size)
+    cluster_selection_method: "eom"  # BERTopic default
+    metric: "euclidean"            # operates on UMAP-reduced space; BERTopic default
   ctfidf:
-    reduce_frequent_words: true
-    bm25_weighting: true
-  granularity:
-    # Hierarchical merging into three levels for analysis at multiple scales
-    fine_target: 200               # Approximate target count
-    medium_target: 60              # "narrative" is defined at this level
-    coarse_target: 15
-    silhouette_thresholds:         # Pre-specified merge thresholds
-      fine: 0.30
-      medium: 0.45
-      coarse: 0.60
+    reduce_frequent_words: false   # BERTopic ClassTfidfTransformer default (was researcher-chosen true)
+    bm25_weighting: false          # BERTopic ClassTfidfTransformer default (was researcher-chosen true)
 
 # -----------------------------------------------------------------------------
-# Dynamics fitting (locked)
+# Dynamics fitting (ADR-019)
 # -----------------------------------------------------------------------------
+# Two classical diffusion models. SIR: Kermack & McKendrick 1927. Logistic:
+# Verhulst 1838. Gompertz (1825, biological) and bare exponential dropped --
+# no narrative-economics anchor and SIR's early phase approximates exponential
+# anyway. Primary fit target is institutional discourse volume (the formation
+# layer); Media Cloud premium/broad press volumes are cross-validation signals,
+# not fit targets.
 dynamics:
-  smoothing_window_days: 7         # Centered moving average to remove weekend dips
+  smoothing_window_days: 7         # 7-day centered MA on combined weekly volume.
+                                   # Natural weekly cycle for daily count data
+                                   # (Shumway & Stoffer). Source-stratified
+                                   # smoothing removed by ADR-019.
   models_to_fit:
-    - "logistic"                   # MVP fallback — most stable
-    - "sir"                        # Primary epidemiological model
-    - "gompertz"
-    - "exponential"                # For pre-emergence narratives only
+    - "sir"                        # Kermack & McKendrick 1927
+    - "logistic"                   # Verhulst 1838
   inference:
     framework: "pymc"
     draws: 2000
@@ -122,7 +123,9 @@ dynamics:
     cores: "auto"                  # min(chains, available_cpus)
     random_seed: 42
   priors:
-    # Weakly informative; documented in dynamics/models.py
+    # Weakly informative, anchored to Bjornstad 2018 "Epidemics: Models and
+    # Data using R" + Gelman et al. BDA3 conventions. Specific values pending
+    # implementation commit (sub-ADR-020 if non-trivial).
     sir:
       beta_mean: 0.3
       beta_sd: 0.5
@@ -133,56 +136,48 @@ dynamics:
       L_log_sd: 2.0
       k_mean: 0.2
       k_sd: 0.1
-  # Goodness-of-fit threshold for trusting model output (kill criterion 3)
-  min_r_squared: 0.30
-  max_r0_ci_width: 2.0
+  # min_r_squared and max_r0_ci_width kill criteria removed by ADR-019.
+  # R^2 and R_0 credible interval width are reported as diagnostics, not gated.
 
 # -----------------------------------------------------------------------------
-# Stage classification (locked)
+# Stage classification (ADR-019)
 # -----------------------------------------------------------------------------
+# Three stages keyed to R_0 direction. Classical SIR threshold R_0=1 from
+# Kermack & McKendrick 1927. No arbitrary peak window or % decay thresholds.
+# Pre-emergence stage dropped entirely: every cluster gets R_0 + credible
+# interval; the CI width is the honest signal of fit reliability. "Newly
+# emerging" is a 4-week recency filter on the dashboard, not a stage.
 stages:
-  pre_emergence_max_articles: 50   # Cumulative articles below this = pre-emergence
-  early_spread_min_r0: 1.0
-  early_spread_pre_peak: true      # Must not have reached peak yet
-  peak_window_days: 14             # +/- around fitted peak day
-  decay_min_pct_below_peak: 0.30   # 30% below peak to be "decay"
-  dormant_max_articles_per_day: 1.0  # Rolling 14-day average
+  growth_min_r0: 1.0               # Classical SIR threshold (Kermack & McKendrick 1927)
+  newly_emerging_recency_weeks: 4  # Dashboard filter; anchored to sharp-anchor windows + Brown & Warner 1985
 
 # -----------------------------------------------------------------------------
-# Filtering & deduplication (locked)
+# Filtering & deduplication (ADR-019)
 # -----------------------------------------------------------------------------
+# Single-stage canonical filter (ADR-016). Keyword gate only -- embedding
+# similarity gate removed (no literature anchor for a fixed cosine cutoff).
+# Dedup window_hours removed -- full-corpus MinHash LSH is feasible at this scale.
 filtering:
   topic:
-    method: "hybrid"               # keyword + embedding-similarity to seed set
-    keyword_min_matches: 2
-    embedding_similarity_threshold: 0.55
-    seed_articles_path: "data/anchors/topic_seed_articles.jsonl"
+    keyword_min_matches: 2         # Basic statistical guard against single-keyword false positives
   dedup:
     method: "minhash"
-    num_perm: 128
-    threshold: 0.85                # Jaccard similarity threshold
-    window_hours: 48               # Rolling window for near-duplicate detection
+    num_perm: 128                  # Broder 1997; datasketch library default
+    threshold: 0.85                # Henzinger 2006 mid-band for near-duplicate detection
 
 # -----------------------------------------------------------------------------
-# Validation (locked)
+# Validation (ADR-019)
 # -----------------------------------------------------------------------------
+# Anchor recovery rate is reported, not gated. No kill criteria with researcher-
+# set thresholds. Bootstrap replicate count bumped from 20 to 1000 per Efron &
+# Tibshirani 1993 ("B >= 500-1000 for confidence intervals"). The look-ahead
+# sensitivity-check apparatus (ADR-011) is removed; the negative finding from
+# the prior run is preserved as historical evidence.
 validation:
-  anchor_tolerance_days: 14        # Max deviation from documented anchor date
-  bootstrap_replicates: 20
+  anchor_tolerance_days: 14        # Brown & Warner 1985 event-study window convention
+  bootstrap_replicates: 1000       # Efron & Tibshirani 1993 (B >= 500-1000 for CIs)
   bootstrap_random_seed: 42
-  fdr_alpha: 0.05                  # Benjamini-Hochberg FDR threshold
-  required_anchors_recovered: 7    # Out of 10 (kill criterion 2)
-  min_bootstrap_nmi: 0.40          # Across all parameter settings (kill criterion 1)
-  lookahead_check:
-    # ADR-011: compare Qwen3 primary vs mpnet comparator across temporal split.
-    # Metric: Δ_NMI = NMI(post_window) − NMI(pre_window) for each model.
-    # If Qwen3 Δ_NMI exceeds threshold AND mpnet Δ_NMI does not: flag look-ahead.
-    # Both models evaluated on all 10 anchor narrative sub-corpora (±3 months).
-    pre_cutoff_window: ["2010-01-01", "2020-12-31"]
-    post_cutoff_window: ["2021-01-01", "auto"]
-    metric: "nmi_delta"            # Δ_NMI(post − pre) compared across primary vs comparator
-    fail_threshold: 0.15           # Primary Δ_NMI > this AND comparator Δ_NMI ≤ this → flag
-    report_always: true            # Always report both model deltas; fail only flags, not stops
+  fdr_alpha: 0.05                  # Benjamini & Hochberg 1995
 
 # -----------------------------------------------------------------------------
 # Reproducibility (locked)
@@ -220,8 +215,8 @@ paths:
   processed_embeddings: "data/processed/embeddings.npy"
   processed_clusters: "data/processed/clusters.parquet"
   processed_dynamics: "data/processed/dynamics.parquet"
-  dynamics_ravenpack: "data/dynamics/ravenpack"                       # Signal A: RavenPack press volume
-  dynamics_institutional: "data/dynamics/institutional"               # Signal B: institutional corpus counts
-  detection_mediacloud: "data/detection/mediacloud"                   # Layer 2: Media Cloud story counts
+  dynamics_institutional: "data/dynamics/institutional"               # Primary fit signal (institutional corpus counts)
+  dynamics_mediacloud_premium: "data/dynamics/mediacloud_premium"     # Cross-validation: Media Cloud premium press volume
+  detection_mediacloud: "data/detection/mediacloud"                   # Layer 2: Media Cloud broad story counts
   dashboard_artifacts: "data/processed/dashboard"
   logs: "logs"
