@@ -183,10 +183,17 @@ def test_mediacloud_detector_importable():
 # Embedding module shape (no model load)
 # ---------------------------------------------------------------------------
 
-def test_embedder_factory_produces_primary_only_post_adr019():
+def test_embedder_factory_produces_primary_only_post_adr019(monkeypatch):
     """ADR-019: only the primary (Qwen3) embedder remains; comparator factory
-    path raises ValueError."""
+    path raises ValueError.
+
+    Clears MND_MAX_SEQ_LEN so the assertion checks the config default
+    (1024 on RCC) rather than a per-machine .env override (e.g. 512 on
+    Apple Silicon MPS per ADR-006).
+    """
     import pytest
+
+    monkeypatch.delenv("MND_MAX_SEQ_LEN", raising=False)
 
     from mnd.embedding import Embedder
     primary = Embedder.from_config("primary")
