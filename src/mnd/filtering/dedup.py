@@ -1,11 +1,15 @@
-"""Near-duplicate detection using MinHash LSH (plan §5.2).
+"""Near-duplicate detection using MinHash LSH.
 
-Jaccard similarity on character 5-grams within rolling 48-hour windows.
-Rolling windows avoid comparing articles published months apart, keeping
-runtime linear in corpus size.
+Jaccard similarity on character 5-grams. Per ADR-019, the rolling time window
+is removed by default (config.filtering.dedup.window_hours is no longer
+required) — full-corpus MinHash LSH is feasible at this scale. The
+``window_hours`` constructor argument is retained for callers (and tests) that
+explicitly want a time-bounded window; when not provided and not in config,
+the effective window is unbounded (100 years).
 
-Configuration: config.filtering.dedup.{num_perm, threshold, window_hours}.
-Thresholds are locked — do not tune after pilot.
+Configuration: config.filtering.dedup.{num_perm, threshold}. Anchored to
+Broder 1997 (MinHash) and Henzinger 2006 (~0.8-0.9 Jaccard threshold band
+for news near-duplicate detection).
 """
 from __future__ import annotations
 
@@ -67,8 +71,14 @@ class Deduplicator:
         dedup_cfg = cfg["filtering"]["dedup"]
         self.num_perm = num_perm if num_perm is not None else dedup_cfg["num_perm"]
         self.threshold = threshold if threshold is not None else dedup_cfg["threshold"]
+        # window_hours removed from config by ADR-019 (full-corpus dedup feasible).
+        # Default to 100 years if the caller doesn't override -- effectively
+        # unbounded, but the variable still parameterizes the rolling-window code
+        # path below for callers / tests that want explicit bounds.
         self.window_hours = (
-            window_hours if window_hours is not None else dedup_cfg["window_hours"]
+            window_hours
+            if window_hours is not None
+            else dedup_cfg.get("window_hours", 24 * 365 * 100)
         )
 
     def deduplicate(self, articles: Sequence[Article]) -> list[Article]:
