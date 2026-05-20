@@ -2,18 +2,18 @@
 # Topic Filter Keywords — JEL-anchored canonical list
 # =============================================================================
 # Macro-financial keyword set used as the single source of truth for topic
-# filtering at BOTH stages of the pipeline:
-#
-#   Stage 1 (per-ingestor pre-fetch) — institutional.py ingestors apply this
-#     same keyword set as an inline title filter to skip irrelevant
-#     publications before downloading them. ADR-015 (2026-05-18) eliminated
-#     the prior per-source ad-hoc inline filter lists.
+# filtering. Applied at Stage 2 only:
 #
 #   Stage 2 (post-ingest canonical filter) — src/mnd/filtering/topic_filter.py
 #     applies this list as the keyword gate of a two-gate hybrid filter.
 #     An article must contain at least `filtering.topic.keyword_min_matches`
 #     terms from this list AND pass an embedding-similarity check against
 #     data/anchors/topic_seed_articles.jsonl.
+#
+# Stage 1 (per-source) topic filters were removed by ADR-016 (2026-05-18).
+# Ingestion is content-neutral; topic relevance is decided exactly once at
+# Stage 2 over title + body, where the body provides the signal a title-only
+# filter would miss asymmetrically.
 #
 # Methodology rationale: the keyword set is anchored to the JEL (Journal of
 # Economic Literature) Classification System maintained by the American
@@ -24,12 +24,17 @@
 # JEL areas are intentionally excluded (D micro, I health, J labor general,
 # L industrial org, etc.).
 #
+# The list contains NO named entities tied to specific anchor narratives
+# (no "Silicon Valley Bank", "Brexit", "Credit Suisse", etc.) — see ADR-018.
+# Anchor recovery is therefore a clean test of body-text matching against
+# JEL conceptual vocabulary; the filter does not pre-bias toward anchors.
+#
 # DO NOT lower keyword_min_matches without justification — single-keyword
 # matches admit a flood of off-topic articles (e.g., a piece mentioning
 # "inflation" of NFT prices).
 # =============================================================================
 
-schema_version: "2.0.0"
+schema_version: "2.1.0"
 
 methodology:
   taxonomy: "JEL Classification System (American Economic Association)"
@@ -50,8 +55,10 @@ methodology:
     [D, I, J_general, L, M, N, "O (except F-relevant)", "Q (except Q4)", "R (except R31)", Z]
   rationale_doc: docs/filter_audit_jel.md
   stage_policy: |
-    Identical keyword set at Stage 1 (per-ingestor inline filter) and
-    Stage 2 (canonical filter). No source has a bespoke filter. See ADR-015.
+    Stage 2 only. Stage 1 (per-source) topic filters removed by ADR-016
+    (2026-05-18). Anchor-named entities removed by ADR-018 (2026-05-19).
+    Ingestion is content-neutral; topic relevance is decided exactly once
+    at Stage 2 over title + body using this list.
 
 categories:
 
@@ -313,39 +320,13 @@ categories:
       - real consumption
       - discretionary spending
 
-  named_events:
-    # Named macro shocks and policy events referenced as narrative anchors.
-    # Each entry corresponds to a JEL-in-scope shock and is documented in
-    # data/anchors/anchor_narratives.jsonl. Including these explicitly
-    # captures anchor-relevant content that purely concept-driven keywords
-    # would miss (e.g., COVID-19 / Brexit anchor recovery).
-    jel: [E32, F4, F51, G21, H6]
-    keywords:
-      # Pandemic shock (COVID anchor)
-      - COVID-19
-      - COVID
-      - pandemic
-      - lockdown
-      - reopening
-      # Brexit anchor
-      - Brexit
-      - referendum
-      - Article 50
-      # Russia / Ukraine — geopolitical shock with macro spillovers
-      - Ukraine invasion
-      - Russian sanctions
-      # Named legislation with macro-narrative load
-      - Inflation Reduction Act
-      - IRA
-      - CHIPS Act
-      - Build Back Better
-      - American Rescue Plan
-      # Banking-stress named events
-      - Silicon Valley Bank
-      - SVB
-      - First Republic
-      - Credit Suisse
-      - taper tantrum
+# named_events category removed by ADR-018 (2026-05-19). 13 of 21 entries
+# overlapped anchor key_terms directly (SVB, Brexit, COVID, Credit Suisse,
+# First Republic, taper tantrum, etc.), introducing circularity into anchor
+# recovery scoring. The remaining 8 entries were redundant with
+# shocks_and_geopolitics_macro / policy_fiscal coverage. Under
+# keyword_min_matches=2, any genuine macro-narrative article will hit
+# multiple JEL-conceptual terms in body text regardless. See ADR-018.
 
 # -----------------------------------------------------------------------------
 # Explicit out-of-scope keywords — flag for filter exclusion if dominant

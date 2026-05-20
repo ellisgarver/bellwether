@@ -7,30 +7,54 @@ classification for economics research; anchoring the filter to JEL subcodes
 makes the operational definition of "macro narrative content" pre-registration
 defensible and replication-friendly.
 
-**Status:** draft, written 2026-05-18 during Phase 2 closeout. Ratification is
-gated on a new ADR (proposed ADR-015 in `architecture_decisions.md`).
+**Status:** ratified by ADR-015 (canonical filter, 2026-05-18), ADR-016
+(single-stage filtering, 2026-05-18), and ADR-018 (removal of `named_events`
+to eliminate anchor-recovery circularity, 2026-05-19). Originally drafted
+2026-05-18 during Phase 2 closeout; the historical section below preserves
+the pre-ADR architecture for reference.
 
 ---
 
-## Current filtering architecture (two stages)
+## Current filtering architecture (single stage, post-ADR-016/018)
 
-**Stage 1 — Per-source inline filter (institutional.py).** Runs at ingest time.
-Each affected ingestor has its own bespoke keyword list, applied to the article
-title before the page body is fetched. Sources with inline filters: CBO, NBER,
+**Stage 2 only — Canonical filter (`src/mnd/filtering/topic_filter.py`).**
+Runs at the `filter` pipeline step. Loads keywords from
+`config/topic_filter_keywords.yaml` (schema 2.1.0, 11 categories after
+ADR-018 dropped `named_events`) and applies a two-gate test: ≥2 keyword
+matches AND embedding-similarity vs. `data/anchors/topic_seed_articles.jsonl`.
+Both gates required (AND, not OR).
+
+Ingestion is content-neutral: every Stage 1 (per-source) topic filter was
+removed by ADR-016. Topic relevance is decided exactly once, over title +
+body, where the body provides the signal a title-only filter would miss
+asymmetrically.
+
+The canonical keyword list contains NO named entities tied to specific
+anchor narratives — no "Silicon Valley Bank", "Brexit", "Credit Suisse",
+"taper tantrum", etc. ADR-018 dropped the `named_events` category because
+13 of its 21 entries directly overlapped anchor `key_terms`, introducing
+circularity into anchor recovery scoring. The remaining 8 entries were
+redundant with `shocks_and_geopolitics_macro` / `policy_fiscal` coverage,
+which already capture the same articles via JEL-conceptual vocabulary.
+
+---
+
+## Historical: pre-ADR-016 two-stage architecture (removed)
+
+The two-stage filter described below was in production until 2026-05-18.
+Retained here for the historical record.
+
+**Stage 1 — Per-source inline filter (institutional.py).** Ran at ingest time.
+Each affected ingestor had its own bespoke keyword list, applied to the article
+title before the page body was fetched. Sources with inline filters: CBO, NBER,
 VoxEU, Brookings, CFR, Congressional. Sources without: IMF, Fed
 (FederalReserveIngestor), BIS, Treasury, OFR, fed_regional, PIIE.
 
-**Stage 2 — Canonical filter (`src/mnd/filtering/topic_filter.py`).** Runs at
-the `filter` pipeline step. Loads keywords from
-`config/topic_filter_keywords.yaml` (228 lines, 12 categories) and applies a
-two-gate test: ≥2 keyword matches AND embedding-similarity vs.
-`data/anchors/topic_seed_articles.jsonl`. Both gates required (AND, not OR).
-
-**The methodology problem:** the Stage 1 inline lists are researcher-derived,
-ad-hoc per source, and not the same list across sources. Stage 1 is not a
-subset of Stage 2 — it can drop articles that Stage 2 would have admitted.
-This means **the corpus is shaped by per-source researcher judgment that is
-not pre-registered and not audit-traceable.**
+**The methodology problem:** the Stage 1 inline lists were researcher-derived,
+ad-hoc per source, and not the same list across sources. Stage 1 was not a
+subset of Stage 2 — it could drop articles that Stage 2 would have admitted.
+The corpus was shaped by per-source researcher judgment that was not
+pre-registered and not audit-traceable. Resolved by ADR-016.
 
 ---
 
