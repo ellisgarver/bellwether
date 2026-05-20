@@ -1128,6 +1128,231 @@ without referencing any category by name.
 
 ---
 
+## ADR-019: Comprehensive methodology lock-in to field-accepted anchors
+
+- **Status**: Proposed (drafted 2026-05-20; pending implementation)
+- **Date**: 2026-05-20
+- **Supersedes**:
+  - ADR-001 (partial) — comparator (mpnet) embedder role removed
+  - ADR-008 (partial) — chunker 600/100/>2000 superseded by 512/64/no-threshold; `gompertz` and `exponential` dropped from `models_to_fit`
+  - ADR-011 (full) — comparator + look-ahead Δ_NMI apparatus removed entirely; the negative finding from the prior look-ahead check is preserved in the project history as evidence, not as a methodology element
+  - References to "kill criteria" in any prior ADR — these are removed; quantities are reported, not gated
+
+### Context
+
+A 2026-05-19 audit of `config/config.yaml` and the surrounding pipeline code surfaced ~22 parameters and three architectural pieces that were researcher-chosen without a published anchor, plus a small number of silent BERTopic-default mismatches. The user's stated methodology principle ("everything anchored or removed; no sensitivity sweeps; not a parameter-exploration paper") forces a comprehensive lock-in.
+
+Findings from the audit and parallel field research (see `docs/related_work.md`):
+
+1. **Five BERTopic parameters in `clustering.yaml` silently differ from library defaults** (`umap.min_dist`, `hdbscan.min_cluster_size`, `hdbscan.min_samples`, `ctfidf.reduce_frequent_words`, `ctfidf.bm25_weighting`) — researcher-chosen overrides that were never flagged as such.
+2. **The 600/100/>2000 chunker recipe (ADR-008) has no published anchor.** Empirical check: chunker uses `tiktoken.cl100k_base` (GPT-4 BPE) but the embedder uses Qwen3's SentencePiece — 600 cl100k tokens ≈ 660 Qwen3 tokens, which fits within the production `max_seq_len=1024` but the mapping is not cited. Field-standard retrieval chunk size is 512 tokens per Thakur et al. 2021 *BEIR* (NeurIPS).
+3. **Three-tier granularity merging** (fine 200 / medium 60 / coarse 15 with silhouette thresholds 0.30/0.45/0.60) has no anchor. Every published BERTopic / LDA narrative study (Bybee et al. 2024 *JF*; Hansen et al. 2018 *QJE*; Larsen & Thorsrud 2019 *JoE*; Bertsch et al. 2021 *Economics Letters*) reports at a single granularity.
+4. **The comparator (mpnet) look-ahead sensitivity check (ADR-011)** is exactly the kind of researcher-introduced robustness apparatus the new principle excludes. The negative finding it produced is preserved as evidence; the apparatus itself is removed.
+5. **Kill-criterion thresholds** — `required_anchors_recovered: 7/10`, `min_bootstrap_nmi: 0.40`, `min_r_squared: 0.30`, `max_r0_ci_width: 2.0`, plus the `validation.lookahead_check.fail_threshold: 0.15` — are researcher-set binary cutoffs with no literature anchor. Reporting the rate / value is honest; gating on a threshold pre-registers researcher judgment as rigor.
+6. **Source-stratified smoothing** (`smooth.py` retains a journalism-tier sentinel + stratifies institutional/academic) has no literature anchor. A 7-day centered MA on combined volume is standard time-series practice (Shumway & Stoffer) and was the implicit underlying claim anyway.
+7. **`prepare_text_for_embedding(max_tokens=600)`** has broken whitespace-token math (600 whitespace-words ≈ 1662 Qwen3 tokens — exceeds even the production 1024 cap) and is only called from the filter path. Embed pipeline correctly bypasses it.
+8. **Several inactive code paths** continue to exist in the repo: `ravenpack.py` (deprecated by ADR-016), `wayback.py` (retained-for-reference per `__init__.py`), `NBERIngestor` + `SSRNIngestor` (commented out of `_sub_ingestors` in institutional.py per ADR-017). Per the "anchored or removed applies to abandoned pieces too" principle, these get deleted.
+9. **Several dynamics models** lack a defensible anchor for this substrate. SIR (Kermack & McKendrick 1927) and logistic (Verhulst 1838) are the classical anchors. Gompertz (1825, biological growth) and bare exponential have no narrative-economics citation that justifies them as primary fits — they're early-stage approximations to SIR/logistic. Drop from `models_to_fit`.
+10. **The `embedding_similarity_threshold: 0.55`** in the filter has no literature anchor — Reimers & Gurevych 2019 report task-tuned operating points, not a universal value. Remove the embedding gate from the filter; rely on the JEL keyword gate + downstream clustering.
+11. **`bootstrap_replicates: 20`** is far too low for confidence interval estimation. Efron & Tibshirani 1993 recommend ≥500-1000 for CIs. Bump to 1000.
+12. **`dedup.window_hours: 48`** has no anchor — full-corpus MinHash LSH is feasible at this scale, so remove the window.
+
+### Decision
+
+Every parameter below is set to either a published library default (cited) or a primary-literature value (cited). Parameters with no defensible anchor are removed.
+
+#### A. Text processing & chunking
+
+| Parameter | New value | Anchor |
+|---|---|---|
+| Tokenizer used by chunker | Qwen3 SentencePiece (the embedder's own tokenizer) | Eliminates cl100k↔SentencePiece mismatch |
+| Chunk size | **512 tokens** | Thakur et al. 2021 *BEIR* (NeurIPS), "first 512 word pieces within all documents" |
+| Chunk overlap | **64 tokens** (~12.5%) | LangChain/LlamaIndex library-default band (10-20%); no primary anchor, documented as library convention |
+| Chunk-only-if-words>N threshold | **REMOVED** | No primary anchor; chunk uniformly; documents that fit within 512 tokens produce one chunk naturally |
+| `prepare_text_for_embedding` helper | **REMOVED** | Broken whitespace-token math; bypassed by embed pipeline; rely on chunker for length-bounding |
+
+#### B. Filtering
+
+| Parameter | New value | Anchor |
+|---|---|---|
+| `keyword_min_matches` | **Keep at 2** | No primary anchor; documented as "single-keyword false-positive guard" — basic statistical reasoning, not asserted as field-standard |
+| `embedding_similarity_threshold` | **REMOVED** (filter Gate 2 dropped) | No literature anchor; task-specific calibration would be researcher-derived. Keyword gate alone + downstream clustering is cleaner |
+| `minhash.num_perm` | 128 (no change) | Broder 1997; `datasketch` library default |
+| `minhash.threshold` | 0.85 (no change) | Henzinger 2006 mid-band for near-duplicate web pages |
+| `dedup.window_hours` | **REMOVED** | No primary anchor; full-corpus MinHash LSH feasible at this scale |
+
+#### C. Embedding
+
+| Parameter | New value | Anchor |
+|---|---|---|
+| Primary embedding model | `Qwen/Qwen3-Embedding-0.6B` (no change) | Apache 2.0; top of MTEB clustering benchmark; instruction-aware |
+| `max_seq_len` | 1024 (RCC) / 512 (local MPS) (no change) | Hardware constraint, not methodology choice |
+| Comparator embedder (mpnet) | **REMOVED** | ADR-011's look-ahead sensitivity-check apparatus excluded under "anchored or removed". Negative finding preserved as historical evidence |
+| `instruction_prefix` | "Represent this financial policy document for narrative clustering" (no change) | Qwen3 model-card recommended pattern for instruction-aware retrieval |
+
+#### D. Clustering (BERTopic — 5 library-default fixes + 2 removals)
+
+| Parameter | Old | New | Anchor |
+|---|---|---|---|
+| `umap.n_neighbors` | 15 | **15** (no change) | BERTopic + umap-learn default |
+| `umap.min_dist` | 0.1 | **0.0** | BERTopic v0.16.4 default (overrides umap-learn's 0.1 for denser clusters) — Grootendorst 2022 |
+| `umap.n_components` | 5 | **5** (no change) | BERTopic default |
+| `umap.metric` | cosine | **cosine** (no change) | BERTopic default |
+| `hdbscan.min_cluster_size` | 20 | **10** | BERTopic default — Grootendorst 2022 |
+| `hdbscan.min_samples` | 5 | **None** (remove key, let library default to None) | BERTopic + hdbscan default |
+| `hdbscan.cluster_selection_method` | eom | **eom** (no change) | BERTopic + hdbscan default |
+| `hdbscan.metric` | euclidean | **euclidean** (no change) | BERTopic default (operates on UMAP-reduced space) |
+| `hdbscan.sweep_min_cluster_size` | [10,20,40] | **REMOVED** | Sensitivity sweep — researcher choice; fixed at library default |
+| `ctfidf.reduce_frequent_words` | true | **False** | BERTopic `ClassTfidfTransformer` default |
+| `ctfidf.bm25_weighting` | true | **False** | BERTopic `ClassTfidfTransformer` default |
+| `granularity` (fine 200 / medium 60 / coarse 15) | — | **REMOVED entirely** | No anchor; published BERTopic/LDA narrative studies all report at single granularity |
+| `granularity.silhouette_thresholds` | 0.30/0.45/0.60 | **REMOVED entirely** | Same |
+
+#### E. Dynamics & fitting
+
+| Parameter | New value | Anchor |
+|---|---|---|
+| `models_to_fit` | **["sir", "logistic"]** (Gompertz + exponential removed) | SIR — Kermack & McKendrick 1927; logistic — Verhulst 1838. Gompertz (biological growth, 1825) and exponential have no narrative-economics anchor; SIR's early phase approximates exponential anyway |
+| **Primary volume signal for SIR/logistic fitting** | **Institutional discourse volume** (weekly count of articles in cluster published in institutional + academic corpus) | The project's intellectual claim is that narratives form upstream of journalism in policy/academic discourse — so fitting to institutional volume measures the formation process directly. Premium-press and broad-press volume (Media Cloud) are secondary cross-validation signals, not the fit target. This supersedes the framing in ADR-016 / current CLAUDE.md that listed Media Cloud as the SIR/logistic primary signal (an artifact of the RavenPack→Media Cloud migration). |
+| `smoothing_window_days` | 7 (no change) | Shumway & Stoffer — natural weekly cycle for daily count data |
+| Source-stratified smoothing | **REMOVED** | No literature anchor; single 7-day MA on combined weekly volume is the standard time-series approach |
+| Bayesian priors (β, γ, log L, k) | **Re-elicited per Bjørnstad 2018 + Gelman BDA3 weakly-informative conventions** — specific values deferred to implementation commit; if the elicitation is non-trivial it gets a separate sub-ADR-020 | Bjørnstad 2018 *Epidemics: Models and Data using R*; Gelman et al. *BDA3* |
+| `inference.draws` / `tune` / `chains` / `target_accept` | 2000 / 1000 / 4 / 0.95 (no change) | PyMC defaults for HMC convergence; widely cited conventions |
+| `min_r_squared` (kill criterion) | **REMOVED** | No anchor; report R² as diagnostic, not gate |
+| `max_r0_ci_width` (kill criterion) | **REMOVED** | No anchor; report CI width as diagnostic, not gate |
+
+#### F. Stage classification
+
+| Parameter | New value | Anchor |
+|---|---|---|
+| Stage scheme | **3 stages: growth, decay, dormant** | R₀ direction keyed to classical SIR threshold |
+| `growth_min_r0` | 1.0 (rename from `early_spread_min_r0`) | Classical SIR epidemic threshold — Kermack & McKendrick 1927 |
+| `peak_window_days` | **REMOVED** | No anchor |
+| `decay_min_pct_below_peak` | **REMOVED** | No anchor; decay = R₀ < 1, simpler and anchored |
+| `dormant_max_articles_per_day` | **REMOVED** | No anchor; dormant = R₀ < 1 sustained, low residual volume |
+| `pre_emergence_max_articles` | **REMOVED** | Pre-emergence stage dropped entirely (see below) |
+
+**Pre-emergence stage removed.** Every cluster gets a fitted R₀ with credible interval regardless of data thinness — the CI width is the honest signal of fit reliability, not a researcher-set threshold. Clusters with insufficient data simply have wide CIs that straddle 1; the dashboard shows the CI directly.
+
+The "newly emerging narratives" view on the dashboard is a **recency filter on the cluster's first-article date**, not a stage label:
+
+- A narrative is "newly emerging" if its first article (post-deduplication) appeared in the corpus within the last **4 weeks**.
+- 4 weeks is anchored to the sharp-emergence anchor windows in `data/anchors/anchor_narratives.jsonl` (SVB 5 days, COVID 14 days at threshold, Brexit 10 days, Credit Suisse 5 days, China devaluation 7 days — all well inside a 4-week window) and to event-study horizons (Brown & Warner 1985 ±5 to ±20 days conventional event windows).
+- Operational implication for the clustering pipeline: with `hdbscan.min_cluster_size = 10` (BERTopic default) and Phase 6 running weekly, a narrative with sustained writing (≥ ~1 article/day) forms a cluster within ~10-14 days of its ignition. The 4-week recency window comfortably covers the formation latency plus an additional 2-3 weeks of visibility for the user.
+
+Stages and the recency filter combine in the dashboard:
+
+| Dashboard cell | Filter |
+|---|---|
+| Newly emerging + growing | first-article ≤ 4 weeks ago AND R₀ posterior median > 1 |
+| Established growing | first-article > 4 weeks ago AND R₀ posterior median > 1 |
+| Decaying | R₀ posterior median < 1 |
+| Dormant | R₀ < 1 sustained for ≥ N weeks (N anchored to fitting context, documented in implementation) |
+
+#### G. Validation
+
+| Parameter | New value | Anchor |
+|---|---|---|
+| `anchor_tolerance_days` | 14 (no change) | Brown & Warner 1985 event-study window convention |
+| `bootstrap_replicates` | **1000** (was 20) | Efron & Tibshirani 1993 — "B ≥500-1000 for confidence intervals" |
+| `bootstrap_random_seed` | 42 (no change) | Convention |
+| `fdr_alpha` | 0.05 (no change) | Benjamini & Hochberg 1995 |
+| `required_anchors_recovered` (kill criterion) | **REMOVED** | No anchor; report recovery rate, no pass/fail threshold |
+| `min_bootstrap_nmi` (kill criterion) | **REMOVED** | No anchor; cite Strehl & Ghosh 2002 for NMI as a quality measure, not a threshold |
+| `validation.lookahead_check.*` (entire block) | **REMOVED** | Look-ahead apparatus from ADR-011 dropped; cite the negative finding in prereg, not the apparatus |
+
+#### H. Similar-narrative finder (new methodology element)
+
+For each detected narrative, compute the top-5 most-similar past narratives across the full historical narrative set, using three complementary measures reported separately:
+
+| Measure | Method | Anchor |
+|---|---|---|
+| Semantic | Cosine similarity between cluster embedding centroids | Reimers & Gurevych 2019 (SBERT) — standard retrieval |
+| Lexical | Jaccard overlap on top-K c-TF-IDF terms (K=10) | Jaccard 1901; classic in NLP |
+| Morphological | Pearson correlation on normalized weekly volume curves | Standard time-series shape comparison |
+
+**Top-K (=5) ranking, not threshold.** Avoids the "where's the cutoff" question. K=5 follows the recall@5 / recall@10 convention from BEIR (Thakur et al. 2021).
+
+#### I. Dashboard structure (canonical specification)
+
+Three pages (replaces the prior two-view spec in §7 of MND_PROJECT_SPEC.md):
+
+1. **Emerging Narratives** (default landing) — narratives with first-article date in the last 4 weeks AND R₀ posterior median > 1 ("newly emerging + growing"), sorted by recent acceleration. Per-narrative card shows three overlaid volume curves (institutional, premium press, broad press), R₀ + credible interval, fitted carrying capacity, calendar event markers, top-5 similar past narratives.
+2. **Narrative Landscape** — 2D UMAP scatter of every cluster centroid. Color = stage; size = cumulative volume.
+3. **Timeline** — historical view, every narrative on a time axis, brush-to-zoom.
+
+Plus per-narrative drill-down, compare mode (overlay normalized curves of 2-4 narratives), anchor validation page.
+
+#### J. Dead-code cleanup
+
+Per "anchored or removed applies to abandoned pieces too":
+
+- `src/mnd/ingestion/ravenpack.py` — **DELETE** (deprecated by ADR-016)
+- `src/mnd/ingestion/wayback.py` — **DELETE** (retained-for-reference; no active code path)
+- `NBERIngestor` and `SSRNIngestor` classes in `src/mnd/ingestion/institutional.py` — **DELETE** (commented out of `_sub_ingestors` per ADR-017; `_NBER_JEL_PREFIXES` constant deleted with them)
+- `prepare_text_for_embedding` in `src/mnd/embedding/embedder.py` — **DELETE** (broken whitespace-token math; only used in filter path which loses the Gate 2 embedding check under this ADR anyway)
+- `Embedder.from_config("comparator")` path + the `embedding.comparator` config block — **DELETE**
+- `config.paths.dynamics_ravenpack` — **DELETE**
+- `config.validation.lookahead_check` block — **DELETE**
+- `data/dynamics/ravenpack/` directory + `whitelist.yaml` ravenpack entry — **DELETE**
+
+### Consequences
+
+**Positive:**
+
+- Every methodology parameter has a citation. The pre-registration story is now defensible without "we found this worked well" language for any choice.
+- Surface area shrinks: ~22 parameter removals, 3 architectural pieces removed (comparator embedder, look-ahead apparatus, 3-tier granularity), 4 unused source files / classes deleted.
+- BERTopic clustering output should change measurably: `min_cluster_size: 20 → 10` will produce more topics; `ctfidf.bm25_weighting: true → False` will produce different top-term lists per cluster. These are library defaults, not researcher tweaks — outcomes are owned by BERTopic, not by us.
+- Bootstrap NMI gets meaningful CI: 20 replicates → 1000 is a 50× increase, well within published standard.
+- Reviewers cannot point to a single parameter and ask "why this value?" without the answer being a primary literature citation or a library default.
+
+**Negative / risks:**
+
+- BERTopic library-default changes may produce more / smaller / lower-quality clusters than the researcher-tuned config. This is the price of removing researcher choice. If post-re-ingest cluster quality is meaningfully worse, the ADR remains correct — we report what BERTopic does, not what we tuned it to do.
+- The 3-stage R₀-keyed classification is less informative than the prior 5-stage scheme (no "peak" stage, no "pre-emergence" stage). Decision is by design — the peak window threshold has no anchor; pre-emergence as a stage required setting a data-thinness threshold which also has no anchor. The fitted peak day is computed and displayed as a descriptive overlay (not a categorical stage), and the credible interval on R₀ communicates fit reliability honestly (a wide CI = the same information "pre-emergence" used to communicate, but without a binary cutoff).
+- Some narratives will fall in the "borderline R₀ ≈ 1" zone where small fluctuations toggle growth/decay. Decision: report R₀ with credible interval, and let users see when the CI straddles 1.
+- Removing `prepare_text_for_embedding` and the embedding gate from the filter changes filter behavior. Need to verify filter still produces a reasonable corpus size — possibly the corpus admits more articles. If this causes downstream clustering noise problems, we can revisit, but the principled answer is "the JEL keyword gate is the filter; don't add an unanchored second gate."
+- Comparator removal means we lose the look-ahead sensitivity report. We cite the negative finding from the prior ADR-011 run as historical evidence in the prereg, not as a continuing methodology element.
+
+### Implementation steps
+
+This ADR is the spec; the implementation lands in a follow-on commit pair:
+
+1. **Config changes** (`config/config.yaml`, `config/whitelist.yaml`) — all parameter modifications and removals listed in Decision sections A-I.
+2. **Code changes**:
+   - `src/mnd/processing/chunker.py` — switch to Qwen3 tokenizer; constants 600/100/2000 → 512/64/no-threshold.
+   - `src/mnd/embedding/embedder.py` — remove `prepare_text_for_embedding`, remove `comparator` role plumbing.
+   - `src/mnd/filtering/topic_filter.py` — remove embedding gate (or make it a no-op pending broader rewrite).
+   - `src/mnd/clustering/*.py` — remove granularity merging logic + silhouette threshold logic.
+   - `src/mnd/dynamics/smooth.py` — remove source-stratified smoothing (single combined 7-day MA).
+   - `src/mnd/dynamics/fitting.py` — remove `gompertz` / `exponential`; update prior recipe per Bjørnstad/Gelman.
+   - `src/mnd/stages/*.py` — collapse 5 stages to 4 (R₀-keyed); remove peak/decay/dormant threshold logic.
+   - `src/mnd/validation/*.py` — remove pass/fail thresholding; report rates only.
+   - `src/mnd/ingestion/__init__.py` — drop ravenpack/wayback references.
+   - `src/mnd/clustering/similar_narratives.py` (NEW) — compute 3 similarity measures, return top-5 per measure.
+3. **Dead-code deletions** as listed in section J.
+4. **Test updates**:
+   - `tests/test_filtering.py` — adjust for removed embedding gate.
+   - `tests/test_stage_classify.py` — adjust for 4-stage scheme.
+   - `tests/test_dynamics_models.py` — adjust for removed gompertz/exponential.
+   - Add `tests/test_chunker_tokenizer.py` — assert chunks fit within 512 Qwen3 tokens.
+5. **Documentation**:
+   - `MND_PROJECT_SPEC.md` — the "Document status" notice already references this ADR; no further changes needed.
+   - `CLAUDE.md` — update the "Phase 2 corpus architecture" section's Layer 1B description to clarify that Media Cloud premium-press volume is a cross-validation signal, not the SIR/logistic primary fit target (correcting an ADR-016 framing artifact). Already updated to reference the methodology lock-in elsewhere.
+   - `prereg/PREREGISTRATION.md` — update to cite the field-anchored methodology with primary references.
+
+### Verification
+
+After implementation:
+
+- All existing unit tests pass (47/47, possibly with adjustments per step 4).
+- New tokenizer-alignment test confirms chunks fit within Qwen3's 512-token window (no silent truncation).
+- BERTopic clustering reproducibly produces the library-default output on a small held-out test corpus.
+- The full integration test battery on RCC (`pytest tests/integration/test_source_coverage.py -m integration -v`) passes per-source coverage floors with the new methodology in place.
+- Anchor recovery rate is reported (not gated) on the post-re-ingest corpus.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```
