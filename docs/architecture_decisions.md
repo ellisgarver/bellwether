@@ -996,6 +996,138 @@ Three issues surfaced during the 2026-05-19 source-coverage audit:
 
 ---
 
+## ADR-018: Remove `named_events` keyword category to eliminate anchor-recovery circularity
+
+- **Status**: Accepted (drafted, ratified, and implemented 2026-05-19)
+- **Date**: 2026-05-19
+- **Supersedes**: ADR-015 partially (canonical filter keyword list — `named_events` category dropped)
+
+### Context
+
+The `config/topic_filter_keywords.yaml` schema 2.0.0 (ADR-015) included a
+`named_events` category of 21 keywords explicitly added to capture anchor-
+relevant content. Audit on 2026-05-19 surfaced a circularity:
+
+| Anchor | `named_events` keywords that match anchor `key_terms` |
+|---|---|
+| 01 SVB collapse | Silicon Valley Bank, SVB |
+| 02 COVID market crash | COVID-19, COVID, pandemic, lockdown |
+| 03 Brexit aftermath | Brexit, referendum, Article 50 |
+| 05 Credit Suisse stress | Credit Suisse |
+| 06 Regional banking contagion | First Republic |
+| 09 2013 taper tantrum | taper tantrum |
+
+Thirteen of the 21 keywords are entries from the anchor `key_terms` lists
+themselves. Anchor-recovery scoring on a corpus filtered using those same
+keywords is partially circular: the metric measures whether the system
+re-discovers narratives we explicitly selected for in the filter. This
+weakens the pre-registration story — reviewers will read it as
+researcher-injected confirmation.
+
+The remaining 8 entries are real policy/event entities (Ukraine invasion,
+Russian sanctions, Inflation Reduction Act, IRA, CHIPS Act, Build Back
+Better, American Rescue Plan, reopening). These are not anchors, but are
+still researcher-named choices — and they are redundant with existing
+JEL-anchored categories:
+- Ukraine invasion / Russian sanctions → already covered by
+  `shocks_and_geopolitics_macro` (sanctions, geopolitical risk, energy
+  crisis, oil price shock).
+- IRA / CHIPS / BBB / ARP → already covered by `policy_fiscal` (fiscal
+  policy, stimulus, government spending) when articles discuss these bills
+  in macro-policy framing (the framing we want to capture).
+
+Under `filtering.topic.keyword_min_matches: 2`, every genuine
+macro-narrative article hits ≥2 JEL-conceptual terms in body text
+regardless of whether a single named-entity keyword is in the list. The
+recall risk of dropping `named_events` is therefore small in practice,
+and removing it cleans up the pre-registration story.
+
+The 2-match threshold is the key design feature making this safe: even
+an article that mentions "SVB" only once will, in any realistic financial
+journalism or policy text, also contain "bank failure", "deposit run",
+"regional banks", "FDIC", "BTFP", etc. — all of which are in
+`banking_and_financial_stability` with JEL G21/G28 anchoring.
+
+### Decision
+
+**Drop the entire `named_events` category from
+`config/topic_filter_keywords.yaml`.** No replacement — no relocated
+keywords, no migration. The JEL-anchored categories already cover the
+genuine macro signal in articles about these events.
+
+Companion edits in the same commit:
+
+1. Update the YAML header to remove the stale Stage-1 application claim
+   (post-ADR-016 there is no Stage 1 topic filter); call out explicitly
+   that no anchor-named entities appear in the canonical list.
+2. Update `methodology.stage_policy` to reflect Stage-2-only application
+   and reference ADR-016 + ADR-018.
+3. Bump `schema_version: "2.0.0"` → `"2.1.0"`.
+4. Update `docs/filter_audit_jel.md`: move status from "draft" to
+   "ratified by ADR-015 / 016 / 018"; update the architecture description
+   to single-stage; preserve the pre-ADR-016 two-stage account as a
+   "Historical" section for the record.
+
+No code changes: `src/mnd/filtering/topic_filter.py` iterates `categories`
+without referencing any category by name.
+
+### Consequences
+
+**Positive:**
+
+- Pre-registration story is materially cleaner. Anchor recovery becomes a
+  clean test of body-text matching against JEL conceptual vocabulary
+  rather than partial re-discovery of researcher-named entities.
+- Single source of truth for what "in scope" means: JEL E (macroeconomics),
+  F (international), G (financial), H6 (fiscal), with the audit document
+  enumerating every subcode and what it operationalizes. No special-case
+  named entities to defend separately.
+- Filter becomes a smaller, simpler artifact (213 keywords vs. 234).
+- The methodology-foolproof principle (anchor methodology to field-
+  standard taxonomies rather than researcher-derived ad-hoc choices,
+  per user directive 2026-05-18) is reinforced.
+
+**Negative / risks:**
+
+- Articles narrowly about IRA/CHIPS/BBB that mention the bill by name
+  but contain no other macro vocabulary in body text will be missed by
+  the keyword gate. Estimated impact: small for the long-form content
+  we ingest (institutional research, policy briefs, academic columns),
+  most of which uses domain vocabulary throughout. Worth re-verifying
+  during post-re-ingest filter QA.
+- A reviewer arguing "the system should find SVB because that's where
+  the SVB news lives" can be answered with: yes, and it does — through
+  `bank failure`, `deposit run`, `regional banks`, `FDIC`, `BTFP`,
+  `unrealized losses`, every one of which appears in any SVB article
+  worth clustering. The filter doesn't need "SVB" in its keyword list
+  to find SVB articles; it just needs to know what banking-stress
+  vocabulary looks like.
+
+### Implementation steps (this commit)
+
+1. `config/topic_filter_keywords.yaml`: delete `named_events:` block;
+   update header comment; update `stage_policy`; bump `schema_version`.
+2. `docs/filter_audit_jel.md`: status → ratified; new "Current"
+   architecture section reflecting single-stage + named-events removal;
+   pre-ADR-016 architecture moved into "Historical" section.
+3. This ADR.
+
+### Verification
+
+- `pytest tests/test_filtering.py` continues to pass (8/8). The filter
+  loader iterates `categories` without referencing `named_events`.
+- After the next full re-ingest, post-Stage-2 corpus composition should
+  remain within ±10% of the prior post-Stage-2 count. A larger drop
+  would indicate the named-entity hit was load-bearing in practice
+  rather than redundant.
+- Anchor recovery target ≥8/10 on the post-re-ingest corpus. If recovery
+  drops noticeably below the pre-removal baseline, that itself is
+  evidence the prior filter was performing anchor-name-matching rather
+  than genuine narrative recovery — which is the failure mode we wanted
+  to surface, not paper over.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```
