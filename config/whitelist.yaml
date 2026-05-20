@@ -297,17 +297,19 @@ tier_2_policy_analytical:
 # -----------------------------------------------------------------------------
 # Dynamics layer — NOT ingested as text corpus
 # -----------------------------------------------------------------------------
-# RavenPack RPA 1.0 Global Macro, Dow Jones Edition (via WRDS).
-# Used ONLY for weekly article volume counts per narrative cluster.
-# Do not feed RavenPack records into embedding or clustering.
+# Media Cloud premium-press collection (ADR-016 / ADR-019). Queried via the
+# Media Cloud API for weekly story counts matching each narrative's top
+# c-TF-IDF terms. Used as a CROSS-VALIDATION signal -- the primary SIR/logistic
+# fit target is institutional discourse volume (the narrative formation layer).
+# RavenPack/WRDS abandoned (ADR-016, 2026-05-18).
 dynamics_layer:
-  - id: ravenpack_rpa_global_macro
-    name: "RavenPack RPA 1.0 Global Macro, Dow Jones Edition"
-    access: wrds
-    wrds_dataset: "ravenpack.rpa_dj_pub"
-    use_for: "weekly_volume_counts"
-    covers: ["WSJ", "Barron's", "Dow Jones Newswires", "MarketWatch", "PR Newswire", "~800 other sources"]
-    notes: "Metadata and event records only — no full text. Use for volume normalization before SIR/logistic fitting."
+  - id: mediacloud_premium
+    name: "Media Cloud premium press collection"
+    access: api
+    api_env: "MEDIACLOUD_API_KEY"
+    use_for: "weekly_press_volume_per_narrative_cross_validation"
+    covers: ["WSJ", "Bloomberg", "FT", "Reuters", "NYT", "Barron's", "Dow Jones Newswires", "MarketWatch"]
+    notes: "Story counts only -- no text ingested. Query string is the narrative's top c-TF-IDF terms joined with Boolean OR (reproducible from clustering output)."
 
 # -----------------------------------------------------------------------------
 # Validation supplements — not ingested as text corpus
