@@ -17,9 +17,9 @@
 #   EMBED_JID=$(sbatch --parsable scripts/rcc/embed_rcc.sh)
 #   sbatch --dependency=afterok:$EMBED_JID scripts/rcc/cluster_rcc.sh
 #
-# Runs three granularity levels (fine/medium/coarse) per config.yaml and
-# 20 bootstrap replicates. All UMAP/HDBSCAN parameters are pre-specified in
-# config.yaml — do not tune at this stage.
+# Runs single-granularity BERTopic per config.yaml (ADR-019: library defaults
+# for every UMAP/HDBSCAN/c-TF-IDF parameter; no granularity hierarchy). All
+# parameters are pre-specified in config.yaml — do not tune at this stage.
 #
 # Output:
 #   data/processed/clusters.parquet

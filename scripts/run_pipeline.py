@@ -5,9 +5,9 @@ Dispatches pipeline stages:
   filter-pre-embed    — filter raw JSONL to exclude archived journalism sources
   filter              — topic filter + near-duplicate removal
   embed               — encode articles to embeddings (all-mpnet-base-v2)
-  cluster             — BERTopic hierarchical clustering
-  stability           — bootstrap stability eval (kill criterion 1: mean NMI ≥ 0.40)
-  validate            — anchor narrative recovery (kill criterion 2: ≥7/10 recovered)
+  cluster             — BERTopic single-granularity clustering (ADR-019)
+  stability           — bootstrap stability diagnostic (mean NMI reported, not gated)
+  validate            — anchor narrative recovery (reported as rate, not gated)
   corpus-composition  — report article counts per source per year (Phase 2 QA step)
 
 All paths default to config.paths.*. Override with --input / --output flags.
@@ -411,7 +411,7 @@ def cluster(
     output: str | None,
     min_cluster_size: int | None,
 ) -> None:
-    """Run BERTopic hierarchical clustering."""
+    """Run BERTopic single-granularity clustering (ADR-019)."""
     from mnd.clustering import BertopicPipeline
 
     cfg = ctx.obj["cfg"]
@@ -446,9 +446,7 @@ def cluster(
     pipeline = BertopicPipeline(cfg)
     results = pipeline.fit_transform(docs, emb)
 
-    df["topic_fine"] = results["hierarchical"]["fine"]
-    df["topic_medium"] = results["hierarchical"]["medium"]
-    df["topic_coarse"] = results["hierarchical"]["coarse"]
+    df["topic"] = results["topics"]
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_path, index=False)
@@ -456,7 +454,7 @@ def cluster(
         out_path.parent / "topic_info.parquet", index=False
     )
     log.info(
-        "Saved clusters (%d topics at fine level) → %s", results["n_topics"], out_path
+        "Saved clusters (%d topics) → %s", results["n_topics"], out_path
     )
 
 
@@ -483,7 +481,7 @@ def stability(
     embeddings: str | None,
     min_cluster_size: int | None,
 ) -> None:
-    """Bootstrap stability evaluation — kill criterion 1 (NMI ≥ 0.40)."""
+    """Bootstrap stability diagnostic — mean NMI reported, not gated (ADR-019)."""
     from mnd.clustering import BertopicPipeline
 
     cfg = ctx.obj["cfg"]
@@ -527,14 +525,9 @@ def stability(
     click.echo(f"  Mean NMI   : {result['mean_nmi']:.3f} ± {result['std_nmi']:.3f}")
     click.echo(f"  Median NMI : {median_nmi:.3f}")
     click.echo(f"  Mean ARI   : {result['mean_ari']:.3f} ± {result['std_ari']:.3f}")
-    click.echo(f"  Threshold  : NMI ≥ {result['min_nmi_threshold']:.2f}")
-    click.echo(f"  Status     : {'PASS' if result['passed'] else 'FAIL — kill criterion 1 triggered'}")
     click.echo("\n  Per-replicate NMI scores:")
     for i, nmi in enumerate(all_nmi, 1):
         click.echo(f"    [{i:02d}] {nmi:.3f}")
-
-    if not result["passed"]:
-        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
