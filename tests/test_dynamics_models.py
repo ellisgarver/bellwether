@@ -1,4 +1,4 @@
-"""Unit tests for pure dynamics ODE functions (plan §7, no ML deps required)."""
+"""Unit tests for pure dynamics ODE functions (ADR-019, no ML deps required)."""
 from __future__ import annotations
 
 import numpy as np
@@ -6,8 +6,6 @@ import pytest
 
 from mnd.dynamics.models import (
     aicc,
-    exponential,
-    gompertz,
     logistic,
     logistic_r0,
     sir_peak_time,
@@ -69,35 +67,14 @@ class TestSIR:
         assert pt > 0
 
 
-class TestGompertz:
-    def test_shape(self):
-        y = gompertz(T, L=100.0, k=0.3, t0=30.0)
-        assert y.shape == T.shape
+class TestModelSurfaceAreaPostADR019:
+    """ADR-019 removed gompertz and exponential models."""
 
-    def test_bounded_by_L(self):
-        y = gompertz(T, L=100.0, k=0.3, t0=30.0)
-        assert y.max() <= 100.0 + 1e-10
-
-    def test_non_negative(self):
-        y = gompertz(T, L=100.0, k=0.3, t0=30.0)
-        assert (y >= 0).all()
-
-
-class TestExponential:
-    def test_shape(self):
-        from mnd.dynamics.models import exponential
-        y = exponential(T, A=1.0, r=0.1)
-        assert y.shape == T.shape
-
-    def test_grows_when_r_positive(self):
-        from mnd.dynamics.models import exponential
-        y = exponential(T, A=1.0, r=0.1)
-        assert y[-1] > y[0]
-
-    def test_decays_when_r_negative(self):
-        from mnd.dynamics.models import exponential
-        y = exponential(T, A=1.0, r=-0.1)
-        assert y[-1] < y[0]
+    def test_gompertz_removed(self):
+        import mnd.dynamics.models as m
+        assert not hasattr(m, "gompertz")
+        assert not hasattr(m, "exponential")
+        assert not hasattr(m, "exponential_r0")
 
 
 class TestAICc:

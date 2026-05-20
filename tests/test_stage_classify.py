@@ -1,14 +1,18 @@
-"""Unit tests for stage classification (plan §8, no ML deps required)."""
+"""Unit tests for stage classification (ADR-019, three-stage R0-keyed scheme).
+
+The prior five-stage scheme (pre_emergence / early_spread / peak / decay /
+dormant) used researcher-set count and window thresholds with no literature
+anchor; ADR-019 reduces this to three stages keyed to the classical SIR
+R_0 threshold (Kermack & McKendrick 1927).
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
 
-import numpy as np
 import pandas as pd
-import pytest
 
-from mnd.stages.classify import StageClassification, classify_stage
+from mnd.stages.classify import classify_stage
 
 
 # Minimal FitResult stand-in so tests don't import pymc
@@ -33,70 +37,56 @@ def _series(values: list[float]) -> pd.Series:
     return pd.Series(values, index=idx)
 
 
-class TestPreEmergence:
-    def test_very_few_articles(self):
-        counts = _series([1.0] * 10)  # total = 10 << 50 threshold
-        fit = _FitResult(r0_mean=1.5, peak_time_mean=30.0)
+class TestGrowth:
+    def test_r0_above_one_yields_growth(self):
+        counts = _series([float(i + 1) for i in range(60)])
+        fit = _FitResult(r0_mean=2.0, converged=True)
         result = classify_stage(0, fit, counts)
-        assert result.stage == "pre_emergence"
-        assert result.confidence == 1.0
+        assert result.stage == "growth"
+        assert result.r0_mean == 2.0
 
-
-class TestDormant:
-    def test_trailing_average_below_threshold(self):
-        # 60 days, long tail near zero
-        values = [50.0] * 30 + [0.5] * 30
-        counts = _series(values)
-        fit = _FitResult(r0_mean=None, peak_time_mean=15.0)
+    def test_r0_exactly_one_yields_growth(self):
+        # growth_min_r0 default is 1.0 inclusive
+        counts = _series([float(i + 1) for i in range(60)])
+        fit = _FitResult(r0_mean=1.0, converged=True)
         result = classify_stage(0, fit, counts)
-        assert result.stage == "dormant"
-
-
-class TestPeak:
-    def test_current_day_near_fitted_peak(self):
-        # 61 days; peak at day 30; current = day 60 → not near peak
-        # Make peak at day 58 so current (60) is within ±14
-        values = [float(i) for i in range(30)] + [float(30 - i) for i in range(31)]
-        counts = _series(values)  # total = 930 >> 50
-        fit = _FitResult(r0_mean=2.0, peak_time_mean=58.0)  # within ±14 of 60
-        result = classify_stage(0, fit, counts)
-        assert result.stage == "peak"
+        assert result.stage == "growth"
 
 
 class TestDecay:
-    def test_past_peak_and_well_below(self):
-        # Peak at day 20, then decline; current is 60% below peak
-        peak_val = 100.0
-        values = [float(i * 5) for i in range(21)] + [peak_val * 0.4] * 40
-        counts = _series(values)
-        fit = _FitResult(r0_mean=1.2, peak_time_mean=20.0)
+    def test_r0_below_one_yields_decay(self):
+        counts = _series([float(60 - i) for i in range(60)])
+        fit = _FitResult(r0_mean=0.7, converged=True)
         result = classify_stage(0, fit, counts)
         assert result.stage == "decay"
 
 
-class TestEarlySpread:
-    def test_r0_above_one_pre_peak(self):
-        # Growing, 200 total articles, haven't reached peak yet
-        values = [float(i + 1) for i in range(60)]
-        counts = _series(values)
-        fit = _FitResult(r0_mean=2.0, peak_time_mean=100.0)  # peak in future
+class TestDormant:
+    def test_no_r0_yields_dormant(self):
+        counts = _series([1.0] * 60)
+        fit = _FitResult(r0_mean=None, converged=False)
         result = classify_stage(0, fit, counts)
-        assert result.stage == "early_spread"
+        assert result.stage == "dormant"
 
-    def test_r0_below_one_yields_unknown(self):
-        values = [float(i + 1) for i in range(60)]
-        counts = _series(values)
-        fit = _FitResult(r0_mean=0.8, peak_time_mean=None)
+    def test_unconverged_fit_yields_dormant(self):
+        # Even with R_0 > 1, unconverged means we cannot trust the fit
+        counts = _series([float(i + 1) for i in range(60)])
+        fit = _FitResult(r0_mean=2.0, converged=False)
         result = classify_stage(0, fit, counts)
-        assert result.stage == "unknown"
+        assert result.stage == "dormant"
 
 
-class TestConfidenceLowerWhenNotConverged:
-    def test_unconverged_lowers_confidence(self):
-        values = [float(i + 1) for i in range(60)]
-        counts = _series(values)
-        converged_fit = _FitResult(converged=True, r0_mean=2.0, peak_time_mean=100.0)
-        unconverged_fit = _FitResult(converged=False, r0_mean=2.0, peak_time_mean=100.0)
-        r_conv = classify_stage(0, converged_fit, counts)
-        r_unc = classify_stage(0, unconverged_fit, counts)
-        assert r_conv.confidence > r_unc.confidence
+class TestFiveStageRemovedPostADR019:
+    """ADR-019 collapsed five stages (pre_emergence/early_spread/peak/decay/
+    dormant) down to three (growth/decay/dormant). Make sure the new scheme
+    never returns one of the retired labels."""
+
+    def test_only_three_stage_labels_emitted(self):
+        cases = [
+            (_FitResult(r0_mean=2.0, converged=True), _series([1.0] * 5)),  # tiny series
+            (_FitResult(r0_mean=0.5, converged=True), _series([1.0] * 60)),
+            (_FitResult(r0_mean=None, converged=False), _series([1.0] * 60)),
+        ]
+        for fit, counts in cases:
+            stage = classify_stage(0, fit, counts).stage
+            assert stage in {"growth", "decay", "dormant"}

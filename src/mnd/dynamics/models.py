@@ -1,18 +1,19 @@
-"""Pure ODE functions for narrative dynamics models (plan §7).
+"""Pure ODE functions for narrative dynamics models (ADR-019).
 
-Four models in increasing complexity:
-  1. Exponential  f(t) = A * exp(r * t)                            — 2 params
-  2. Logistic     f(t) = L / (1 + exp(-k * (t - t0)))             — 3 params
-  3. Gompertz     f(t) = L * exp(-exp(-k * (t - t0)))             — 3 params
-  4. SIR          dS/dt = -βSI/N, dI/dt = βSI/N - γI             — 3 params
+Two models:
+  1. Logistic  f(t) = L / (1 + exp(-k * (t - t0)))  -- Verhulst 1838 / 3 params
+  2. SIR       dS/dt = -beta*S*I/N, dI/dt = beta*S*I/N - gamma*I
+                                                    -- Kermack & McKendrick 1927 / 3 params
+
+Gompertz (1825, biological) and bare exponential have no narrative-economics
+anchor and were removed by ADR-019 -- SIR's early phase already approximates
+exponential growth, so adding a separate exponential model is redundant.
 
 All functions take a float64 time array (days since first article) and return
 predicted article volume. They are pure numpy/scipy and are used:
   - by fitting.py for point-estimate log-likelihoods (AICc computation)
-  - by stages/classify.py for peak-time and R0 calculations
+  - by stages/classify.py for R_0 calculations
   - directly in unit tests
-
-AICc selection prefers logistic at ties (ADR-002).
 """
 from __future__ import annotations
 
@@ -21,21 +22,7 @@ from scipy.integrate import odeint
 
 
 # ---------------------------------------------------------------------------
-# Exponential
-# ---------------------------------------------------------------------------
-
-def exponential(t: np.ndarray, A: float, r: float) -> np.ndarray:
-    """Unconstrained growth: A * exp(r * t). For pre-emergence phases."""
-    return A * np.exp(r * t)
-
-
-def exponential_r0(r: float, gamma: float) -> float:
-    """Approximate R0 from exponential growth rate under SIR assumptions."""
-    return 1.0 + r / gamma
-
-
-# ---------------------------------------------------------------------------
-# Logistic
+# Logistic (Verhulst 1838)
 # ---------------------------------------------------------------------------
 
 def logistic(t: np.ndarray, L: float, k: float, t0: float) -> np.ndarray:
@@ -48,25 +35,12 @@ def logistic(t: np.ndarray, L: float, k: float, t0: float) -> np.ndarray:
 
 
 def logistic_r0(k: float, gamma: float) -> float:
-    """R0 implied by logistic growth rate k under SIR assumptions."""
+    """R_0 implied by logistic growth rate k under SIR assumptions."""
     return 1.0 + k / gamma
 
 
 # ---------------------------------------------------------------------------
-# Gompertz
-# ---------------------------------------------------------------------------
-
-def gompertz(t: np.ndarray, L: float, k: float, t0: float) -> np.ndarray:
-    """Asymmetric S-curve: L * exp(-exp(-k*(t-t0))).
-
-    Slower approach to L than logistic; captures narratives with gradual
-    late-stage saturation.
-    """
-    return L * np.exp(-np.exp(-k * (t - t0)))
-
-
-# ---------------------------------------------------------------------------
-# SIR
+# SIR (Kermack & McKendrick 1927)
 # ---------------------------------------------------------------------------
 
 def _sir_rhs(y: list[float], _t: float, beta: float, gamma: float) -> list[float]:
@@ -83,7 +57,7 @@ def sir_prevalence(
     beta: float,
     gamma: float,
 ) -> np.ndarray:
-    """Solve SIR ODE; return I(t) — the infectious compartment.
+    """Solve SIR ODE; return I(t) -- the infectious compartment.
 
     I(t) is interpreted as daily article volume from media nodes actively
     discussing the narrative.

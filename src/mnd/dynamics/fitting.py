@@ -1,17 +1,19 @@
-"""Bayesian dynamics fitting with PyMC (plan §7.3).
+"""Bayesian dynamics fitting with PyMC (ADR-019).
 
-Fits all configured models to a cluster's daily article-count time series and
-selects the best by AICc, preferring logistic at ties (ADR-002).
+Fits the two configured models (logistic, SIR) to a cluster's daily
+article-count series and selects the best by AICc, preferring logistic at
+ties (ADR-002).
 
 SIR model: uses a pytensor.scan discrete-time Euler loop so the ODE is
 differentiable through PyMC's NUTS sampler without an external ODE solver.
 
 Graceful failure: convergence failures (low ESS, high R-hat, exceptions) are
 recorded in FitResult.failure_reason; the pipeline continues. AICc = inf for
-failed fits so they never win selection.
+failed fits so they never win selection. The prior min_r_squared and
+max_r0_ci_width kill-criterion thresholds were removed by ADR-019 -- R^2 and
+R_0 credible-interval width are reported as diagnostics, not gated.
 
 Configuration: config.dynamics.{inference, priors, models_to_fit}.
-Thresholds: config.dynamics.{min_r_squared, max_r0_ci_width}.
 """
 from __future__ import annotations
 
@@ -24,9 +26,6 @@ import pandas as pd
 
 from mnd.dynamics.models import (
     aicc,
-    exponential,
-    exponential_r0,
-    gompertz,
     logistic,
     logistic_r0,
     sir_peak_time,
@@ -38,7 +37,7 @@ from mnd.utils.logging import get_logger
 
 log = get_logger(__name__)
 
-_PREFERRED_ORDER = ["logistic", "sir", "gompertz", "exponential"]
+_PREFERRED_ORDER = ["logistic", "sir"]
 
 
 @dataclass
@@ -144,10 +143,6 @@ class DynamicsFitter:
                 return self._fit_logistic(cluster_id, t, y)
             if model_name == "sir":
                 return self._fit_sir(cluster_id, t, y)
-            if model_name == "gompertz":
-                return self._fit_gompertz(cluster_id, t, y)
-            if model_name == "exponential":
-                return self._fit_exponential(cluster_id, t, y)
             return FitResult(
                 cluster_id=cluster_id,
                 model_name=model_name,
@@ -279,87 +274,6 @@ class DynamicsFitter:
             r0_ci_high=sir_r0(beta_hi, max(gamma_lo, 1e-6)),
             peak_time_mean=peak,
             param_summary={**summary_bg.to_dict(), **summary_I0.to_dict()},
-        )
-
-    # ------------------------------------------------------------------
-    # Gompertz
-    # ------------------------------------------------------------------
-
-    def _fit_gompertz(
-        self, cluster_id: int | str, t: np.ndarray, y: np.ndarray
-    ) -> FitResult:
-        import pymc as pm
-
-        priors = self._cfg["dynamics"]["priors"]["logistic"]
-        inf_cfg = self._cfg["dynamics"]["inference"]
-
-        with pm.Model():
-            L = pm.LogNormal("L", mu=priors["L_log_mean"], sigma=priors["L_log_sd"])
-            k = pm.HalfNormal("k", sigma=priors["k_sd"])
-            t0 = pm.Normal("t0", mu=float(t.mean()), sigma=float(t.std() + 1.0))
-            sigma = pm.HalfNormal("sigma", sigma=float(y.std() + 1.0))
-            mu = L * pm.math.exp(-pm.math.exp(-k * (t - t0)))
-            pm.Normal("obs", mu=mu, sigma=sigma, observed=y)
-            trace = self._sample(inf_cfg)
-
-        import arviz as az
-
-        summary = az.summary(trace, var_names=["L", "k", "t0"], hdi_prob=0.94)
-        converged = _check_convergence(trace)
-        L_mean = float(summary.loc["L", "mean"])
-        k_mean = float(summary.loc["k", "mean"])
-        t0_mean = float(summary.loc["t0", "mean"])
-        ll = _gaussian_loglik(y, gompertz(t, L_mean, k_mean, t0_mean))
-
-        return FitResult(
-            cluster_id=cluster_id,
-            model_name="gompertz",
-            converged=converged,
-            aicc=aicc(ll, k=3, n=len(y)),
-            peak_time_mean=t0_mean,
-            peak_time_ci_low=float(summary.loc["t0", "hdi_3%"]),
-            peak_time_ci_high=float(summary.loc["t0", "hdi_97%"]),
-            param_summary=summary.to_dict(),
-        )
-
-    # ------------------------------------------------------------------
-    # Exponential
-    # ------------------------------------------------------------------
-
-    def _fit_exponential(
-        self, cluster_id: int | str, t: np.ndarray, y: np.ndarray
-    ) -> FitResult:
-        import pymc as pm
-
-        inf_cfg = self._cfg["dynamics"]["inference"]
-        gamma_prior = self._cfg["dynamics"]["priors"]["sir"]["gamma_mean"]
-
-        with pm.Model():
-            A = pm.HalfNormal("A", sigma=float(y.max() + 1.0))
-            r = pm.Normal("r", mu=0.1, sigma=0.5)
-            sigma = pm.HalfNormal("sigma", sigma=float(y.std() + 1.0))
-            pm.Normal("obs", mu=A * pm.math.exp(r * t), sigma=sigma, observed=y)
-            trace = self._sample(inf_cfg)
-
-        import arviz as az
-
-        summary = az.summary(trace, var_names=["A", "r"], hdi_prob=0.94)
-        converged = _check_convergence(trace)
-        A_mean = float(summary.loc["A", "mean"])
-        r_mean = float(summary.loc["r", "mean"])
-        r_lo = float(summary.loc["r", "hdi_3%"])
-        r_hi = float(summary.loc["r", "hdi_97%"])
-        ll = _gaussian_loglik(y, exponential(t, A_mean, r_mean))
-
-        return FitResult(
-            cluster_id=cluster_id,
-            model_name="exponential",
-            converged=converged,
-            aicc=aicc(ll, k=2, n=len(y)),
-            r0_mean=exponential_r0(r_mean, gamma_prior),
-            r0_ci_low=exponential_r0(r_lo, gamma_prior),
-            r0_ci_high=exponential_r0(r_hi, gamma_prior),
-            param_summary=summary.to_dict(),
         )
 
     # ------------------------------------------------------------------

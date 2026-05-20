@@ -540,22 +540,9 @@ def stability(
     help="Comma-separated anchor IDs or 'all'",
 )
 @click.option("--clusters", default=None, help="Clusters parquet path")
-@click.option(
-    "--required",
-    default=None,
-    type=int,
-    help=(
-        "Override the minimum number of anchors that must be recovered for PASS. "
-        "Defaults to config.validation.required_anchors_recovered (7). "
-        "Use for pilot runs where fewer than 10 anchors are tested, or where "
-        "some anchors are structurally absent from the corpus window."
-    ),
-)
 @click.pass_context
-def validate(
-    ctx: click.Context, anchors: str, clusters: str | None, required: int | None
-) -> None:
-    """Anchor recovery validation — kill criterion 2 (≥7/10 recovered)."""
+def validate(ctx: click.Context, anchors: str, clusters: str | None) -> None:
+    """Anchor recovery validation -- rate reported, not gated (ADR-019)."""
     from mnd.validation import validate_anchor_recovery
 
     cfg = ctx.obj["cfg"]
@@ -570,31 +557,12 @@ def validate(
     results = validate_anchor_recovery(df, anchor_ids=anchor_ids, cfg=cfg)
     n_recovered = sum(1 for r in results if r["recovered"])
 
-    config_required = cfg["validation"]["required_anchors_recovered"]
-    if required is not None and required != config_required:
-        log.warning(
-            "PILOT OVERRIDE: --required set to %d (config.yaml production value: %d). "
-            "Use only when testing a subset of anchors whose corpus window excludes "
-            "some reference events. Full 10-anchor gate (required=%d) applies in Phase 4.",
-            required,
-            config_required,
-            config_required,
-        )
-    effective_required = required if required is not None else config_required
-
     click.echo("\nAnchor Recovery Results")
     for r in results:
-        mark = "✓" if r["recovered"] else "✗"
+        mark = "+" if r["recovered"] else "-"
         click.echo(f"  {mark} {r['anchor_id']}: {r['note']}")
 
-    click.echo(f"\n  Recovered : {n_recovered}/{len(results)}")
-    click.echo(f"  Required  : {effective_required}" +
-               (f"  (config default: {config_required})" if required is not None else ""))
-    passed = n_recovered >= effective_required
-    click.echo(f"  Status    : {'PASS' if passed else 'FAIL — kill criterion 2 triggered'}")
-
-    if not passed:
-        sys.exit(1)
+    click.echo(f"\n  Recovered : {n_recovered}/{len(results)}  (reported, not gated -- ADR-019)")
 
 
 # ---------------------------------------------------------------------------
