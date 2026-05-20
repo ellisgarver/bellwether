@@ -152,14 +152,15 @@ stages:
   newly_emerging_recency_weeks: 4  # Dashboard filter; anchored to sharp-anchor windows + Brown & Warner 1985
 
 # -----------------------------------------------------------------------------
-# Filtering & deduplication (ADR-019)
+# Filtering & deduplication (ADR-020)
 # -----------------------------------------------------------------------------
-# Single-stage canonical filter (ADR-016). Keyword gate only -- embedding
-# similarity gate removed (no literature anchor for a fixed cosine cutoff).
-# Dedup window_hours removed -- full-corpus MinHash LSH is feasible at this scale.
+# Pre-clustering JEL keyword filter REMOVED by ADR-020 (2026-05-20). The
+# basis-set source selection is now the only macro-content scope constraint
+# at ingest time; topic relevance is decided post-clustering by
+# mnd.clustering.jel_classifier over BERTopic cluster representatives.
+# The filter stage performs date-range filtering and MinHash near-duplicate
+# removal only.
 filtering:
-  topic:
-    keyword_min_matches: 2         # Basic statistical guard against single-keyword false positives
   dedup:
     method: "minhash"
     num_perm: 128                  # Broder 1997; datasketch library default

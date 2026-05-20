@@ -34,36 +34,45 @@ We're not the first to apply SIR to narrative spread. There is established liter
 
 A single document moves through the system in eight stages.
 
-### Stage 1 — Ingestion
+### Stage 1 — Ingestion (basis set, ADR-020)
 
-We pull text directly from institutional and academic policy websites:
+The corpus is a **basis set**: the minimum set of sources spanning every independent dimension of US macro discourse, with no redundant or noise-dominated entries. Twelve active ingestors map 1:1 to eight dimensions:
 
-- **Federal Reserve** (all of it: FOMC statements, FOMC minutes, Board speeches including Jackson Hole, Beige Book, FEDS Notes, Monetary Policy Report, Financial Stability Report)
-- **Regional Federal Reserve Banks** (New York's Liberty Street Economics, San Francisco's Economic Letter, Chicago's multi-series publications, Atlanta's working papers and policy hub)
-- **International institutions**: IMF (World Economic Outlook, Global Financial Stability Report, F&D, working papers, blog), BIS (working papers, Quarterly Review, Bulletins, curated central-bank speeches)
-- **U.S. fiscal**: CBO publications, Treasury OFR research, Treasury Secretary congressional testimony
-- **Academic / policy**: VoxEU (CEPR columns), Brookings, PIIE, CFR
+| Dimension | Source(s) |
+|---|---|
+| 1. US monetary authority | Federal Reserve Board (FOMC, speeches incl. Jackson Hole, Beige Book, FEDS Notes, MPR, FSR) |
+| 2. US monetary research | Regional Feds — NY (Liberty Street), SF (Economic Letter), Chicago (multi-series), Atlanta (macroblog + working papers) |
+| 3. International macro authority | IMF (WEO, GFSR, F&D, working papers, blog) |
+| 4. International central-bank network | BIS (Quarterly Review, working papers, Bulletins, curated CB speeches) |
+| 5. US fiscal authority | CBO (legislative scoring + outlook + working papers + MBR) + **CEA** (executive — Economic Report of the President via govinfo.gov ERP) |
+| 6. US financial-stability research | Treasury OFR (working papers, FSOC reports) |
+| 7. US policy think-tank | Brookings (Economic Studies + Hutchins Center) + PIIE (international policy) |
+| 8. Academic primary work + column | **NBER** (working papers via direct URL enumeration) + VoxEU (CEPR columns) |
+| Cross-cutting Q&A register | Congressional Treasury Secretary testimony |
 
-**Why this set?** These are the *upstream* sources where macro narratives form — among policymakers, researchers, and analysts — *before* the financial press picks them up. Financial journalism (WSJ, Bloomberg, FT) is downstream of this discourse. We're studying narrative formation, not propagation by the press, so we ingest the upstream layer.
+**Why this is a basis set.** Each source spans a dimension no other source covers. Multiple sources on the same dimension (e.g., the 4 regional Feds for dimension 2, or Brookings + PIIE for dimension 7) cover distinct sub-axes within that dimension. Sources whose dimensional coverage was wholly redundant with another source — most consequentially **CFR**, whose macro subset is captured by PIIE on dimension 7 and whose ~80% foreign-policy non-macro content is just noise — were removed (ADR-020).
 
-**Why not the press?** Two reasons. First, premium analytical press is paywalled and not bulk-licensable. Second, ingesting press text would bias toward narratives that already broke through to journalism, missing the earlier formation phase that's the analytical target. (We *do* capture press volume separately — see Stage 6 — but we don't ingest the text.)
+**Why these are upstream sources.** These are where macro narratives *form* — among policymakers, researchers, and analysts — *before* the financial press picks them up. Financial journalism (WSJ, Bloomberg, FT) is downstream of this discourse. We're studying narrative formation, not propagation by the press, so we ingest the upstream layer.
 
-**What we don't include**: paywalled databases (no ProQuest, Factiva, Bloomberg, RavenPack), the financial press itself as embeddable text (no AP, Reuters, MarketWatch corpus), or sources where historical retrieval failed (NBER, SSRN).
+**Why not the press as text.** Two reasons. First, premium analytical press is paywalled and not bulk-licensable. Second, ingesting press text would bias toward narratives that already broke through to journalism, missing the earlier formation phase that's the analytical target. We *do* capture press volume separately — see Stage 6 — but we don't ingest the text.
 
-Ingestion is **content-neutral** — every article from every active source enters the corpus regardless of topic. Topic relevance is decided later, in one place, in a way we can defend.
+**Why not govinfo.gov for CBO.** govinfo.gov has a CBO collection (~772 publications) but GPO-deposit coverage is uneven over time (41 records 2010 → 6 records 2024), which would inject a non-random, time-varying selection filter into the CBO volume signal — exactly the artifact the basis-set framing was designed to eliminate. The Playwright + curl_cffi cbo.gov path (ADR-017) covers the full archive directly. Engineering complexity is the cost we pay for methodological cleanliness.
 
-### Stage 2 — Filter
+**What we don't include.** Paywalled databases (no ProQuest, Factiva, Bloomberg, RavenPack); the financial press itself as embeddable text (no AP, Reuters, MarketWatch corpus); SSRN (no public historical archive); CFR (basis redundancy with PIIE).
 
-Each ingested article passes through one keyword filter:
-- Does its title + body contain at least 2 keywords from our canonical macro-financial keyword list?
+Ingestion is **content-neutral** — every article from every active basis-set source enters the corpus regardless of topic. There is **no pre-clustering topical filter** (ADR-020).
 
-The list (213 keywords across 11 categories) is anchored to the **JEL Classification System** — the American Economic Association's field-standard taxonomy for economics research. Every keyword maps to a specific JEL subcode: E (macroeconomics), F (international), G (financial), H6 (fiscal). The audit document lists the in-scope codes and what each operationalizes.
+### Stage 2 — Filter (date range + dedup only, ADR-020)
 
-**Why JEL?** Because "macro-financial content" needs an operational definition that doesn't depend on researcher taste. JEL gives us field-accepted codes that the AEA maintains. We're not inventing a taxonomy; we're using the field's.
+The filter stage does exactly two things:
+1. Restrict to publication dates in [2010-01-01, today].
+2. Remove near-duplicates within rolling 48-hour windows using MinHash (Broder 1997 / Henzinger 2006 threshold 0.85).
 
-**Why ≥2 matches?** A single keyword can match by accident — someone might mention "inflation" in an article about NFT prices. Two matches forces topical coherence without being so strict that we miss real signal.
+**No topical keyword filter is applied.** The basis-set source selection (Stage 1) is the only macro-scope constraint at ingest time. Topical relevance is decided post-clustering by a JEL-classifier step (Stage 5b below), applied symmetrically across sources using the AEA's published JEL taxonomy.
 
-**What the keyword list does NOT contain**: any named entity tied to a validation anchor narrative. No "Silicon Valley Bank", "Brexit", "Credit Suisse", "taper tantrum", etc. Including those would make anchor recovery circular (we'd be partly finding what we were filtering for). The list is purely conceptual JEL-anchored vocabulary; the validation step uses entirely separate machinery (Stage 8).
+**Why no keyword filter at this stage.** The previous design (ADR-015 → 016 → 018) used a 213-keyword JEL-anchored gate to determine macro relevance over title + body. That design had two problems. First, every basis-set source's institutional mandate is already in macro scope by construction, so the keyword gate was a second filter applied on top of the source filter — double-filtering. Second, mapping JEL categories to specific keywords required researcher judgment about which keywords represent each code — exactly the kind of judgment that's hard to defend in pre-registration. ADR-020 dropped the apparatus and shifted JEL classification post-clustering, where the cluster level provides enough content to apply a published taxonomy without intermediate keyword choices.
+
+The pre-reg sentence becomes: *"No pre-clustering topical filter is applied. The basis-set source selection is the only macro-scope constraint at ingest. Topic relevance is decided post-clustering by assigning each BERTopic cluster a primary JEL code from the AEA's published taxonomy, applied symmetrically across sources."*
 
 ### Stage 3 — Chunking
 
@@ -96,6 +105,23 @@ We run **BERTopic** (Grootendorst 2022), the field-standard pipeline for transfo
 **One granularity, not three.** The previous design merged clusters into three hierarchical levels ("fine", "medium", "coarse") at researcher-chosen silhouette thresholds. That layered structure had no literature anchor — published topic-model narrative studies (Bybee, Kelly, Manela & Xiu 2024 "Business News and Business Cycles"; Hansen, McMahon & Prat 2018 *QJE*; Larsen & Thorsrud 2019 *Journal of Econometrics*; Bertsch, Hull, Lumsdaine & Zhang 2021 *Economics Letters*) all report at a single granularity. We follow that precedent.
 
 **Naming**: every cluster gets two names. The **algorithmic name** is its top 5-10 c-TF-IDF terms joined — e.g., `inflation, transitory, supply-chain, base-effects, Powell, FOMC`. This is the canonical identifier used for all queries and analysis. Optionally, an LLM can generate a **human-readable display label** ("Transitory inflation debate, 2021") for the dashboard UI. The display label is cosmetic only — it never enters any calculation. If a reviewer asks "how did you name this narrative", the answer is: "We didn't — it has an algorithmic top-term list; the display label is post-hoc UI."
+
+### Stage 5b — Post-clustering JEL classification (ADR-020)
+
+After BERTopic produces clusters, we assign each cluster a primary **JEL code** from the American Economic Association's published Journal of Economic Literature classification (https://www.aeaweb.org/econlit/jelCodes.php). The procedure:
+
+1. For each cluster, take its top c-TF-IDF terms (the BERTopic representation of the cluster).
+2. For each top-level JEL code (A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, Y, Z), take the AEA's verbatim published description.
+3. Embed both the cluster term joinder and the JEL descriptions in the same Qwen3 space used for the clustering itself.
+4. Assign the cluster the JEL code whose prototype is the nearest cosine neighbor.
+
+Clusters with primary JEL in the **macro-finance scope** — codes **E** (Macroeconomics and Monetary), **F** (International), **G** (Financial), **H** (Public Economics, including fiscal H6) — are retained for the dynamics analysis (Stages 6-8). Clusters outside this scope (e.g., a cluster of labor-market papers landing in J, or healthcare papers landing in I) are reported with their JEL label and **excluded from dynamics fitting only** — they are NOT dropped from the embedded corpus. The full clustering output is preserved for diagnostic and replication purposes.
+
+**Why this is defensible.** JEL is a published, externally-maintained taxonomy that the AEA itself uses to classify journal submissions. We do not invent it, edit it, or add to it. We do not pick keywords that "represent" each code. We embed the AEA's own descriptions and let cosine similarity do the assignment — the same operation that drove the clustering in Stage 5. The macro-finance scope {E, F, G, H} is the standard mapping used in macro-finance research; if a reviewer asks "why these four codes", the answer is the JEL system's own definitions.
+
+**Why post-clustering and not pre.** Cluster-level content (typically 100-1000 documents per cluster, with their c-TF-IDF terms) provides much more signal than a single article's title + body, so classification at the cluster level is more reliable. And applying the classifier post-clustering means we never bias the embedding/clustering step toward any particular topic taxonomy.
+
+**Diagnostic.** The classifier outputs a `runner_up_gap` for every cluster — the cosine-similarity difference between its primary and second-best JEL code. A median gap below 0.05 across all clusters would indicate the classification is ambiguous; in that case we'd revisit (likely by expanding the JEL prototype text to include subcodes). The diagnostic ships with the JEL classifier output.
 
 ### Stage 6 — Volume signals (institutional + press)
 
@@ -281,4 +307,4 @@ Each phase boundary is a methodology checkpoint — significant decisions get an
 
 Full literature survey with overlap assessment and differentiation analysis is in `docs/related_work.md`.
 
-Detailed methodology audit per parameter lives in the ADRs (`docs/architecture_decisions.md`), particularly ADR-015 (JEL-anchored filter), ADR-016 (single-stage filtering), ADR-018 (named-events removal), and ADR-019 (comprehensive methodology lock-in).
+Detailed methodology audit per parameter lives in the ADRs (`docs/architecture_decisions.md`), particularly ADR-015 / 016 / 018 (historical filter evolution), ADR-019 (comprehensive methodology lock-in: chunker, BERTopic, dynamics, validation), and **ADR-020 (basis-set corpus framing; pre-clustering JEL keyword filter removed; NBER restored; CFR dropped; CEA added; post-clustering JEL classifier introduced)**. ADR-020 is the canonical authority for source selection and filtering as of 2026-05-20.

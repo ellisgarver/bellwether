@@ -1,38 +1,65 @@
 # =============================================================================
-# Outlet / Source Whitelist — Phase 2 Final Architecture (ADR-010)
+# Outlet / Source Whitelist — Phase 2 Basis-Set Architecture (ADR-020)
 # =============================================================================
-# Finalized 2026-05-11 per MND_PROJECT_SPEC.md rev2, which supersedes all prior
-# source architecture decisions.
+# Finalized 2026-05-20 per ADR-020 (basis-set framing). The semantic corpus
+# is the minimum set of sources spanning the eight independent dimensions of
+# US macro discourse; redundant or noise-dominated sources are excluded.
 #
-# The semantic corpus (text for embedding and clustering) has three tiers:
+# Basis dimension → source mapping (ADR-020):
 #
-#   Tier 1 — Institutional policy:
-#     Fed (all: FOMC, speeches incl. Jackson Hole, Beige Book, FEDS Notes, MPR, FSR),
-#     Regional Fed blogs (NY, SF, Chicago, Atlanta, Dallas, St. Louis, Cleveland),
-#     IMF (WEO/GFSR/F&D/Blog/WPs via Coveo + curl_cffi, ADR-014),
-#     BIS (QR/WPs), CEA,
-#     Congressional testimony (Treasury Sec; Fed Chair via fed.py),
-#     Treasury/OFR/FSOC
+#   1. US monetary authority           fed_board (Fed Board: FOMC, speeches,
+#                                                 Beige Book, FEDS Notes,
+#                                                 MPR, FSR, Jackson Hole)
+#   2. US monetary research voice      fed_ny, fed_sf, fed_chicago, fed_atlanta
+#   3. International macro authority   imf (WEO/GFSR/F&D/Blog/WPs via Coveo +
+#                                           curl_cffi, ADR-014)
+#   4. International CB network        bis (Quarterly Review + Working Papers +
+#                                           Bulletins + curated CB speeches,
+#                                           ADR-017)
+#   5. US fiscal authority             cbo (Budget/Economic Outlook via
+#                                            Playwright + curl_cffi, ADR-017)
+#                                       cea (Economic Report of the President
+#                                            via govinfo.gov ERP, ADR-020)
+#   6. US financial-stability research treasury_ofr (OFR Working Papers +
+#                                                    FSOC Annual Reports)
+#   7. US policy think-tank            brookings (Economic Studies + Hutchins)
+#                                       piie (international-policy commentary)
+#   8. Academic primary work           nber (direct URL enumeration, ADR-020)
+#      Academic-policy column          voxeu (CEPR full posts)
 #
-#   Tier 2 — Academic analytical:
-#     VoxEU/CEPR, Brookings, PIIE, CFR
-#     NBER (Phase 6 live RSS only — historical bulk retrieval failed)
-#     SSRN (Phase 6 live RSS only — no historical archive)
-#     arXiv REMOVED (ADR-012): 2017-only coverage, low macro volume.
-#     Jackson Hole REMOVED (ADR-012): covered by fed_board speeches ingestor.
+#   Cross-cutting Q&A register         congressional (Treasury Sec testimony;
+#                                                     Fed Chair via fed.py)
+#
+# REMOVED (ADR-020):
+#   cfr — basis-set redundancy with piie on the international-policy dimension.
+#         ~80% of CFR output is foreign-policy non-macro; the macro subset
+#         overlaps PIIE almost completely. Class retained in
+#         src/mnd/ingestion/institutional.py for backwards-compat data reads
+#         but is unwired from InstitutionalIngestor._sub_ingestors.
+#   ssrn — only 30-90 day RSS window; no public historical archive.
+#
+# RESTORED (ADR-020):
+#   nber — Phase 6 live-RSS-only restriction lifted. Direct URL enumeration
+#          of /papers/wNNNNN works (no Cloudflare/DataDome on paper detail
+#          pages; citation_* meta tags give structured metadata).
+#
+# Pre-clustering topic keyword filter REMOVED (ADR-020):
+#   The basis-set source selection is the only macro-content scope constraint
+#   at ingest. Topic relevance is decided post-clustering by
+#   mnd.clustering.jel_classifier — clusters are labeled with their primary
+#   JEL code from cluster-representative documents, and non-macro clusters
+#   (primary JEL ∉ {E, F, G, H}) are excluded from dynamics analysis only.
+#   config/topic_filter_keywords.yaml archived to
+#   scripts/archive/topic_filter_keywords_archived_adr020.yaml.
 #
 # JOURNALISM TIER REMOVED (ADR-010):
-#   AP News, Reuters, MarketWatch — removed from semantic corpus.
-#   Their journalism propagation signal is captured by the RavenPack dynamics
-#   layer (Layer 1B). See dynamics_layer section below.
+#   AP News, Reuters, MarketWatch — removed from semantic corpus. Their
+#   journalism propagation signal is captured by the Media Cloud Premium
+#   dynamics layer (Layer 1B, ADR-016).
 #
 # LAYER 2 — DETECTION (story counts only, no embedding):
 #   Media Cloud — daily story count time series by keyword/topic query.
 #   Fires candidate emergence flags before institutional characterization.
-#
-# The DYNAMICS LAYER (volume time series for SIR/logistic fitting) comes from
-# RavenPack RPA 1.0 Global Macro (Dow Jones Edition) via WRDS — NOT from this
-# whitelist. RavenPack is not ingested as text; it provides weekly article counts.
 #
 # retrieval values:
 #   fed_direct        — federalreserve.gov structured endpoints
@@ -135,23 +162,37 @@ tier_1_institutional_policy:
 
   - id: cea
     name: "Council of Economic Advisers"
-    domains: ["whitehouse.gov"]
-    retrieval: direct_fetch
-    cdx_url_patterns:
-      - "www.whitehouse.gov/cea/"
-    notes: "Economic Reports of the President, annual reports, issue briefs."
+    domains: ["api.govinfo.gov", "www.govinfo.gov"]
+    retrieval: govinfo_api
+    govinfo_collection: "ERP"
+    api_key_env: "GOVINFO_API_KEY"
+    document_types:
+      - cea_erp_chapter
+    notes: >
+      Economic Report of the President via the GPO govinfo.gov JSON API
+      (collection code ERP). 61 packages back to 1947 with chapter-level
+      granules; PDF text extraction via pypdf. ADR-020 (2026-05-20).
 
   - id: cbo
     name: "Congressional Budget Office"
     domains: ["cbo.gov"]
-    retrieval: institutional_rss
-    rss_feeds:
-      - "https://www.cbo.gov/publication/rss"
+    retrieval: direct_fetch
     document_types:
       - budget_outlook
       - economic_outlook
       - working_papers
-    notes: "Budget and Economic Outlook; long-run projections; working papers."
+      - monthly_budget_review
+      - cost_estimate
+      - blog_post
+    notes: >
+      Full cbo.gov archive via Playwright + curl_cffi hybrid (ADR-017).
+      Playwright headless Chromium clears the DataDome JS challenge once,
+      curl_cffi-with-cookies handles the ~25,000-URL sitemap walk.
+      govinfo.gov is NOT a viable replacement: GPO-deposit coverage is
+      uneven over time (~40 records 2010, ~6 records 2024) and would
+      introduce a non-random time-varying filter into the volume time
+      series. The Playwright path is the methodologically clean choice
+      (ADR-020 strategic call, 2026-05-20).
 
   # NOTE: Jackson Hole speeches are Fed Chair and governor speeches published on
   # federalreserve.gov — captured by the fed_board ingestor above. No separate
@@ -186,17 +227,19 @@ tier_2_academic_analytical:
   - id: nber
     name: "NBER Working Papers"
     domains: ["nber.org"]
-    retrieval: institutional_rss
-    rss_feeds:
-      - "https://www.nber.org/rss/new_working_papers.xml"
-    jel_codes_include:
-      - "E"    # Macroeconomics and Monetary Economics
-      - "F"    # International Economics
-      - "G"    # Financial Economics
-    document_content: "abstract_plus_introduction"
-    historical_corpus: false   # Historical bulk retrieval failed (bot-protected); Phase 6 live RSS only
-    phase_6_live: true
-    notes: "Abstracts + introductions (not full PDFs). Filter to JEL E/F/G. Timestamp = posting date. Historical archive inaccessible — RSS feed used for Phase 6 live updates only."
+    retrieval: direct_fetch
+    document_types:
+      - nber_working_paper
+    historical_corpus: true   # ADR-020: direct URL enumeration restores historical access
+    notes: >
+      Sequential /papers/wNNNNN enumeration. Paper detail pages are not
+      bot-protected (plain Drupal/nginx); citation_* meta tags expose
+      title/authors/date/DOI/PDF URL in Google Scholar convention.
+      No JEL pre-filter at ingest (ADR-020) — every paper is ingested
+      and JEL classification is applied post-clustering by
+      mnd.clustering.jel_classifier. Earlier ADR-017/019 deletion was
+      premised on a search-API restriction that does not apply to
+      paper detail pages. Body = abstract via trafilatura.
 
   # arXiv removed in ADR-012 / MND_PROJECT_SPEC rev3 (2026-05-13):
   # 2017-only coverage, low macro volume, not in spec.
@@ -254,29 +297,12 @@ tier_2_policy_analytical:
       - "www.piie.com/publications/"
     notes: "Full posts. Strong macro-financial coverage."
 
-  - id: cfr
-    name: "Council on Foreign Relations"
-    domains: ["cfr.org"]
-    retrieval: institutional_rss
-    rss_feeds:
-      - "https://www.cfr.org/rss/all"
-    cdx_url_patterns:
-      - "www.cfr.org/report/"
-      - "www.cfr.org/backgrounder/"
-      - "www.cfr.org/expert-brief/"
-      - "www.cfr.org/blog/"
-    document_types:
-      - report
-      - backgrounder
-      - expert_brief
-      - blog_post
-    macro_filter: true
-    notes: >
-      Geopolitical-financial narrative intersection; global macro policy.
-      Filter to macro-financial content (dollar dynamics, sovereign debt,
-      global monetary policy, trade). Reinstated in ADR-010 after being
-      dropped in prior whitelist; distinct macro-financial coverage from other
-      Tier 2 sources.
+# CFR removed by ADR-020 (basis-set redundancy with PIIE on the
+# international-policy dimension; ~80% of CFR output is foreign-policy
+# non-macro; the macro subset overlaps PIIE almost completely).
+# CFRIngestor class retained in src/mnd/ingestion/institutional.py for
+# backwards-compatible reads of pre-ADR-020 data files; not wired into
+# InstitutionalIngestor and not run in any new ingest.
 
 # -----------------------------------------------------------------------------
 # JOURNALISM TIER REMOVED (ADR-010)
