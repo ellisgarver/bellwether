@@ -1,5 +1,13 @@
 # ProQuest TDM Studio Setup Guide
 
+> ## ⚠️ SUPERSEDED — historical reference only (2026-05-04, ADR-008)
+>
+> ProQuest TDM Studio is no longer part of the methodology. ADR-008 removed paywalled-press text ingestion entirely. The semantic corpus is now institutional + academic policy text only (Fed, IMF, BIS, CBO, Treasury, Brookings, PIIE, CFR, VoxEU, congressional testimony). Press *volume* (no text) is captured via the Media Cloud API at Layer 1B / Layer 2 — see [`docs/METHODOLOGY.md`](METHODOLOGY.md).
+>
+> This document is kept for the historical record. The workflow it describes is not active.
+
+---
+
 This document explains how to get paywalled-outlet full text into the
 Macro Narrative Dynamics pipeline via ProQuest TDM Studio. The workflow has
 three parts: create a dataset in the TDM Studio web UI, export it to JSONL
