@@ -382,14 +382,17 @@ CASES: list[CoverageCase] = [
     CoverageCase(
         name="cea_erp_2023_govinfo",
         iterator_factory=lambda s, e: CEAIngestor().fetch(s, e),
-        # ERP-2023 was published in March 2023; chapter granules span the
-        # year. Each ERP is ~15-25 chapters so the floor is modest.
+        # ERP-2023 was published in March 2023; the test window covers all
+        # of 2023 so we capture the single ERP issued that year. Every
+        # chapter granule shares the same dateIssued, so we disable the
+        # date-span check (the floor + section check are the assertions
+        # that matter).
         window_start=date(2023, 1, 1),
         window_end=date(2023, 12, 31),
         floor_count=10,
         max_records=60,
         expected_sections={"cea_erp_chapter"},
-        min_date_span_days=1,  # all chapters share the same dateIssued
+        min_date_span_days=0,
         skip_check=requires_pypdf,
     ),
     CoverageCase(
@@ -400,7 +403,7 @@ CASES: list[CoverageCase] = [
         floor_count=10,
         max_records=60,
         expected_sections={"cea_erp_chapter"},
-        min_date_span_days=1,
+        min_date_span_days=0,
         skip_check=requires_pypdf,
     ),
     # -----------------------------------------------------------------
