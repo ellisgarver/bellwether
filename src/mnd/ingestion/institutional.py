@@ -882,9 +882,13 @@ class FedRegionalIngestor(Ingestor):
       Chicago Fed publications — XML sitemap URL discovery across multiple
         series (chicago-fed-letter, economic-perspectives, working-papers,
         policy-discussion-papers, profitwise, insights)
-      Atlanta Fed publications — sitemap walk via curl_cffi (atlantafed.org
-        bot-protects stdlib `requests`) across working papers, policy hub,
-        macroblog, and economy matters; RSS fallback for the macroblog.
+      Atlanta Fed publications — per-series JSON listing API
+        (/api/feed/getFilteredResults) via curl_cffi (atlantafed.org
+        bot-protects stdlib `requests`) across working papers, policy hub
+        papers, policy hub macroblog, and the macroeconomy hub feed
+        (catches Economy Matters articles). Sitemap was retired in the
+        2026 site redesign; see _fetch_atlanta docstring for the full
+        URL surface and historical-coverage caveats.
 
     The main FederalReserveIngestor (fed.py) covers Board communications.
     This ingestor captures regional analytical content.
@@ -892,8 +896,52 @@ class FedRegionalIngestor(Ingestor):
 
     source_id = "fed_regional"
 
-    _ATLANTA_RSS = "https://www.atlantafed.org/blogs/macroblog/rss"
-    _ATLANTA_SITEMAP = "https://www.atlantafed.org/sitemap.xml"
+    # Atlanta Fed listing API endpoint (Sitecore JSS-backed knockout.js feed
+    # behind /research-and-data/publications/* landing pages on the 2026 site
+    # redesign). Returns JSON of {Title, Url, Date, Teaser, Authors, ...}.
+    # Date filters use ISO YYYY-MM-DD on StartDateRange / EndDateRange.
+    _ATLANTA_API = "https://www.atlantafed.org/api/feed/getFilteredResults"
+
+    # Per-series (DataSourceId, ContextId, section_label, url_filter_regex).
+    # IDs are stable Sitecore item GUIDs scraped from each landing page's
+    # hidden form (#filter_feed_<guid>_pageNumber). If the site rotates them
+    # the integration test will catch the empty-result regression.
+    # url_filter_regex narrows the macroeconomy hub (which mixes Working
+    # Papers + macroblog + events + data products) to research articles.
+    _ATLANTA_FEEDS: list[tuple[str, str, str, str | None]] = [
+        # Working Papers (~145 items, 2019-02 onward)
+        (
+            "34e83453b5ee407cb4fdd56c6fb51bce",
+            "4bf680469cff43b29350606fdd631ece",
+            "working_paper",
+            r"/research-and-data/publications/working-papers/",
+        ),
+        # Policy Hub Papers (~69 items, 2020-01 onward)
+        (
+            "70bd0a45f4fa440b80a5836c8d2b0299",
+            "8ed08d49af54420bbeb018041669ff88",
+            "policy_hub",
+            r"/research-and-data/publications/policy-hub-papers/",
+        ),
+        # Policy Hub Macroblog (~50 items, 2022-10 onward — historical
+        # macroblog pre-2022 was deleted in the site redesign)
+        (
+            "d6fdcbee94bf47af96d7a79feb7c7d98",
+            "ca9e4c68de7744c2b5f91d759ab00947",
+            "macroblog",
+            r"/research-and-data/publications/policy-hub-macroblog/",
+        ),
+        # What-We-Study : Macroeconomy hub (~387 items, 2016-09 onward —
+        # mixed feed catches Economy Matters articles under
+        # /research-and-data/YYYY/.../ that the dedicated feeds miss).
+        # URL filter excludes events/data tools/external survey links.
+        (
+            "d3fce710cd4e4065b7d6943ec8cf2524",
+            "89350aa44d804a75af76bfd1137197b1",
+            "economy_matters",
+            r"^https://www\.atlantafed\.org/research-and-data/\d{4}/\d{2}/\d{2}/",
+        ),
+    ]
 
     # atlantafed.org returns 403 to stdlib `requests` from RCC/residential IPs
     # — same TLS-fingerprint class as IMF/CBO. curl_cffi with Chrome
@@ -916,15 +964,6 @@ class FedRegionalIngestor(Ingestor):
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Site": "none",
     }
-
-    # Atlanta Fed publication URL patterns. Captures from sitemap walk.
-    # The `(\d{4})` group captures year for window filtering.
-    _ATLANTA_URL_PATTERNS: list[tuple[str, str]] = [
-        (r"/research/publications/wp/(\d{4})/", "working_paper"),
-        (r"/research/publications/policy-hub/(\d{4})/", "policy_hub"),
-        (r"/blogs/macroblog/(\d{4})/", "macroblog"),
-        (r"/economy-matters/[a-z\-/]*?/(\d{4})/", "economy_matters"),
-    ]
 
     @classmethod
     def _atlanta_get(cls, url: str, **kwargs):
@@ -1110,392 +1149,288 @@ class FedRegionalIngestor(Ingestor):
     def _fetch_atlanta(
         self, start: date, end: date, seen: set[str]
     ) -> Iterator[Article]:
-        """Walk atlantafed.org sitemap across working papers, policy hub,
-        macroblog, and economy matters; fall back to macroblog RSS.
+        """Atlanta Fed publications via per-series JSON listing API.
 
-        Prior code used only the macroblog RSS, which (a) covers ~30 days,
-        (b) was returning 403 on RCC because atlantafed.org bot-protects
-        stdlib `requests`. Result: 0 atlanta records in the production
-        corpus.
+        URL surface (verified 2026-05-20). The 2026 site redesign retired
+        the old discovery surface entirely:
+          - ``/sitemap.xml`` → 302 to 404 page (gone)
+          - ``/blogs/macroblog/rss`` → HTML 404 (gone)
+          - ``/research/publications/{wp,policy-hub,...}`` → 404 (gone)
+          - ``/blogs/macroblog`` → 404 (gone)
+          - ``/economy-matters`` → 302 to ``/what-we-study`` (gone)
 
-        Sitemap discovery via curl_cffi reaches the full working-paper
-        archive (~150 papers/year × 15 years) and the policy hub backlog.
-        Macroblog historical content (pre-2022) was removed during the
-        site redesign; recent macroblog posts come from the sitemap if
-        present, otherwise RSS.
+        New strategy (per-series listing API, no HTML/sitemap scraping):
+        each publication landing page under ``/research-and-data/publications/*``
+        is rendered by a Sitecore JSS knockout.js feed that calls
+        ``/api/feed/getFilteredResults?DataSourceId=…&ContextId=…&PageSize=…
+        &PageNumber=…&StartDateRange=YYYY-MM-DD&EndDateRange=YYYY-MM-DD``
+        and returns JSON of ``{Title, Url, Date, Teaser, Authors, …}`` per
+        item. We hit this API directly for four series and merge the results:
+
+          1. Working Papers  (``/research-and-data/publications/working-papers/…``)
+             – ~145 items, 2019-02 onward
+          2. Policy Hub Papers
+             (``/research-and-data/publications/policy-hub-papers/…``)
+             – ~69 items, 2020-01 onward
+          3. Policy Hub Macroblog
+             (``/research-and-data/publications/policy-hub-macroblog/…``)
+             – ~50 items, 2022-10 onward
+          4. What-We-Study : Macroeconomy hub mixed feed
+             – ~387 items, 2016-09 onward; URL-filtered to Economy-Matters-
+             style ``/research-and-data/YYYY/MM/DD/…`` to catch articles
+             the dedicated feeds don't surface.
+
+        Hard site-side limitation: historical content removed in the redesign
+        is not recoverable from atlantafed.org (working papers pre-2019,
+        macroblog pre-2022, original Economy Matters pre-2016). The
+        ``stable_history_gap`` extra_meta flag is set on every yielded
+        record so downstream coverage QA can join against it.
+
+        The body fetch still goes through ``_atlanta_get`` (curl_cffi
+        Chrome131 impersonation) because article pages remain bot-protected.
+        See ``_ATLANTA_FEEDS`` for the (DataSourceId, ContextId, section,
+        url_filter_regex) tuples.
         """
-        yielded_from_sitemap = 0
+        # Window-cap the API query: API ignores StartDateRange in the
+        # future, so cap end at today.
+        api_start = start.isoformat()
+        api_end = min(end, date.today()).isoformat()
 
-        try:
-            resp = self._atlanta_get(self._ATLANTA_SITEMAP, timeout=30.0)
-            if getattr(resp, "status_code", 200) >= 400:
-                raise RuntimeError(f"sitemap HTTP {resp.status_code}")
-            tree = ET.fromstring(resp.content)
-        except Exception as exc:
-            log.warning("Atlanta Fed sitemap fetch failed: %s — will fall back to RSS", exc)
-            tree = None
+        candidates: list[tuple[str, str, date, str, str]] = []
+        # (url, section, pub_date, title, teaser)
 
-        if tree is not None:
-            ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-            # Handle both flat sitemap and sitemap index.
-            child_sitemaps: list[str] = [
-                (s.findtext("s:loc", default="", namespaces=ns) or "")
-                for s in tree.findall("s:sitemap", ns)
-            ]
-            if not child_sitemaps:
-                child_sitemaps = [self._ATLANTA_SITEMAP]
-            else:
-                child_sitemaps = [s for s in child_sitemaps if s]
-
-            compiled = [(re.compile(p), s) for p, s in self._ATLANTA_URL_PATTERNS]
-            candidate_urls: list[tuple[str, int, str]] = []  # (url, year, section)
-
-            for sm in child_sitemaps:
+        for ds_id, ctx_id, section, url_filter in self._ATLANTA_FEEDS:
+            url_pat = re.compile(url_filter) if url_filter else None
+            page_num = 1
+            seen_pages = 0
+            while True:
+                params = {
+                    "DataSourceId": ds_id,
+                    "ContextId": ctx_id,
+                    "PageSize": "100",
+                    "PageNumber": str(page_num),
+                    "StartDateRange": api_start,
+                    "EndDateRange": api_end,
+                }
                 try:
-                    if sm == self._ATLANTA_SITEMAP:
-                        sub_tree = tree
-                    else:
-                        sub_resp = self._atlanta_get(sm, timeout=30.0)
-                        sub_tree = ET.fromstring(sub_resp.content)
-                except Exception as exc:
-                    log.debug("Atlanta child sitemap %s failed: %s", sm, exc)
-                    continue
-                for url_el in sub_tree.findall("s:url", ns):
-                    loc = url_el.findtext("s:loc", default="", namespaces=ns) or ""
-                    if not loc:
-                        continue
-                    for pat, section in compiled:
-                        m = pat.search(loc)
-                        if not m:
-                            continue
-                        try:
-                            year = int(m.group(1))
-                        except ValueError:
-                            continue
-                        if year < start.year or year > end.year:
-                            break
-                        candidate_urls.append((loc, year, section))
-                        break
-
-            for url, year, section in candidate_urls:
-                if url in seen:
-                    continue
-                seen.add(url)
-                try:
-                    page = self._atlanta_get(url, timeout=30.0)
-                    if getattr(page, "status_code", 200) >= 400:
-                        log.debug("Atlanta page %s: HTTP %s", url, page.status_code)
-                        continue
-                    body, title, author, meta_date = _fetch_page_full(
-                        url, min_words=50,
-                        getter=lambda u, **kw: self._atlanta_get(u, **kw),
+                    resp = self._atlanta_get(
+                        self._ATLANTA_API, params=params, timeout=30.0
                     )
+                    if getattr(resp, "status_code", 200) >= 400:
+                        log.warning(
+                            "Atlanta API %s page=%d HTTP %s",
+                            section, page_num, resp.status_code,
+                        )
+                        break
+                    text = resp.text or ""
+                    if not text.strip():
+                        # API returns empty body when no rows match the
+                        # date filter (e.g. asking working-papers for 2013).
+                        break
+                    payload = json.loads(text)
                 except Exception as exc:
-                    log.debug("Atlanta page %s fetch failed: %s", url, exc)
-                    continue
-                if not body or len(body.split()) < 50:
-                    continue
-                pub_date = meta_date if (meta_date and meta_date.year == year) else date(year, 6, 15)
-                if pub_date < start or pub_date > end:
-                    continue
-                yield _make_article(
-                    source_id="fed_atlanta",
-                    url=url,
-                    published_at=pub_date.isoformat() + "T00:00:00Z",
-                    title=title or f"Atlanta Fed {section.replace('_',' ').title()} {year}",
-                    body=body,
-                    author=author,
-                    section=section,
-                    tier=1,
-                    document_type="fed_regional_research",
-                )
-                yielded_from_sitemap += 1
-                time.sleep(0.5)
+                    log.warning("Atlanta API %s page=%d failed: %s", section, page_num, exc)
+                    break
 
-        if yielded_from_sitemap == 0:
-            log.info(
-                "Atlanta Fed: 0 articles from sitemap walk — falling back to "
-                "macroblog RSS (recent content only)."
+                items_raw = payload.get("FilteredFeedItemsJson") or "[]"
+                try:
+                    items = json.loads(items_raw)
+                except Exception as exc:
+                    log.warning("Atlanta API %s page=%d bad JSON: %s", section, page_num, exc)
+                    break
+
+                if not items:
+                    break
+
+                for it in items:
+                    url = it.get("Url") or it.get("UrlNoLang") or ""
+                    if not url:
+                        continue
+                    if url_pat and not url_pat.search(url):
+                        continue
+                    date_raw = it.get("Date") or ""
+                    pub_date = _parse_date_flexible(date_raw[:10])
+                    if not pub_date or pub_date < start or pub_date > end:
+                        continue
+                    title = (it.get("Title") or "").strip()
+                    teaser = (it.get("Teaser") or "").strip()
+                    candidates.append((url, section, pub_date, title, teaser))
+
+                # API caps results around 100-200; stop after first empty
+                # or short page.
+                if len(items) < 100:
+                    break
+                page_num += 1
+                seen_pages += 1
+                if seen_pages > 20:  # safety bound
+                    break
+                time.sleep(0.3)
+
+        if not candidates:
+            log.warning(
+                "Atlanta Fed: 0 candidates from listing API across all four "
+                "series — listing API IDs may have rotated; investigate."
             )
-            for entry in _parse_rss(self._ATLANTA_RSS):
-                pub_date = _entry_date(entry)
-                if not pub_date or pub_date < start or pub_date > end:
-                    continue
-                url = entry.get("link", "")
-                if not url or url in seen:
-                    continue
-                seen.add(url)
-                title = entry.get("title", "Atlanta Fed macroblog")
-                body = _extract_body(url) or BeautifulSoup(
-                    entry.get("summary", ""), "lxml"
-                ).get_text(strip=True)
-                if not body or len(body.split()) < 50:
-                    continue
-                yield _make_article(
-                    source_id="fed_atlanta",
-                    url=url,
-                    published_at=pub_date.isoformat() + "T00:00:00Z",
-                    title=title,
-                    body=body,
-                    author=entry.get("author"),
-                    section="macroblog",
-                    tier=1,
-                    document_type="fed_regional_research",
-                    extra_meta={"historical_gap": True},
+            return
+
+        # Deduplicate by URL (the macroeconomy hub overlaps the dedicated
+        # working-papers / macroblog feeds).
+        unique: dict[str, tuple[str, date, str, str]] = {}
+        for url, section, pub_date, title, teaser in candidates:
+            if url in unique:
+                continue
+            unique[url] = (section, pub_date, title, teaser)
+
+        for url, (section, pub_date, title, teaser) in unique.items():
+            if url in seen:
+                continue
+            seen.add(url)
+            try:
+                body, fetched_title, author, meta_date = _fetch_page_full(
+                    url,
+                    min_words=50,
+                    getter=lambda u, **kw: self._atlanta_get(u, **kw),
                 )
-                time.sleep(0.5)
+            except Exception as exc:
+                log.debug("Atlanta page %s fetch failed: %s", url, exc)
+                continue
+            # Fall back to API-provided teaser if the article page body
+            # comes back too thin (some macroblog posts are ~80 words).
+            if not body or len(body.split()) < 50:
+                if teaser and len(teaser.split()) >= 30:
+                    body = teaser
+                else:
+                    continue
+            yield _make_article(
+                source_id="fed_atlanta",
+                url=url,
+                published_at=pub_date.isoformat() + "T00:00:00Z",
+                title=title or fetched_title or f"Atlanta Fed {section.replace('_', ' ').title()}",
+                body=body,
+                author=author,
+                section=section,
+                tier=1,
+                document_type="fed_regional_research",
+            )
+            time.sleep(0.5)
 
 
 class CBOIngestor(Ingestor):
-    """Congressional Budget Office publications.
+    """Congressional Budget Office publications — via Wayback Machine.
 
-    Network: every cbo.gov publication-page fetch goes through
-    ``curl_cffi.requests`` with ``impersonate='chrome131'``. cbo.gov sits
-    behind DataDome bot protection that fingerprints TLS (JA3/JA4) and 403s
-    stdlib `requests` regardless of UA — the same class of issue ADR-014
-    solved for imf.org behind Akamai. The 2026-05-18 production run with
-    stdlib requests yielded 0 publications out of 25,403 candidate URLs
-    (every fetch 403'd from the RCC IP range, despite an earlier dry-run
-    succeeding before DataDome tightened its policy).
+    Why Wayback (and not cbo.gov direct):
+      cbo.gov is fronted by DataDome bot protection. The history of attempts:
+        - ADR-013/014-era curl_cffi chrome131 impersonation — defeated 2026-05-18
+          when DataDome tightened its TLS/header signal (403 from the homepage).
+        - ADR-017 Playwright + curl_cffi-with-cookies hybrid — defeated
+          2026-05-20: DataDome now detects the headless-Chromium runtime
+          fingerprint and serves the JS challenge interstitial without ever
+          resolving it (title='cbo.gov', body_len=0 after 20s+). The
+          "clearance" cookie Playwright captures is a challenge-stub cookie,
+          not real clearance, and DataDome rotates its value on every
+          response. curl_cffi requests carrying these cookies all 403.
+      govinfo.gov was considered (ADR-020) and rejected: GPO deposit coverage
+      is uneven over time (41 records 2010 → 6 records 2024), introducing
+      a non-random time-varying filter that defeats the basis-set framing.
 
-    ADR-017 fix (2026-05-19): Playwright launches a real headless Chromium
-    once per ingest run to clear DataDome's JS execution challenge and
-    capture the resulting clearance cookies (~3-5s). Those cookies are then
-    reused across all curl_cffi fetches for the duration of the ingest —
-    avoiding the per-URL browser overhead that would make a 25k-URL walk
-    impractical. On a burst of 403s mid-walk, cookies are invalidated and
-    re-acquired (up to 3 times) so a rotated DataDome session doesn't
-    abort the job. Requires ``pip install playwright && playwright install
-    chromium`` in the conda env on RCC.
+    Wayback Machine has no DataDome and serves clean snapshot HTML for
+    cbo.gov/publication/* URLs going back to 2010, preserving the basis-set
+    "cbo.gov content" choice — we just retrieve it via the archive instead
+    of direct.
 
-    Listing path: cbo.gov's sitemap.xml is NOT bot-protected and returns
-    200 from any UA. We walk the sitemap index to enumerate candidate
-    publication URLs in the requested window, then fetch each publication
-    page via curl_cffi-with-cookies.
+    Network architecture:
+      1. CDX query: ``web.archive.org/cdx/search/cdx`` enumerates unique
+         cbo.gov/publication/* URLs that have at least one 200/text/html
+         snapshot in the requested window. Queries are sharded by year to
+         keep result sets under the Wayback rate-limit ceiling (a single
+         query for >~5k rows triggers 503). Each query uses
+         ``collapse=urlkey`` so we get one (latest) snapshot per publication.
+      2. Snapshot fetch: ``web.archive.org/web/{ts}id_/{url}`` — the ``id_``
+         modifier returns the raw archived body, no Wayback toolbar rewrite.
+         Page-level extraction via the same ``_fetch_page_full`` pipeline
+         used elsewhere (trafilatura + BS4 fallback).
+      3. Authoritative date: from the page's own structured metadata
+         (Drupal's ``<meta name="dcterms.created">`` or trafilatura's date
+         extraction). The Wayback snapshot timestamp is the LAST-CRAWLED
+         date and is only used as a coarse fallback when the page lacks
+         any structured publication date.
 
-    `lastmod` is the last-edit date, not publication date — CBO occasionally
-    edits prior publications. We add a ±365-day slop to the window when
-    filtering by lastmod, then re-validate the publication date extracted
-    from the page itself (which is the source of truth for `published_at`).
+    Politeness:
+      - 0.5s sleep between CDX shard queries (Wayback rate-limits per minute).
+      - 0.3s sleep between snapshot fetches.
+      - Exponential backoff retry on Wayback 5xx / 429 — never 403.
+
+    Operational notes:
+      - No external dependencies beyond stdlib requests. Playwright and
+        curl_cffi are NOT used by this ingestor; both were ineffective
+        against cbo.gov's current DataDome policy.
+      - The canonical ``url`` field on each emitted Article is the
+        cbo.gov publication URL, NOT the Wayback wrapper, so downstream
+        dedupe / cluster reporting matches the cbo.gov source-set framing.
+      - If DataDome's posture relaxes in the future (or we acquire a paid
+        scraping path), the ingestor can be swapped back to cbo.gov direct
+        without changing the wrapper signature.
     """
 
     source_id = "cbo"
 
-    _SITEMAP_INDEX = "https://www.cbo.gov/sitemap.xml"
-    _LIST_URL = "https://www.cbo.gov/publications"
-    _RSS_URL = "https://www.cbo.gov/publication/rss"
-    _CBO_BASE = "https://www.cbo.gov"
+    # Wayback Machine endpoints
+    _CDX_API = "https://web.archive.org/cdx/search/cdx"
+    # 'id_' modifier returns the raw archived response body, no rewrite/banner
+    _SNAP_PREFIX = "https://web.archive.org/web/{ts}id_/{url}"
 
-    # Full Chrome navigation header set + curl_cffi TLS fingerprint together
-    # defeat DataDome's bot filter. UA alone or TLS alone is rejected.
-    _CBO_HEADERS: dict = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/131.0.0.0 Safari/537.36"
-        ),
-        "Accept": (
-            "text/html,application/xhtml+xml,application/xml;q=0.9,"
-            "image/avif,image/webp,image/apng,*/*;q=0.8"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"macOS"',
-    }
+    # User-Agent for the Wayback request (identifies the academic project)
+    _UA = (
+        "Mozilla/5.0 (compatible; MacroNarrativeDynamics/0.1; "
+        "academic research; via web.archive.org)"
+    )
 
-    # Class-level cookie cache: DataDome clearance cookie acquired via
-    # Playwright is reused across all subsequent curl_cffi fetches until
-    # invalidated (e.g. after a 403). Acquiring the cookie launches a real
-    # Chromium browser, waits for DataDome's JS challenge to complete, then
-    # extracts the resulting cookie jar. The cookie is typically valid for
-    # hours, so one acquisition amortizes across tens of thousands of fetches.
-    _cookie_cache: dict[str, str] = {}
-    _cookie_acquired_at: float = 0.0
-
-    @classmethod
-    def _acquire_cookies(cls) -> bool:
-        """Launch headless Chromium, visit cbo.gov, capture DataDome clearance cookie.
-
-        Returns True if cookies were acquired (or already cached), False on
-        failure (Playwright not installed, Chromium not available, challenge
-        timed out). On failure, callers fall through to curl_cffi-only fetches
-        which will 403 — surfacing the failure rather than degrading silently.
-        """
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            log.error(
-                "Playwright not installed — cannot acquire DataDome cookies for cbo.gov. "
-                "Install with `pip install playwright && playwright install chromium`."
-            )
-            return False
-
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                ctx = browser.new_context(
-                    user_agent=cls._CBO_HEADERS["User-Agent"],
-                    viewport={"width": 1280, "height": 800},
-                    locale="en-US",
-                )
-                page = ctx.new_page()
-                # Visit homepage — triggers DataDome challenge if any.
-                page.goto(cls._CBO_BASE + "/", wait_until="networkidle", timeout=45000)
-                # Visit a publication URL — confirms challenge cleared and
-                # the cookie is valid for the publication path.
-                page.goto(cls._CBO_BASE + "/publications", wait_until="networkidle", timeout=45000)
-                cookies = ctx.cookies(cls._CBO_BASE)
-                browser.close()
-            jar = {c["name"]: c["value"] for c in cookies}
-            if not jar:
-                log.error("Playwright session for cbo.gov produced no cookies")
-                return False
-            cls._cookie_cache = jar
-            cls._cookie_acquired_at = time.time()
-            log.info("Acquired %d cookies for cbo.gov (Playwright); names: %s",
-                     len(jar), ",".join(sorted(jar)[:5]))
-            return True
-        except Exception as exc:
-            log.error("Playwright cookie acquisition for cbo.gov failed: %s", exc)
-            return False
-
-    @classmethod
-    def _cbo_get(cls, url: str, **kwargs):
-        """HTTP GET for cbo.gov URLs.
-
-        Layered defense against DataDome bot protection:
-          1. First use call triggers a Playwright session to obtain a fresh
-             DataDome clearance cookie (~3-5s, one-time per ingest run).
-          2. Every subsequent fetch is a fast curl_cffi GET with Chrome TLS
-             impersonation AND the Playwright-acquired cookies — no per-URL
-             browser overhead.
-
-        If Playwright isn't installed or the challenge fails, falls through to
-        cookie-less curl_cffi which will 403 — surfacing the failure loudly
-        rather than producing another silent 0-yield run.
-        """
-        # Acquire cookies on first call. Re-acquire if the cache is empty
-        # (e.g. a previous 403 invalidated them).
-        if not cls._cookie_cache:
-            cls._acquire_cookies()
-
-        try:
-            from curl_cffi import requests as cffi_requests
-            kwargs.setdefault("impersonate", "chrome131")
-            kwargs.setdefault("headers", cls._CBO_HEADERS)
-            if cls._cookie_cache:
-                kwargs.setdefault("cookies", dict(cls._cookie_cache))
-            return cffi_requests.get(url, **kwargs)
-        except ImportError:
-            log.error(
-                "curl_cffi not installed; CBO fetches will 403 from DataDome. "
-                "Install with `pip install curl_cffi` (see requirements.txt)."
-            )
-            kwargs.setdefault("headers", cls._CBO_HEADERS)
-            if cls._cookie_cache:
-                kwargs.setdefault("cookies", dict(cls._cookie_cache))
-            return requests.get(url, **kwargs)
-
-    @classmethod
-    def _invalidate_cookies(cls) -> None:
-        """Drop cached cookies — forces re-acquisition on next _cbo_get call.
-
-        Triggered by the fail-fast 403 path inside fetch() so a rotated
-        DataDome session can be re-acquired mid-walk without aborting.
-        """
-        cls._cookie_cache = {}
-        cls._cookie_acquired_at = 0.0
-
-    # Slop applied to lastmod window — CBO edits older publications, and
-    # they appear to do periodic sitemap-wide rebuilds (~6000 items show
-    # lastmod=2019 from one such event). 365 days catches edited pubs from
-    # neighboring years; the page-date filter inside fetch() is the final
-    # truth. For a full 2010-2026 historical run the slop is moot.
-    _LASTMOD_SLOP_DAYS = 365
+    # Wayback CDX rows can be large; shard the requested window by year to
+    # stay under the per-query 503 ceiling.
+    _CDX_SHARD_YEARS = 1
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
+        candidates = list(self._enumerate_wayback_candidates(start, end))
+        log.info(
+            "CBO: Wayback CDX found %d unique cbo.gov/publication/* URLs in "
+            "[%s..%s]",
+            len(candidates), start, end,
+        )
         seen: set[str] = set()
         yielded = 0
-        candidates = list(self._enumerate_sitemap_candidates(start, end))
-        log.info(
-            "CBO: sitemap enumeration found %d candidate publication URLs "
-            "with lastmod in [%s ± %dd]",
-            len(candidates), f"{start}..{end}", self._LASTMOD_SLOP_DAYS,
-        )
-        consecutive_403s = 0
-        cookie_reacquire_attempts = 0
-        for url, _lastmod in candidates:
-            if url in seen:
+        for original_url, snapshot_ts in candidates:
+            if original_url in seen:
                 continue
-            seen.add(url)
-            # 403 recovery: after N consecutive 403s, invalidate the cached
-            # DataDome cookies and re-acquire via Playwright (ADR-017). Cookies
-            # rotate periodically; this lets us recover mid-walk without
-            # restarting the SLURM job. After K failed re-acquisitions, give up.
-            if consecutive_403s >= 50:
-                if cookie_reacquire_attempts < 3:
-                    cookie_reacquire_attempts += 1
-                    log.warning(
-                        "CBO: %d consecutive 403s — invalidating cached cookies "
-                        "and re-acquiring via Playwright (attempt %d/3)",
-                        consecutive_403s, cookie_reacquire_attempts,
-                    )
-                    type(self)._invalidate_cookies()
-                    if type(self)._acquire_cookies():
-                        consecutive_403s = 0
-                        # Retry this URL once with fresh cookies.
-                        seen.discard(url)
-                        continue
-                    log.warning("CBO: cookie re-acquisition failed — continuing")
-                else:
-                    log.warning(
-                        "CBO: %d consecutive 403s after %d cookie re-acquisitions "
-                        "— aborting sitemap walk. DataDome blocking definitively. "
-                        "Treated as known coverage gap.",
-                        consecutive_403s, cookie_reacquire_attempts,
-                    )
-                    break
-            try:
-                resp = self._cbo_get(url, timeout=30.0)
-                if resp.status_code == 403:
-                    consecutive_403s += 1
-                    log.debug("CBO %s: HTTP 403 — skipping (consecutive: %d)", url, consecutive_403s)
-                    continue
-                if resp.status_code == 404:
-                    consecutive_403s = 0
-                    log.debug("CBO %s: HTTP 404 — skipping", url)
-                    continue
-                resp.raise_for_status()
-                consecutive_403s = 0
-            except Exception as exc:
-                log.debug("CBO %s: %s", url, exc)
-                continue
+            seen.add(original_url)
+            snap_url = self._SNAP_PREFIX.format(ts=snapshot_ts, url=original_url)
 
             body, fetched_title, _author, page_date = _fetch_page_full(
-                url, min_words=50, getter=self._cbo_get,
+                snap_url, min_words=50, getter=self._wayback_get,
             )
-            # Fall back to lastmod ONLY if page date missing — better than dropping
-            published = page_date or _lastmod
+            # Wayback snapshot timestamp is last-crawled, not publication
+            # date. Prefer the page's own structured metadata; fall back
+            # to the snapshot timestamp only if no page-date is present.
+            published = page_date or self._ts_to_date(snapshot_ts)
             if not published or published < start or published > end:
+                log.debug(
+                    "CBO %s: dropped (page_date=%s ts=%s out of [%s..%s])",
+                    original_url, page_date, snapshot_ts, start, end,
+                )
                 continue
-            title = fetched_title or ""
-            # ADR-016: no Stage 1 topic filter. Single canonical topic filter
-            # operates at Stage 2 over title+body, where the body provides the
-            # signal a title-only filter would miss asymmetrically.
             if not body or len(body.split()) < 50:
+                log.debug(
+                    "CBO %s: body too short (%d words)",
+                    original_url, len(body.split()) if body else 0,
+                )
                 continue
             yield _make_article(
                 source_id=self.source_id,
-                url=url,
+                # Canonical cbo.gov URL — NOT the Wayback wrapper. Keeps the
+                # source-set framing on cbo.gov even though retrieval went
+                # through the archive.
+                url=original_url,
                 published_at=published.isoformat() + "T00:00:00Z",
-                title=title or "CBO publication",
+                title=fetched_title or "CBO publication",
                 body=body,
                 author="CBO",
                 section="cbo_publication",
@@ -1503,195 +1438,153 @@ class CBOIngestor(Ingestor):
                 document_type="cbo_publication",
             )
             yielded += 1
-            time.sleep(0.5)
-
+            time.sleep(0.3)
         if yielded == 0:
-            # ADR-016: do not introduce source-specific fallback paths (Wayback
-            # snapshots, third-party mirrors) just to close one gap. CBO is a
-            # documented coverage gap until cbo.gov direct retrieval works.
-            # Legacy archive + RSS scrapes are retained ONLY for recent
-            # content; they share the same DataDome backend and typically
-            # fail too, but cost is bounded.
             log.warning(
-                "CBO: 0 publications from cbo.gov (DataDome-blocked). "
-                "Trying legacy archive + RSS — recent items only if they "
-                "happen to slip past DataDome. Documented coverage gap."
+                "CBO: 0 publications from Wayback in [%s..%s]. Either the "
+                "window has no archived snapshots or Wayback CDX is failing "
+                "(check upstream availability of web.archive.org).",
+                start, end,
             )
-            for article in self._fetch_archive(start, end, seen):
-                yield article
-                yielded += 1
-            if yielded == 0:
-                yield from self._fetch_rss(start, end, seen)
 
-    def _enumerate_sitemap_candidates(
+    # ------------------------------------------------------------------
+    # Wayback CDX enumeration
+    # ------------------------------------------------------------------
+
+    def _enumerate_wayback_candidates(
         self, start: date, end: date
-    ) -> Iterator[tuple[str, date | None]]:
-        """Walk the sitemap index, return (url, lastmod) for in-window publications.
+    ) -> Iterator[tuple[str, str]]:
+        """Yield (cbo.gov publication URL, Wayback timestamp YYYYMMDDhhmmss).
 
-        Yields URLs whose lastmod is within [start - SLOP, end + SLOP]. Final
-        date validation happens via the publication page itself.
+        Shards the requested window into year-sized CDX queries to keep
+        each result set under the Wayback rate-limiter's 503 ceiling.
+        Dedupes URLs across shards (a URL crawled in multiple years yields
+        only its earliest in-window snapshot — sufficient since the body
+        is the same).
         """
-        slop = timedelta(days=self._LASTMOD_SLOP_DAYS)
-        lo, hi = start - slop, end + slop
-        try:
-            resp = self._cbo_get(self._SITEMAP_INDEX, timeout=30.0)
-            resp.raise_for_status()
-        except Exception as exc:
-            log.warning("CBO sitemap index fetch failed: %s", exc)
-            return
-
-        try:
-            # Strip default-namespace so xpath-like access is simpler
-            index_xml = re.sub(r' xmlns="[^"]+"', "", resp.text, count=1)
-            root = ET.fromstring(index_xml)
-        except ET.ParseError as exc:
-            log.warning("CBO sitemap index parse failed: %s", exc)
-            return
-
-        sub_sitemaps = [sm.findtext("loc", "").strip() for sm in root.findall("sitemap")]
-        sub_sitemaps = [s for s in sub_sitemaps if s]
-        log.info("CBO sitemap index lists %d sub-sitemaps", len(sub_sitemaps))
-
-        for sm_url in sub_sitemaps:
-            try:
-                sm_resp = self._cbo_get(sm_url, timeout=30.0)
-                sm_resp.raise_for_status()
-            except Exception as exc:
-                log.debug("CBO sub-sitemap %s: %s", sm_url, exc)
-                continue
-            try:
-                sm_xml = re.sub(r' xmlns="[^"]+"', "", sm_resp.text, count=1)
-                sm_root = ET.fromstring(sm_xml)
-            except ET.ParseError as exc:
-                log.debug("CBO sub-sitemap %s parse: %s", sm_url, exc)
-                continue
-            for url_el in sm_root.findall("url"):
-                loc = (url_el.findtext("loc") or "").strip()
-                lastmod_str = (url_el.findtext("lastmod") or "").strip()
-                if not loc or "/publication/" not in loc:
+        seen_urls: set[str] = set()
+        for shard_start, shard_end in self._year_shards(start, end):
+            rows = self._cdx_fetch(shard_start, shard_end)
+            for original_url, ts in rows:
+                if original_url in seen_urls:
                     continue
-                # Normalize: drop trailing /html so we hit the canonical URL
-                if loc.endswith("/html"):
-                    loc = loc[:-5]
-                lastmod = None
-                if lastmod_str:
-                    try:
-                        lastmod = date.fromisoformat(lastmod_str[:10])
-                    except ValueError:
-                        pass
-                if lastmod is None or lo <= lastmod <= hi:
-                    yield loc, lastmod
-            time.sleep(0.2)
-
-    def _fetch_archive(
-        self, start: date, end: date, seen: set[str]
-    ) -> Iterator[Article]:
-        """Legacy archive scrape — Drupal listing at cbo.gov/publications.
-
-        Kept as a fallback; expected to fail under DataDome bot protection.
-        """
-        page = 0
-        past_window = False
-        while not past_window:
-            try:
-                resp = self._cbo_get(
-                    self._LIST_URL,
-                    params={"page": page},
-                    timeout=30.0,
-                )
-                if resp.status_code == 403:
-                    log.debug("CBO publications blocked (HTTP 403) — skipping archive")
-                    return
-                resp.raise_for_status()
-            except Exception as exc:
-                log.warning("CBO archive page %d: %s", page, exc)
-                return
-
-            soup = BeautifulSoup(resp.text, "lxml")
-            rows = (
-                soup.select(".views-row")
-                or soup.select("li.views-row")
-                or soup.select("article")
-                or soup.select(".pub-listing-item")
-            )
-            if not rows:
-                break
-
-            for row in rows:
-                link = row.find("a", href=True)
-                if not link:
-                    continue
-                href = link["href"]
-                url = urljoin(self._CBO_BASE, href)
-                title = link.get_text(strip=True)
-
-                date_el = row.find("time") or row.find(class_=lambda c: c and "date" in c.lower() if c else False)
-                date_text = date_el.get("datetime", "") or (date_el.get_text(strip=True) if date_el else "")
-                pub_date = _parse_date_flexible(date_text)
-                if not pub_date:
-                    pub_date = _parse_year_from_text(row.get_text(" ", strip=True), start, end)
-                if not pub_date:
-                    continue
-
-                if pub_date > end:
-                    continue
-                if pub_date < start:
-                    past_window = True
-                    continue
-
-                # ADR-016: no Stage 1 topic filter.
-                if url in seen:
-                    continue
-                seen.add(url)
-
-                body = _extract_body(url, min_words=50)
-                if not body or len(body.split()) < 50:
-                    continue
-
-                yield _make_article(
-                    source_id=self.source_id,
-                    url=url,
-                    published_at=pub_date.isoformat() + "T00:00:00Z",
-                    title=title,
-                    body=body,
-                    author="CBO",
-                    section="cbo_publication",
-                    tier=1,
-                    document_type="cbo_publication",
-                )
-                time.sleep(1.0)
-
-            page += 1
+                seen_urls.add(original_url)
+                yield original_url, ts
+            # Polite delay between shards — Wayback rate-limits per minute
             time.sleep(0.5)
 
-    def _fetch_rss(
-        self, start: date, end: date, seen: set[str]
-    ) -> Iterator[Article]:
-        for entry in _parse_rss(self._RSS_URL):
-            pub_date = _entry_date(entry)
-            if not pub_date or pub_date < start or pub_date > end:
-                continue
-            url = entry.get("link", "")
-            if not url or url in seen:
-                continue
-            seen.add(url)
-            title = entry.get("title", "CBO publication")
-            # ADR-016: no Stage 1 topic filter.
-            body = _extract_body(url) or BeautifulSoup(entry.get("summary", ""), "lxml").get_text(strip=True)
-            if not body or len(body.split()) < 50:
-                continue
-            yield _make_article(
-                source_id=self.source_id,
-                url=url,
-                published_at=pub_date.isoformat() + "T00:00:00Z",
-                title=title,
-                body=body,
-                author="CBO",
-                section="cbo_publication",
-                tier=1,
-                document_type="cbo_publication",
-            )
-            time.sleep(0.5)
+    def _year_shards(
+        self, start: date, end: date
+    ) -> Iterator[tuple[date, date]]:
+        """Split [start, end] into ``_CDX_SHARD_YEARS``-year chunks."""
+        cur = start
+        while cur <= end:
+            shard_end = date(cur.year + self._CDX_SHARD_YEARS - 1, 12, 31)
+            if shard_end > end:
+                shard_end = end
+            yield cur, shard_end
+            cur = date(shard_end.year + 1, 1, 1)
+
+    def _cdx_fetch(
+        self, start: date, end: date, *, max_attempts: int = 4
+    ) -> list[tuple[str, str]]:
+        """Query Wayback CDX for one shard.
+
+        Returns [(original_url, timestamp), ...]. Retries with exponential
+        backoff on 429 / 5xx — Wayback never returns 403 for CDX. Returns
+        [] on definitive failure rather than raising; the outer walk keeps
+        going across shards.
+        """
+        params = {
+            "url": "cbo.gov/publication/*",
+            "from": start.strftime("%Y%m%d"),
+            "to": end.strftime("%Y%m%d"),
+            "fl": "original,timestamp",
+            "filter": ["statuscode:200", "mimetype:text/html"],
+            "collapse": "urlkey",
+        }
+        backoff = 3.0
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = requests.get(
+                    self._CDX_API,
+                    params=params,
+                    headers={"User-Agent": self._UA},
+                    timeout=(10, 120),
+                )
+                if resp.status_code == 200:
+                    rows: list[tuple[str, str]] = []
+                    for line in resp.text.strip().split("\n"):
+                        if not line:
+                            continue
+                        parts = line.split(" ")
+                        if len(parts) < 2:
+                            continue
+                        original, ts = parts[0], parts[1]
+                        if "/publication/" not in original:
+                            continue
+                        # Drop trailing /html so we hit the canonical URL
+                        if original.endswith("/html"):
+                            original = original[:-5]
+                        rows.append((original, ts))
+                    log.debug(
+                        "CBO CDX shard %s..%s: %d rows",
+                        start, end, len(rows),
+                    )
+                    return rows
+                if resp.status_code in (429, 503):
+                    log.debug(
+                        "CBO CDX shard %s..%s: HTTP %d (attempt %d/%d) — "
+                        "backing off %.1fs",
+                        start, end, resp.status_code, attempt, max_attempts,
+                        backoff,
+                    )
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                log.warning(
+                    "CBO CDX shard %s..%s: HTTP %d — giving up on shard",
+                    start, end, resp.status_code,
+                )
+                return []
+            except Exception as exc:
+                log.debug(
+                    "CBO CDX shard %s..%s attempt %d/%d: %s",
+                    start, end, attempt, max_attempts, exc,
+                )
+                time.sleep(backoff)
+                backoff *= 2
+        log.warning(
+            "CBO CDX shard %s..%s: exhausted %d retries — dropping shard",
+            start, end, max_attempts,
+        )
+        return []
+
+    # ------------------------------------------------------------------
+    # Wayback snapshot fetcher (passed to _fetch_page_full as ``getter``)
+    # ------------------------------------------------------------------
+
+    def _wayback_get(self, url: str, **kwargs):
+        """HTTP GET for Wayback snapshot URLs.
+
+        Pass-through wrapper around stdlib requests with a tuple timeout —
+        per the lessons of c47fb91, single-value floats only enforce the
+        inter-byte read gap; a Wayback edge node dripping bytes never trips
+        a 30s single-value timeout.
+        """
+        timeout = kwargs.pop("timeout", 60.0)
+        if isinstance(timeout, (int, float)):
+            timeout = (10, max(30, int(timeout)))
+        kwargs.setdefault("headers", {"User-Agent": self._UA})
+        return requests.get(url, timeout=timeout, **kwargs)
+
+    @staticmethod
+    def _ts_to_date(ts: str) -> date | None:
+        """Convert a Wayback timestamp (YYYYMMDDhhmmss) to a date."""
+        try:
+            return date(int(ts[:4]), int(ts[4:6]), int(ts[6:8]))
+        except (ValueError, IndexError):
+            return None
 
 
 
@@ -1775,15 +1668,56 @@ class TreasuryOFRIngestor(Ingestor):
 class VoxEUIngestor(Ingestor):
     """VoxEU / CEPR columns: date-filtered archive search, sharded by year.
 
-    Hits the date-range filter on ``cepr.org/voxeu/search-all-columns``
-    (``date[min]``/``date[max]`` GET params in YYYY-MM-DD format). The search
-    sorts newest-first; for the full 2010-present window a single date range
-    produces hundreds of pages and reliably times out somewhere past page ~400.
-    The prior implementation swallowed that timeout and reported the source
-    "completed" with only the 2019-present columns captured (9 years lost).
+    Access pattern (verified 2026-05-20)
+    ----------------------------------
+    Host: ``cepr.org`` is fronted by **Cloudflare**. As of 2026-05-20 every
+    request from non-browser TLS clients (stdlib ``requests`` / ``urllib3``,
+    plain ``curl``) receives ``HTTP 403`` with ``cf-mitigated: challenge`` —
+    the JS-challenge variant of Cloudflare's bot mitigation. Header tweaks
+    (User-Agent, ``Sec-CH-UA-*``) do not help; the JA3/JA4 TLS fingerprint
+    of OpenSSL is the rejection signal, same root cause as ADR-014 (IMF /
+    Akamai). The challenge does not require JS execution if the TLS+HTTP/2
+    fingerprint matches a real Chrome — i.e. unlike CBO/DataDome (ADR-017)
+    we do NOT need Playwright; ``curl_cffi`` with ``impersonate='chrome131'``
+    is sufficient.
 
-    Fix: shard the search by year. Each year has ~250-500 columns → ~30-50
-    pages, well under the timeout threshold. Recovers the historical archive.
+    Listing path
+    ~~~~~~~~~~~~
+    ``GET https://cepr.org/voxeu/search-all-columns`` with query params
+    ``date[min]``, ``date[max]`` (YYYY-MM-DD), ``page`` (0-indexed). Returns
+    server-rendered HTML; columns are ``<article class="c-card">`` blocks
+    with a child ``<a href="/voxeu/columns/...">``, a ``<time datetime="..."`` ,
+    and an ``h3``/``.c-card__title``. 12 cards per page; a
+    ``a[title="Go to last page"]`` pager link gives the last page index.
+
+    Sharding
+    ~~~~~~~~
+    The search sorts newest-first; a single 2010-present range produces
+    hundreds of pages and times out past ~page 400 (prior bug: silent
+    timeout dropped 2010-2018). We shard by calendar year — each year has
+    ~250-500 columns → ~30-50 pages, well under the timeout.
+
+    Body fetch
+    ~~~~~~~~~~
+    Individual column pages at ``/voxeu/columns/<slug>`` are likewise
+    behind Cloudflare; ``_fetch_page_full`` is called with the curl_cffi
+    getter so body fetches use the same TLS impersonation. trafilatura
+    extracts the column body cleanly.
+
+    Failure mode if curl_cffi missing
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    We log an ``error`` and fall back to stdlib ``requests``, which will
+    almost always 403 — intentional loud failure rather than silent zero.
+    ``curl_cffi==0.15.0`` is in ``requirements.txt`` (pinned for IMF and
+    CBO too).
+
+    History
+    ~~~~~~~
+    - Originally stdlib ``requests`` worked because CEPR was un-protected.
+    - 2024 site redesign moved CEPR onto Cloudflare; the protection
+      tightened around 2026-05-19/20 to consistently challenge non-browser
+      TLS fingerprints. Integration suite caught it the next day with
+      VoxEU returning zero records across all year shards.
     """
 
     source_id = "voxeu"
@@ -1791,6 +1725,55 @@ class VoxEUIngestor(Ingestor):
     _SEARCH_URL = "https://cepr.org/voxeu/search-all-columns"
     _BASE = "https://cepr.org"
     _PAGE_TIMEOUT = 60.0
+
+    # Browser-like headers paired with chrome131 TLS impersonation. The TLS
+    # fingerprint is what bypasses Cloudflare; these headers just make the
+    # subsequent HTTP/2 exchange look consistent with a Chrome session.
+    _CEPR_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/avif,image/webp,*/*;q=0.8"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Sec-Ch-Ua": (
+            '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"'
+        ),
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"macOS"',
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+    @classmethod
+    def _cepr_get(cls, url: str, **kwargs):
+        """HTTP GET for cepr.org, impersonating Chrome's TLS+HTTP/2 fingerprint.
+
+        Cloudflare's bot mitigation on cepr.org rejects stdlib ``requests``
+        by JA3/JA4 TLS fingerprint regardless of headers. ``curl_cffi``
+        replicates Chrome's cipher order, TLS extensions, and HTTP/2
+        settings, which clears the challenge without needing JS execution.
+
+        Falls back to stdlib ``requests`` if ``curl_cffi`` is not installed,
+        which will reliably 403 — intentional so the failure surfaces loudly
+        rather than silently degrading. See ADR-014 for the IMF analogue.
+        """
+        try:
+            from curl_cffi import requests as cffi_requests
+            kwargs.setdefault("impersonate", "chrome131")
+            kwargs.setdefault("headers", cls._CEPR_HEADERS)
+            return cffi_requests.get(url, **kwargs)
+        except ImportError:
+            log.error(
+                "curl_cffi not installed; VoxEU fetches will 403. "
+                "Install with `pip install curl_cffi==0.15.0` "
+                "(see requirements.txt / ADR-014)."
+            )
+            return requests.get(url, headers=cls._CEPR_HEADERS, **kwargs)
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
@@ -1806,17 +1789,19 @@ class VoxEUIngestor(Ingestor):
     ) -> Iterator[Article]:
         page = 0
         while True:
+            # curl_cffi accepts ``params=`` dict like requests.
             params = {
                 "date[min]": start.isoformat(),
                 "date[max]": end.isoformat(),
                 "page": page,
             }
             try:
-                resp = requests.get(
-                    self._SEARCH_URL, params=params, headers=_HEADERS,
+                resp = self._cepr_get(
+                    self._SEARCH_URL, params=params,
                     timeout=self._PAGE_TIMEOUT,
                 )
-                resp.raise_for_status()
+                if resp.status_code != 200:
+                    raise RuntimeError(f"HTTP {resp.status_code}")
             except Exception as exc:
                 log.warning(
                     "VoxEU search shard %s..%s page %d: %s — moving to next shard",
@@ -1827,7 +1812,19 @@ class VoxEUIngestor(Ingestor):
             soup = BeautifulSoup(resp.text, "lxml")
             articles = soup.select("article.c-card")
             if not articles:
+                if page == 0:
+                    log.info(
+                        "VoxEU shard %s..%s page 0: no c-card matches "
+                        "(Cloudflare challenge or markup change?)",
+                        start, end,
+                    )
                 return
+
+            if page == 0:
+                log.info(
+                    "VoxEU shard %s..%s: page 0 returned %d cards",
+                    start, end, len(articles),
+                )
 
             for art in articles:
                 link = art.find("a", href=True)
@@ -1851,7 +1848,11 @@ class VoxEUIngestor(Ingestor):
                 title = title_el.get_text(strip=True) if title_el else ""
 
                 # ADR-016: no Stage 1 topic filter — content-neutral ingest.
-                body, fetched_title, author, _ = _fetch_page_full(url, min_words=50)
+                # Body fetch goes through the same curl_cffi getter — the
+                # column detail pages are behind the same Cloudflare layer.
+                body, fetched_title, author, _ = _fetch_page_full(
+                    url, min_words=50, getter=self._cepr_get,
+                )
                 if not body or len(body.split()) < 50:
                     continue
                 if fetched_title and not title:
@@ -2255,15 +2256,54 @@ class CongressionalIngestor(Ingestor):
     Scope: Senate Banking Committee and House Financial Services Committee only.
     Approximately 6–10 hearings per year. Fed Chair testimony is available via
     the Federal Reserve's own website (supplementing fed.py which covers FOMC).
-    Treasury Secretary testimony is retrieved from the Treasury press release page.
+    Treasury Secretary testimony is retrieved through two complementary paths.
 
     Note: fed.py's FederalReserveIngestor already ingests Fed Chair testimony
     from federalreserve.gov/testimony. This ingestor fetches Treasury Secretary
     testimony from Treasury.gov, which is not covered elsewhere.
 
     To avoid duplicating Fed Chair testimony, this ingestor only fetches
-    Treasury Secretary testimony. Fed Chair testimony from fed.py's ingestor
-    is sufficient for that source.
+    Treasury Secretary testimony.
+
+    Dual retrieval path (introduced 2026-05-20 to close 2010-2023 coverage gap):
+
+      Path A — Treasury Drupal press-release listing
+        (``home.treasury.gov/news/press-releases?category=Secretary Statements & Remarks``)
+
+        Date-DESC pagination. Reaches back to the late 1990s when walked to
+        sufficient depth — page 1500 surfaces 1998 content, page 500 surfaces
+        2015, page 200 surfaces 2023-Q1. Each page carries ~16 release links
+        (3-6 of which are a "Latest releases" widget repeated on every page;
+        the remainder are page-specific older entries). Path A produces both
+        recent Bessent-era statements (modern ``/statements/<slug>``,
+        ``/testimonies/<slug>``, ``/readouts/<slug>`` URLs) and legacy
+        ``jl####`` (Lew), ``sm####`` (Yellen), ``mnu####`` (Mnuchin),
+        ``tg####`` (Geithner) slug-based pages that Treasury preserved in
+        the Drupal listing. ``_MAX_LISTING_PAGES`` was raised from 1200 to
+        2500 on 2026-05-20 to ensure a 2010-window descent finishes within
+        the page cap; sleep is 0.5s/page so a full descent is ~20 min wall.
+
+      Path B — GovInfo CHRG (Congressional Hearings) collection
+        (``api.govinfo.gov/collections/CHRG``)
+
+        Independent defense-in-depth historical archive. CHRG is the GPO's
+        canonical record of formal Congressional hearing transcripts, which
+        includes every Treasury Secretary testimony before House Financial
+        Services and Senate Banking dating to the 1990s. Long-form transcript
+        register (verbatim Q&A) is a different register from Treasury's
+        own press-release-style remarks, and is exactly the
+        cross-cutting-Q&A dimension this ingestor exists to capture
+        (ADR-020 basis-set rationale). Path B is rate-limited to one
+        request/sec and walks the CHRG collection by year-window using the
+        same ``GOVINFO_API_KEY`` pattern as ``CEAIngestor``. We filter for
+        hearings whose ``title`` mentions the Treasury Secretary; for each
+        match we fetch the GovInfo plain-text rendering and emit one
+        ``Article`` per hearing. Coverage: ~6-12 hearings/year, 2010-present.
+
+    Path A produces the recent + Drupal-archived material; Path B fills in
+    historical coverage independently and is robust against Treasury layout
+    changes. Both paths feed through the same ``seen`` set so duplicates
+    (uncommon — different URL conventions) are de-duplicated by URL.
     """
 
     source_id = "congressional"
@@ -2273,18 +2313,42 @@ class CongressionalIngestor(Ingestor):
     _LISTING_URL = "https://home.treasury.gov/news/press-releases"
     _TREASURY_BASE = "https://home.treasury.gov"
 
+    # GovInfo CHRG (Congressional Hearings) historical archive — Path B.
+    _GOVINFO_BASE = "https://api.govinfo.gov"
+    _CHRG_COLLECTION = "CHRG"
+    _DEMO_KEY = "DEMO_KEY"
+    # Title-substring filter applied to CHRG package titles to identify
+    # hearings featuring Treasury Secretary testimony. Hearings of interest
+    # almost always carry "Secretary of the Treasury" or "Treasury Secretary"
+    # in the title or in a granule sub-title; matching against the package
+    # title alone is conservative (we may miss hearings titled by topic
+    # without explicit mention of the Secretary) but avoids false positives
+    # from hearings featuring Under/Assistant Secretaries. Case-insensitive.
+    _CHRG_TITLE_RE = re.compile(
+        r"\b(?:secretary\s+of\s+the\s+treasury|treasury\s+secretary)\b",
+        re.IGNORECASE,
+    )
+
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
+        # Path A — Treasury Drupal listing (recent + Drupal-archived legacy).
         yield from self._fetch_treasury_testimony(start, end, seen)
+        # Path B — GovInfo CHRG historical hearings (2010-present coverage).
+        yield from self._fetch_govinfo_chrg(start, end, seen)
 
     # Maximum number of listing pages to scan when paginating backward to a
-    # historical window. Treasury press releases run ~5–10 per day; 2010-2025
-    # covers ~50,000 releases at ~20 per listing page, so 2500 pages is the
-    # theoretical worst case. We cap at 1200 (≈19,000 releases) to give
-    # comfortable headroom for a full 2010-present sweep while still bounding
-    # runaway loops on misconfigured calls. Restricting to
-    # category=Secretary Statements & Remarks reduces traffic significantly.
-    _MAX_LISTING_PAGES = 1200
+    # historical window. Treasury press releases run ~5–10 per day under the
+    # Secretary category; 2010-2026 covers roughly 16,000 entries at ~10
+    # page-specific entries per Drupal page, so a 2010-anchored full descent
+    # is ~1100-1200 pages. Bumped from 1200 to 2500 on 2026-05-20 — page 1500
+    # surfaces 1998-vintage releases so 2500 gives a comfortable floor below
+    # 2010 plus headroom for the runaway-loop bound. At 0.5s/page politeness
+    # sleep a full 2500-page descent is ~21 min wall, acceptable for a
+    # one-time historical ingest. Drupal returns 200 (with the
+    # "Latest releases" widget but no new content) past the true end of the
+    # archive, so we still rely on the no-next-link signal and the
+    # ``oldest < start`` early-exit for actual termination.
+    _MAX_LISTING_PAGES = 2500
     _LISTING_ROW_DATE_RE = re.compile(
         r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
         r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
@@ -2428,6 +2492,7 @@ class CongressionalIngestor(Ingestor):
                     section="treasury_testimony",
                     tier=1,
                     document_type="congressional_testimony",
+                    extra_meta={"retrieval_path": "treasury_drupal"},
                 )
                 time.sleep(1.0)
 
@@ -2511,6 +2576,239 @@ class CongressionalIngestor(Ingestor):
                 if parsed:
                     return parsed
         return None
+
+    # ------------------------------------------------------------------
+    # Path B — GovInfo CHRG (Congressional Hearings) historical archive
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _govinfo_api_key(cls) -> str:
+        key = os.environ.get("GOVINFO_API_KEY")
+        if not key:
+            log.warning(
+                "GOVINFO_API_KEY not set — CHRG path falling back to DEMO_KEY "
+                "(rate-limited, may stall). Sign up free at "
+                "https://api.govinfo.gov/signup/ and set GOVINFO_API_KEY in .env "
+                "for the full ingest."
+            )
+            return cls._DEMO_KEY
+        return key
+
+    def _fetch_govinfo_chrg(
+        self, start: date, end: date, seen: set[str]
+    ) -> Iterator[Article]:
+        """Walk the GovInfo CHRG collection for Treasury Secretary hearings.
+
+        Strategy: walk packages in the CHRG collection issued within
+        ``[start, end]`` using the published-since endpoint (same pattern as
+        :class:`CEAIngestor` but against ``CHRG`` instead of ``ERP``). For
+        each package whose title mentions the Treasury Secretary, fetch the
+        plain-text hearing transcript granule and emit one ``Article``.
+
+        Why CHRG and not Treasury Drupal as the historical primary:
+          - CHRG is the canonical GPO-deposited Congressional record, not
+            subject to Treasury layout changes, with stable package IDs.
+          - The hearing-transcript register (verbatim Q&A) is precisely the
+            cross-cutting Q&A dimension this ingestor exists to capture
+            (ADR-020 basis-set rationale) — different in register from
+            Treasury's own press-release-style summaries that Path A
+            captures.
+          - Coverage is independent of Treasury's pagination cap, so even
+            if Drupal layout breaks, historical Secretary testimony remains
+            accessible.
+
+        Politeness: 1.0s between package walks, 0.5s between granule fetches.
+        Typical yield is 6-12 hearings/year, so the full 2010-2026 walk is
+        ~100-200 hearings — modest.
+        """
+        api_key = self._govinfo_api_key()
+        total_yielded = 0
+        for package in self._chrg_list_packages(api_key, start, end):
+            package_id = package.get("packageId")
+            title = (package.get("title") or "").strip()
+            if not package_id or not title:
+                continue
+            issued = self._parse_iso_date(package.get("dateIssued"))
+            if not issued or issued < start or issued > end:
+                continue
+            if not self._CHRG_TITLE_RE.search(title):
+                continue
+            # Per-package fetch of the hearing's plain-text rendering.
+            article = self._chrg_build_article(
+                api_key=api_key,
+                package_id=package_id,
+                title=title,
+                issued=issued,
+                seen=seen,
+            )
+            if article is not None:
+                total_yielded += 1
+                yield article
+            time.sleep(0.5)
+        log.info("Congressional CHRG: total yielded = %d", total_yielded)
+
+    def _chrg_list_packages(
+        self, api_key: str, start: date, end: date,
+    ) -> Iterator[dict]:
+        """Yield CHRG package summaries with dateIssued near [start, end].
+
+        The govinfo /collections/{name}/{since}/{until} endpoint accepts an
+        ISO ``until`` upper bound to keep the window tight (CHRG is large —
+        ~300 hearings/month across all committees — so the year-window
+        scoping reduces traffic by ~10x vs walking all packages).
+        """
+        # Pad by a few days to catch slight publication-vs-issue date drift.
+        anchor = start - timedelta(days=7)
+        until = end + timedelta(days=7)
+        anchor_iso = anchor.isoformat() + "T00:00:00Z"
+        until_iso = until.isoformat() + "T23:59:59Z"
+        url = (
+            f"{self._GOVINFO_BASE}/collections/{self._CHRG_COLLECTION}/"
+            f"{anchor_iso}/{until_iso}"
+            f"?api_key={api_key}&pageSize=100&offsetMark=*"
+        )
+        offset = "*"
+        page = 0
+        while True:
+            page += 1
+            paged_url = re.sub(r"offsetMark=[^&]+", f"offsetMark={offset}", url)
+            try:
+                resp = _get(paged_url, timeout=60.0)
+                data = resp.json()
+            except Exception as exc:
+                log.warning("Congressional CHRG package list (page %d): %s", page, exc)
+                return
+            packages = data.get("packages", [])
+            if not packages:
+                return
+            for pkg in packages:
+                yield pkg
+            next_offset = data.get("nextPage") or data.get("offsetMark")
+            if not next_offset or next_offset == offset:
+                return
+            offset = next_offset
+            time.sleep(1.0)
+            # Safety bound — CHRG has roughly 30 pages/year at pageSize=100;
+            # a 16-year window is at worst ~500 pages. Bail at 1000 to avoid
+            # an infinite loop if the API contract drifts.
+            if page > 1000:
+                log.warning("Congressional CHRG package list exceeded 1000 pages — bailing")
+                return
+
+    def _chrg_build_article(
+        self,
+        *,
+        api_key: str,
+        package_id: str,
+        title: str,
+        issued: date,
+        seen: set[str],
+    ) -> Article | None:
+        """Download the hearing's full transcript text and build an Article.
+
+        CHRG body strategy (verified 2026-05-20 on CHRG-115hhrg33428):
+          1. Public PDF (``govinfo.gov/content/pkg/{pkg}/pdf/{pkg}.pdf``)
+             — typically 5-50 MB per hearing, contains the complete verbatim
+             transcript. No API key required. We extract text with pypdf,
+             matching :class:`CEAIngestor`'s ERP extraction.
+          2. Fallback: API ``/packages/{pkg}/htm`` (uses api_key quota).
+             CHRG's htm rendering is often just the cover page (no full
+             transcript), so this is a salvage path only — most hearings
+             will succeed at step 1.
+
+        Why PDF and not html: GovInfo CHRG HTML renderings frequently
+        contain only the title page with "[NO TEXT AVAILABLE]" body
+        (the full text is delivered as PDF only). PDF parsing is slower
+        but produces the actual transcript text needed for embedding.
+        """
+        public_url = f"https://www.govinfo.gov/app/details/{package_id}"
+        if public_url in seen:
+            return None
+        # Step 1: public PDF (no API key needed).
+        pdf_url = (
+            f"https://www.govinfo.gov/content/pkg/{package_id}/pdf/{package_id}.pdf"
+        )
+        body = self._extract_pdf_text(pdf_url)
+        # Step 2: API htm fallback if PDF extraction failed.
+        if not body or len(body.split()) < 100:
+            htm_url = (
+                f"{self._GOVINFO_BASE}/packages/{package_id}/htm"
+                f"?api_key={api_key}"
+            )
+            try:
+                resp = _get(htm_url, timeout=60.0)
+                if resp.status_code == 200 and resp.text:
+                    extracted = trafilatura.extract(
+                        resp.text, include_comments=False, include_tables=False
+                    )
+                    if extracted and len(extracted.split()) >= 100:
+                        body = extracted
+            except Exception as exc:
+                log.debug(
+                    "Congressional CHRG api/htm %s failed: %s",
+                    package_id, exc,
+                )
+        if not body or len(body.split()) < 100:
+            log.debug("Congressional CHRG %s: body < 100 words — skipping", package_id)
+            return None
+        seen.add(public_url)
+        return _make_article(
+            source_id=self.source_id,
+            url=public_url,
+            published_at=issued.isoformat() + "T00:00:00Z",
+            title=title,
+            body=body,
+            author="U.S. Congress",
+            section="treasury_testimony",
+            tier=1,
+            document_type="congressional_testimony",
+            extra_meta={
+                "package_id": package_id,
+                "govinfo_collection": self._CHRG_COLLECTION,
+                "retrieval_path": "govinfo_chrg",
+            },
+        )
+
+    @staticmethod
+    def _parse_iso_date(value: str | None) -> date | None:
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _extract_pdf_text(pdf_url: str) -> str:
+        """Download a CHRG PDF and return its extracted text (best-effort).
+
+        Mirrors :meth:`CEAIngestor._extract_pdf_text`. CHRG PDFs are
+        text-layered, not scanned, so pypdf extracts cleanly for modern
+        hearings (post-2000ish). Older pre-2000 hearings may have been
+        OCR'd; if extraction returns short body the caller will fall
+        through to the API htm endpoint.
+        """
+        try:
+            from pypdf import PdfReader
+            from io import BytesIO
+        except ImportError:
+            log.error(
+                "pypdf not installed — CHRG PDF extraction disabled. "
+                "Install with `pip install pypdf` (already in requirements.txt)."
+            )
+            return ""
+        try:
+            resp = _get(pdf_url, timeout=60.0)
+        except Exception as exc:
+            log.debug("Congressional CHRG PDF fetch %s failed: %s", pdf_url, exc)
+            return ""
+        try:
+            reader = PdfReader(BytesIO(resp.content))
+            pages = [page.extract_text() or "" for page in reader.pages]
+            return "\n".join(p.strip() for p in pages if p.strip())
+        except Exception as exc:
+            log.debug("Congressional CHRG PDF parse %s failed: %s", pdf_url, exc)
+            return ""
 
     # Congressional appearance markers — these aren't topic keywords, they
     def _is_relevant(self, title: str) -> bool:

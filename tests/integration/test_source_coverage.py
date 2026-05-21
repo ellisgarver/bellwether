@@ -230,7 +230,10 @@ CASES: list[CoverageCase] = [
         window_start=date(2023, 1, 1),
         window_end=date(2023, 12, 31),
         # Pre-ADR-017 fed_atlanta = 0 records. Any non-zero proves the
-        # curl_cffi + sitemap walk is wired correctly.
+        # curl_cffi + listing-API walk is wired correctly. (Atlanta Fed
+        # sitemap retired in the 2026 site redesign; we now hit
+        # /api/feed/getFilteredResults per series — see _fetch_atlanta
+        # docstring.)
         floor_count=10,
         max_records=80,
         min_date_span_days=60,
