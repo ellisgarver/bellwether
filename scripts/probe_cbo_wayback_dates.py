@@ -41,8 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import requests  # noqa: E402
 
-from mnd.ingestion.institutional import CBOIngestor  # noqa: E402
-from mnd.ingestion.trafilatura_fetcher import _fetch_page_full  # noqa: E402
+from mnd.ingestion.institutional import CBOIngestor, _fetch_page_full  # noqa: E402
 
 
 def parse_window(s: str) -> tuple[date, date]:
