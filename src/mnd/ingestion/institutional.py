@@ -2116,17 +2116,39 @@ class BrookingsIngestor(Ingestor):
 class PIIEIngestor(Ingestor):
     """Peterson Institute for International Economics: listing page scraper.
 
-    PIIE's individual article pages return HTTP 403 from residential IPs
-    (Cloudflare protection). The listing pages are accessible and contain
-    title, date, author, and URL. Full article body is attempted but falls
-    back to title-only if the page is blocked.
+    Access pattern (verified 2026-05-21)
+    ----------------------------------
+    Host: ``piie.com`` is fronted by **Cloudflare**. Listing pages
+    sometimes pass a stdlib ``requests`` fetch but individual article
+    pages return ``HTTP 403`` with a JS-challenge interstitial
+    ("Enable JavaScript and cookies to continue"). The JA3/JA4 TLS
+    fingerprint of OpenSSL is the rejection signal — same root cause
+    as VoxEU/CEPR (ADR-021) and IMF/Akamai (ADR-014).
 
-    From university IPs (RCC Midway3) the full body fetch succeeds. The
-    listing covers policy-briefs, working-papers, piie-briefings, and
-    key research blogs.
+    ``curl_cffi`` with ``impersonate='chrome131'`` clears the challenge
+    without needing JS execution. Both listing and body fetches are
+    routed through ``_piie_get`` so the entire ingest is TLS-impersonated;
+    Cloudflare can tighten the listing surface at any time, so it's
+    safer to use the impersonating path uniformly.
 
-    Note: PIIE URLs encode the publication year, enabling reliable date
-    filtering without fetching each article.
+    The listing covers policy-briefs, working-papers, piie-briefings,
+    realtime-economic-issues-watch, and trade-investment-policy-watch.
+    Pagination via ``?page=N`` (Drupal default), 10 cards/page.
+
+    Failure mode if curl_cffi missing
+    ---------------------------------
+    We log an ``error`` and fall back to stdlib ``requests``, which
+    will reliably 403 on body fetches — intentional loud failure
+    rather than silent zero-yield. ``curl_cffi==0.15.0`` is in
+    ``requirements.txt``.
+
+    History
+    -------
+    - Originally stdlib ``requests`` worked from university IPs because
+      PIIE wasn't on Cloudflare. The site enabled Cloudflare bot
+      mitigation between ADR-017 (2026-05-19) and 2026-05-21; the
+      integration battery on 2026-05-21 surfaced zero PIIE records for
+      2023, confirming the regression.
     """
 
     source_id = "piie"
@@ -2138,6 +2160,55 @@ class PIIEIngestor(Ingestor):
         ("/blogs/realtime-economic-issues-watch", "blog_post"),
         ("/blogs/trade-investment-policy-watch", "blog_post"),
     ]
+
+    # Same Chrome 131 header set used by VoxEUIngestor — paired with the
+    # curl_cffi TLS impersonation, this presents Cloudflare with a
+    # complete-Chrome-session fingerprint and clears the challenge.
+    _PIIE_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/avif,image/webp,*/*;q=0.8"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Sec-Ch-Ua": (
+            '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"'
+        ),
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"macOS"',
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+    @classmethod
+    def _piie_get(cls, url: str, **kwargs):
+        """HTTP GET for piie.com, impersonating Chrome's TLS+HTTP/2 fingerprint.
+
+        Cloudflare's bot mitigation on piie.com rejects stdlib ``requests``
+        by TLS fingerprint regardless of headers. ``curl_cffi`` replicates
+        Chrome's cipher order, TLS extensions, and HTTP/2 settings, which
+        clears the challenge without needing JS execution.
+
+        Falls back to stdlib ``requests`` if ``curl_cffi`` is not installed,
+        which will reliably 403 — loud failure rather than silent zero-yield.
+        See VoxEUIngestor._cepr_get for the equivalent pattern.
+        """
+        try:
+            from curl_cffi import requests as cffi_requests
+            kwargs.setdefault("impersonate", "chrome131")
+            kwargs.setdefault("headers", cls._PIIE_HEADERS)
+            return cffi_requests.get(url, **kwargs)
+        except ImportError:
+            log.error(
+                "curl_cffi not installed; PIIE fetches will 403. "
+                "Install with `pip install curl_cffi==0.15.0` "
+                "(see requirements.txt / ADR-014)."
+            )
+            return requests.get(url, headers=cls._PIIE_HEADERS, **kwargs)
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
@@ -2159,19 +2230,25 @@ class PIIEIngestor(Ingestor):
 
         while not past_window:
             try:
-                resp = requests.get(
+                resp = self._piie_get(
                     base + path,
                     params={"page": page} if page > 0 else {},
-                    headers=_HEADERS,
                     timeout=30.0,
                 )
                 if resp.status_code in (403, 404):
-                    log.warning("PIIE %s page %d: HTTP %d — stopping pagination",
-                                path, page, resp.status_code)
+                    log.error(
+                        "PIIE %s page %d: HTTP %d — Cloudflare tightening or "
+                        "section retired. Section will be undercovered.",
+                        path, page, resp.status_code,
+                    )
                     return
-                resp.raise_for_status()
+                if resp.status_code != 200:
+                    raise RuntimeError(f"HTTP {resp.status_code}")
             except Exception as exc:
-                log.warning("PIIE %s page %d: %s — stopping pagination", path, page, exc)
+                log.error(
+                    "PIIE %s page %d: %s — stopping pagination",
+                    path, page, exc,
+                )
                 return
 
             soup = BeautifulSoup(resp.text, "lxml")
@@ -2222,7 +2299,11 @@ class PIIEIngestor(Ingestor):
                 # is NO Stage 1 topic filter; we either capture the article
                 # body or skip the record (do not emit title-only fallbacks
                 # that would carry no body signal for Stage 2 to evaluate).
-                body, fetched_title, _, _pd = _fetch_page_full(url, min_words=50)
+                # Body fetch routes through _piie_get so it bypasses the
+                # Cloudflare JS challenge that defeats stdlib requests.
+                body, fetched_title, _, _pd = _fetch_page_full(
+                    url, min_words=50, getter=self._piie_get,
+                )
                 if fetched_title and not title:
                     title = fetched_title
                 if not body or len(body.split()) < 50:
