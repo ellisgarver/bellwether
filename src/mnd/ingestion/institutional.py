@@ -2878,48 +2878,113 @@ class CongressionalIngestor(Ingestor):
         """
         api_key = self._govinfo_api_key()
         total_yielded = 0
+        total_title_match = 0
         for package in self._chrg_list_packages(api_key, start, end):
             package_id = package.get("packageId")
             title = (package.get("title") or "").strip()
             if not package_id or not title:
                 continue
-            issued = self._parse_iso_date(package.get("dateIssued"))
-            if not issued or issued < start or issued > end:
-                continue
             if not self._CHRG_TITLE_RE.search(title):
                 continue
-            # Per-package fetch of the hearing's plain-text rendering.
+            total_title_match += 1
+            # IMPORTANT: package.dateIssued is the GPO publication date —
+            # the date the transcript was deposited, which can be months
+            # AFTER the hearing actually happened. For the dynamics analysis
+            # the discourse event is dated to when it was given (testimony
+            # date), not when GPO published the record. Fetch the package
+            # summary to read heldDates[0] (the authoritative hearing date).
+            held_date = self._chrg_held_date(api_key, package_id)
+            if not held_date:
+                log.debug(
+                    "Congressional CHRG %s: no heldDate available; dropping",
+                    package_id,
+                )
+                continue
+            if held_date < start or held_date > end:
+                continue
             article = self._chrg_build_article(
                 api_key=api_key,
                 package_id=package_id,
                 title=title,
-                issued=issued,
+                held_date=held_date,
                 seen=seen,
             )
             if article is not None:
                 total_yielded += 1
                 yield article
             time.sleep(0.5)
-        log.info("Congressional CHRG: total yielded = %d", total_yielded)
+        log.info(
+            "Congressional CHRG: title matches=%d, yielded=%d",
+            total_title_match, total_yielded,
+        )
+
+    def _chrg_held_date(
+        self, api_key: str, package_id: str,
+    ) -> date | None:
+        """Fetch the actual hearing date for a CHRG package.
+
+        Each CHRG package's ``/summary`` endpoint exposes a ``heldDates``
+        list — the date(s) the hearing was held. Returns the first held
+        date. Falls back to ``dateIssued`` only if the summary endpoint
+        fails to return heldDates (very rare; pre-2005 hearings sometimes
+        lack it).
+        """
+        url = (
+            f"{self._GOVINFO_BASE}/packages/{package_id}/summary"
+            f"?api_key={api_key}"
+        )
+        try:
+            resp = _get(url, timeout=30.0)
+            data = resp.json()
+        except Exception as exc:
+            log.debug(
+                "Congressional CHRG %s summary fetch failed: %s",
+                package_id, exc,
+            )
+            return None
+        held = data.get("heldDates") or []
+        if held:
+            parsed = self._parse_iso_date(held[0])
+            if parsed:
+                return parsed
+        # Fallback to dateIssued — should be rare.
+        return self._parse_iso_date(data.get("dateIssued"))
 
     def _chrg_list_packages(
         self, api_key: str, start: date, end: date,
     ) -> Iterator[dict]:
-        """Yield CHRG package summaries with dateIssued near [start, end].
+        """Yield CHRG package summaries whose lastModified is in a window.
 
-        The govinfo /collections/{name}/{since}/{until} endpoint accepts an
-        ISO ``until`` upper bound to keep the window tight (CHRG is large —
-        ~300 hearings/month across all committees — so the year-window
-        scoping reduces traffic by ~10x vs walking all packages).
+        IMPORTANT: GovInfo's ``/collections/{name}/{since}/{until}`` endpoint
+        filters on the package's ``lastModified`` timestamp, NOT on the
+        hearing date or publication date. The semantics is "packages that
+        appeared or were re-indexed within [since, until]." We therefore
+        need to walk a LARGER lastModified window than the requested
+        hearing-date window:
+
+        - A hearing held on 2010-03-15 might have its transcript published
+          to GovInfo on 2010-09-XX (typical 3-9 month publish lag).
+        - Subsequent re-indexings (corrections, OCR updates) can push the
+          lastModified date forward by years.
+
+        So a hearing in our window can have lastModified anywhere from
+        the hearing date forward. We walk lastModified from
+        ``start - 0 days`` (the hearing date is also the earliest possible
+        publish/index date) through *now* with no upper bound, then filter
+        by the package summary's authoritative ``heldDates`` field in the
+        caller (``_fetch_govinfo_chrg``).
+
+        The cost: walking the full lastModified-since window touches more
+        packages than we need (we pull and discard non-Treasury hearings),
+        but CHRG title filtering is cheap (regex on summary objects).
         """
-        # Pad by a few days to catch slight publication-vs-issue date drift.
-        anchor = start - timedelta(days=7)
-        until = end + timedelta(days=7)
+        # Walk lastModified from the hearing-window start onward. No upper
+        # bound — the caller's heldDate filter is what bounds the result.
+        anchor = start
         anchor_iso = anchor.isoformat() + "T00:00:00Z"
-        until_iso = until.isoformat() + "T23:59:59Z"
         url = (
             f"{self._GOVINFO_BASE}/collections/{self._CHRG_COLLECTION}/"
-            f"{anchor_iso}/{until_iso}"
+            f"{anchor_iso}"
             f"?api_key={api_key}&pageSize=100&offsetMark=*"
         )
         offset = "*"
@@ -2943,8 +3008,8 @@ class CongressionalIngestor(Ingestor):
                 return
             offset = next_offset
             time.sleep(1.0)
-            # Safety bound — CHRG has roughly 30 pages/year at pageSize=100;
-            # a 16-year window is at worst ~500 pages. Bail at 1000 to avoid
+            # Safety bound. CHRG has ~3000 hearings/year × 16 years = 48k
+            # packages at pageSize=100 = ~480 pages. Bail at 1000 to avoid
             # an infinite loop if the API contract drifts.
             if page > 1000:
                 log.warning("Congressional CHRG package list exceeded 1000 pages — bailing")
@@ -2956,10 +3021,15 @@ class CongressionalIngestor(Ingestor):
         api_key: str,
         package_id: str,
         title: str,
-        issued: date,
+        held_date: date,
         seen: set[str],
     ) -> Article | None:
         """Download the hearing's full transcript text and build an Article.
+
+        ``held_date`` is the authoritative hearing date from the package's
+        ``heldDates[0]`` field — used as published_at on the Article so the
+        dynamics analysis aligns records with when the testimony was given,
+        not when GPO published the transcript.
 
         CHRG body strategy (verified 2026-05-20 on CHRG-115hhrg33428):
           1. Public PDF (``govinfo.gov/content/pkg/{pkg}/pdf/{pkg}.pdf``)
@@ -3010,7 +3080,7 @@ class CongressionalIngestor(Ingestor):
         return _make_article(
             source_id=self.source_id,
             url=public_url,
-            published_at=issued.isoformat() + "T00:00:00Z",
+            published_at=held_date.isoformat() + "T00:00:00Z",
             title=title,
             body=body,
             author="U.S. Congress",
