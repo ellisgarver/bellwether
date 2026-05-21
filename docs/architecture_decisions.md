@@ -1453,6 +1453,77 @@ The actual code changes live in:
 
 ---
 
+## ADR-021: Post-ADR-020 upstream change patches — VoxEU Cloudflare, CBO Wayback, Atlanta JSON API, Congressional GovInfo CHRG
+
+- **Status**: Accepted
+- **Date**: 2026-05-21
+- **Refines**: ADR-014 (curl_cffi pattern), ADR-017 (CBO+Atlanta+PIIE coverage closures), ADR-020 (basis-set framing)
+
+### Context
+
+Within 24 hours of the ADR-020 verification (2026-05-20 evening), the per-source integration battery on RCC surfaced four upstream changes / regressions affecting basis-set sources. The user mandate: preserve the basis-set (no source removed, no pivot to alternates already considered and rejected) and document HOW we access each source so we don't forget the configuration if it changes again.
+
+The four issues:
+
+1. **VoxEU silent zero-yield (2012 + 2023 windows).** cepr.org enabled Cloudflare's bot-mitigation JS challenge between 2026-05-19 and 2026-05-20. Every stdlib `requests` call returned HTTP 403 with `cf-mitigated: challenge`, and the ingestor's exception handler silently swallowed it. Basis-set impact: VoxEU is the sole source for the academic-policy column dimension — losing it would have closed a basis hole.
+
+2. **CBO DataDome blocking definitively even with fresh Playwright cookies.** The ADR-017 Playwright + curl_cffi-with-cookies hybrid failed: DataDome now serves the JS challenge interstitial inside Playwright's headless Chromium without ever resolving it (`title='cbo.gov'`, `body_len=0` after 20s+). The "clearance" cookie Playwright captures is a challenge-stub, not real clearance — DataDome rotates its value on every response, and curl_cffi requests carrying these cookies all 403. Re-acquiring 3× doesn't help. govinfo.gov was already considered and rejected (ADR-020) because GPO deposit coverage is uneven over time. Basis-set impact: halving the fiscal-authority dimension (CEA still works).
+
+3. **Atlanta Fed site redesigned, history culled.** atlantafed.org's 2026 redesign retired `/sitemap.xml` (now 404), `/blogs/macroblog/rss` (now 404), and the entire pre-existing publication URL surface. The redesign also actively removed historical content from the live site: working papers pre-2019, macroblog pre-2022, and the original Economy Matters pre-2016 are gone. Basis-set impact: 1 of 4 regional-research-voice sources.
+
+4. **Congressional Treasury Drupal listing caps at ~130 pages (~2.5 years).** Treasury's press-release listing pagination terminates around page 130 because the Drupal "next page" link disappears, leaving only Nov 2023 onward visible from the listing path. Basis-set impact: cross-cutting Q&A dimension reduced to recent material.
+
+### Decision
+
+**VoxEU.** Add `VoxEUIngestor._cepr_get` classmethod using `curl_cffi.requests` with `impersonate='chrome131'` (the ADR-014 pattern for IMF/Akamai). Route both the listing fetch and body fetch through it. Promote the `except: return` to surface a log line on page-0 zero-card results so future regressions are visible. No new dependency — `curl_cffi==0.15.0` is already in `requirements.txt`.
+
+**CBO.** Replace the Playwright + curl_cffi hybrid with the **Wayback Machine CDX API** (`web.archive.org/cdx/search/cdx`) for enumeration plus `web.archive.org/web/{ts}id_/{url}` for snapshot fetches (the `id_` modifier returns raw archived body without Wayback's toolbar rewrite). The canonical `url` field on each emitted Article is still the **cbo.gov publication URL** (not the Wayback wrapper), so downstream dedupe and cluster reporting still attributes content to cbo.gov. Year-sharded CDX queries (one year at a time) keep result sets under the 503 ceiling; 0.5s/shard and 0.3s/snapshot politeness. Playwright is NOT used; `playwright==1.48.0` stays in `requirements.txt` for now but is no longer load-bearing — kept in case DataDome's posture relaxes.
+
+This preserves the basis-set choice: "cbo.gov content," just retrieved via the archive. Wayback has clean snapshots of cbo.gov/publication/* back to 2010+ with no DataDome layer.
+
+**Atlanta Fed.** Switch from sitemap walk to **per-series JSON listing API**: `atlantafed.org/api/feed/getFilteredResults?DataSourceId=…&ContextId=…&PageSize=…&PageNumber=…&StartDateRange=…&EndDateRange=…`. Hit four series — Working Papers, Policy Hub Papers, Policy Hub Macroblog, and What-We-Study : Macroeconomy hub (URL-filtered for Economy-Matters-style paths). Article bodies still fetched via `_atlanta_get` (curl_cffi Chrome131); only the listing surface changed.
+
+Historical content removed by the redesign (working papers pre-2019, macroblog pre-2022, Economy Matters pre-2016) is **not recoverable from atlantafed.org**. Documented as a known upstream limitation. Wayback Machine would be a future option if we decide that historical depth matters more than the operational cost.
+
+**Congressional.** Keep the Treasury Drupal listing as **Path A** (bumped `_MAX_LISTING_PAGES` from 1200 to 2500 to ensure deep historical pagination terminates cleanly; ~21 min wall at 0.5s/page politeness for a full 2010-anchored descent). Add **Path B** — the GovInfo `CHRG` (Congressional Hearings) collection via the same JSON API and `GOVINFO_API_KEY` pattern as `CEAIngestor`. CHRG is GPO's canonical record of formal Congressional hearing transcripts and includes every Treasury Secretary testimony before Senate Banking and House Financial Services back to the 1990s.
+
+Path A produces recent + Drupal-archived Bessent / Yellen / Mnuchin / Geithner press-release-style remarks; Path B fills historical coverage with the long-form verbatim hearing transcript register — exactly the cross-cutting Q&A register that ADR-020 named for this dimension. Both paths feed through one `seen` set so any URL-overlap dedupes automatically.
+
+### Consequences
+
+**Positive:**
+- All four basis-set dimensions preserved.
+- Three of four sources now run through more durable mechanisms than what ADR-017 set up (JSON APIs and Wayback CDX are less fragile than sitemap scraping and DataDome cookie acquisition).
+- Each ingestor's docstring now documents the access path explicitly — including failed approaches and why — so a future regression doesn't cost us another round of forensic debugging.
+
+**Negative / risks:**
+- Atlanta Fed historical content (pre-2019/2022/2016 per series) is permanently absent unless we add a Wayback Machine fallback later. Known gap; impact bounded by the basis-set dimension still having 3 other regional Feds.
+- CBO via Wayback inherits Wayback's coverage policy. Wayback crawls cbo.gov frequently (the CDX API confirms thousands of unique publication URLs back to 2010), but if Wayback's policy changes (rate-limiting tightens, content removal honored) we'd need a contingency. Mitigation: weekly Phase 6 re-ingest will catch any drop in counts.
+- Congressional now requires `GOVINFO_API_KEY` to be set for the historical Path B; without it, Path B falls back to DEMO_KEY (30 req/hr) and silently undercovers. Documented in `.env.example`.
+- The integration battery on RCC needs to be re-run to confirm the four fixes work end-to-end. The local probes the agents ran confirmed each fix produces non-zero records, but the floors and date-span asserts need the full battery.
+
+### Verification
+
+Local probes (from agent reports, 2026-05-20→21):
+- VoxEU 2023-01 → 4 articles via `_cepr_get`, year-shard endpoint returns 12 article cards as expected.
+- CBO 2023-06 → wait for RCC battery; Wayback CDX returns >2000 candidate URLs for the test window.
+- Atlanta Fed 2023 → 45 articles across 4 sections (working_paper / policy_hub / macroblog / economy_matters).
+- Congressional 2018 H1 → to be verified on RCC; Path B GovInfo CHRG confirmed to list hearings with Treasury Secretary in title.
+
+### Implementation notes
+
+All edits are in `src/mnd/ingestion/institutional.py`:
+- VoxEUIngestor: lines ~1668–1885 (class rewritten around `_cepr_get`).
+- CBOIngestor: lines ~1318–1588 (entire class replaced with Wayback CDX implementation).
+- FedRegionalIngestor `_fetch_atlanta` and supporting constants: lines ~895–1283.
+- CongressionalIngestor: lines ~2253–2836 (Path A extended, Path B added).
+
+No changes to `_sub_ingestors`, the composite, or any other ingestor. `tests/integration/test_source_coverage.py` got a minor comment update on the Atlanta case.
+
+Playwright remains in `requirements.txt` for now but is no longer load-bearing (no class currently imports it). Future cleanup may remove it; for now we keep it in case DataDome's posture changes or another source needs JS execution.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```
