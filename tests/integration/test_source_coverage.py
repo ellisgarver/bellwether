@@ -1,41 +1,57 @@
 """Per-source coverage tests for ingestion methodology lock-in.
 
-Network-dependent. Marked ``integration``; not run by default. Invoke with:
+Network-dependent. Marked ``integration``; not run by default. Invoke with::
 
     pytest tests/integration/test_source_coverage.py -m integration -v
 
-Each case asserts three things against a narrow date window:
+For every (source, window) pair we assert FOUR contracts. Each contract
+maps to a methodology requirement; a failure means a basis-set source is
+silently undercovering and the corpus would be biased. Fix the ingestor —
+do NOT loosen the assertion.
 
-  1. Floor count — at least N records emerged within the islice cap.
-     Catches silent-zero failures (e.g. fed_atlanta = 0 records, CBO = 0
-     records, voxeu missing 2010-18 due to swallowed timeout).
-  2. Section diversity — every section in ``expected_sections`` appears at
-     least once. Catches "only one series ingested" failures (e.g. BIS prior
-     to ADR-017 only matched working_paper; Chicago Fed prior to ADR-017
-     only matched chicago_fed_letter).
-  3. Date span — observed dates span ≥ ``min_date_span_days``. Catches the
-     "all clustered in one month" failure mode that wouldn't show up in a
-     floor-count check (e.g. a regex matching only the most recent month).
+Contract A — **Floor count** (basis-set coverage).
+    At least N records emerge within the iterator's ``max_records`` cap.
+    Catches silent-zero failures (e.g. Cloudflare 403 swallowed by an
+    ``except: return``) and partial-undercount regressions (e.g. a
+    regex that only matches the most recent month).
 
-Conservative floors. Real upstream counts are usually 2-5× higher; the
-floors only need to distinguish "ingestor working" from "ingestor silently
-broken." If a floor fails, the right response is to investigate, not to
-loosen the floor.
+Contract B — **Authoritative date per record** (methodology principle 1).
+    Every record's ``published_at`` parses as an ISO date and lies in
+    ``[window_start, window_end]``. Catches the "fabricated mid-year
+    date" failure mode and the "Wayback snapshot timestamp masquerading
+    as publication date" failure mode.
 
-Some ingestors require optional dependencies (``curl_cffi``, ``playwright``)
-that may not be installed locally. Those tests skip gracefully via the
-helpers in ``conftest.py``; run the full battery on RCC where all deps
-are installed.
+Contract C — **Real body per record** (full-content embedding requirement).
+    Every record has ``word_count`` ≥ the source-specific minimum. Catches
+    title-only / teaser-only emission where the listing summary leaked
+    through as the body field.
+
+Contract D — **Section diversity & date span** (basis-set series breadth).
+    The expected sections are all present, distinct sections match the
+    multi-series rule when applicable, and the observed dates span
+    ``min_date_span_days`` — guarding against "ingestor returns the same
+    week of records over and over."
+
+Mandatory dependencies. ``curl_cffi`` (TLS impersonation for IMF, Atlanta,
+VoxEU) and ``pypdf`` (PDF extraction for CEA, Congressional Path B) are
+**required** for the ingest to function. We do not skip tests when they
+are missing — we let pytest surface the ImportError so the developer
+installs them. Run ``pip install -r requirements.txt`` first.
+
+Network errors (DNS failure, connection refused, read timeout) DO skip
+gracefully — those are environmental, not code defects. Any other
+exception fails the test loudly.
 """
 from __future__ import annotations
 
-import importlib
 import itertools
+import socket
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import date
 
 import pytest
+import requests
 
 from mnd.ingestion.base import Article
 from mnd.ingestion.fed import FederalReserveIngestor
@@ -55,62 +71,46 @@ from mnd.ingestion.institutional import (
 
 
 # ---------------------------------------------------------------------------
-# Skip helpers for optional, RCC-only dependencies
-# ---------------------------------------------------------------------------
-
-
-def _have(module_name: str) -> bool:
-    try:
-        importlib.import_module(module_name)
-    except ImportError:
-        return False
-    return True
-
-
-def requires_curl_cffi() -> None:
-    if not _have("curl_cffi"):
-        pytest.skip(
-            "curl_cffi not installed — required for sources behind TLS-fingerprint "
-            "bot protection (IMF/Akamai, Atlanta Fed, CBO). "
-            "Install with `pip install curl_cffi`."
-        )
-
-
-def requires_playwright() -> None:
-    if not _have("playwright"):
-        pytest.skip(
-            "playwright not installed — required for CBO (DataDome JS challenge). "
-            "Install with `pip install playwright && python -m playwright install chromium`."
-        )
-
-
-def requires_pypdf() -> None:
-    if not _have("pypdf"):
-        pytest.skip(
-            "pypdf not installed — required for CEA (govinfo ERP PDF text). "
-            "Install with `pip install pypdf` (see requirements.txt / ADR-020)."
-        )
-
-
-# ---------------------------------------------------------------------------
 # Contract definition
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class CoverageCase:
-    """A single coverage contract for one (sub-ingestor, window) pair."""
+    """A single coverage contract for one (sub-ingestor, window) pair.
+
+    Floors are basis-set-justified, not heuristic:
+
+    - Fed (board, regional, FEDS Notes, Beige Book): institutional cadence
+      sets a known minimum (FOMC = 8/yr, MPR = 2/yr, Beige Book = 8/yr,
+      speeches = ~80/yr, FEDS Notes = ~70/yr).
+    - BIS: ~70 working papers + ~20 QR articles + ~15 bulletins + speeches
+      per year (post-ADR-017 expansion).
+    - IMF: WEO 2x/yr + GFSR 2x/yr + ~70 working papers + ~25 F&D + blog.
+    - Brookings: ~1k publications/yr via WP REST.
+    - PIIE: ~300 publications/yr.
+    - VoxEU: ~250 columns/yr.
+    - NBER: ~1500 working papers/yr.
+    - CEA: 1 ERP/yr, ~20 chapters.
+    - Congressional: ~6-12 hearings/yr (Treasury Sec testimony).
+    - Treasury OFR: ~10 working papers + briefs/yr.
+    - Atlanta Fed: ~30-50 working-papers/macroblog items/yr (post-2019).
+    - CBO: ~700-1200 publications/yr.
+
+    Floor is ~25-35% of expected to leave headroom for window edge effects
+    while still catching silent-zero / 80%-undercount regressions.
+    """
 
     name: str
     iterator_factory: Callable[[date, date], Iterator[Article]]
     window_start: date
     window_end: date
     floor_count: int
-    max_records: int = 200
+    max_records: int = 400
     section_filter: str | None = None
     expected_sections: set[str] = field(default_factory=set)
     min_date_span_days: int = 0
-    skip_check: Callable[[], None] | None = None
+    min_body_word_count: int = 50
 
     @property
     def id(self) -> str:
@@ -120,18 +120,10 @@ class CoverageCase:
 # ---------------------------------------------------------------------------
 # Cases
 # ---------------------------------------------------------------------------
-#
-# Floors are conservative (~25–35% of typical upstream counts). They protect
-# against silent zero-yield failures, not against partial-undercount
-# regressions — those need full-corpus QA after re-ingest.
 
 
 def _fed_method(method_name: str) -> Callable[[date, date], Iterator[Article]]:
-    """Build an iterator factory for one private method on FederalReserveIngestor.
-
-    Used for targeted historical-edge tests so the test doesn't pay the cost
-    of fetching every other Fed document type for the same window.
-    """
+    """Build an iterator factory for one private method on FederalReserveIngestor."""
     def factory(start: date, end: date) -> Iterator[Article]:
         ingestor = FederalReserveIngestor()
         return getattr(ingestor, method_name)(start, end)
@@ -190,6 +182,9 @@ CASES: list[CoverageCase] = [
         section_filter="beige_book",
         expected_sections={"beige_book"},
         min_date_span_days=60,
+        # Beige Books are long-form (~13k words) so a 200 floor catches
+        # any extraction-truncation regression.
+        min_body_word_count=200,
     ),
     # -----------------------------------------------------------------
     # Regional Feds
@@ -217,30 +212,23 @@ CASES: list[CoverageCase] = [
         iterator_factory=lambda s, e: FedRegionalIngestor()._fetch_chicago_fed_letter(s, e, set()),
         window_start=date(2023, 1, 1),
         window_end=date(2023, 12, 31),
-        # Floor explicitly higher than the pre-ADR-017 cap of 246 / N years;
-        # the failure mode was "single series captured only" → set diversity
-        # check below.
         floor_count=20,
         max_records=200,
         min_date_span_days=90,
     ),
     CoverageCase(
-        name="fed_atlanta_2023_curl_cffi",
+        name="fed_atlanta_2023_listing_api",
         iterator_factory=lambda s, e: FedRegionalIngestor()._fetch_atlanta(s, e, set()),
         window_start=date(2023, 1, 1),
         window_end=date(2023, 12, 31),
-        # Pre-ADR-017 fed_atlanta = 0 records. Any non-zero proves the
-        # curl_cffi + listing-API walk is wired correctly. (Atlanta Fed
-        # sitemap retired in the 2026 site redesign; we now hit
-        # /api/feed/getFilteredResults per series — see _fetch_atlanta
-        # docstring.)
+        # Pre-ADR-017 fed_atlanta = 0 records; ADR-021 switched to the
+        # per-series JSON listing API. Floor enforces non-trivial yield.
         floor_count=10,
         max_records=80,
         min_date_span_days=60,
-        skip_check=requires_curl_cffi,
     ),
     # -----------------------------------------------------------------
-    # Tier 1 institutional
+    # Institutional sources
     # -----------------------------------------------------------------
     CoverageCase(
         name="congressional_treasury_sec_2023",
@@ -251,6 +239,9 @@ CASES: list[CoverageCase] = [
         max_records=80,
         expected_sections={"treasury_testimony"},
         min_date_span_days=90,
+        # CHRG transcripts are long; testimony press releases shorter.
+        # 80 is a conservative floor across both registers.
+        min_body_word_count=80,
     ),
     CoverageCase(
         name="imf_2023_multi_series",
@@ -259,25 +250,16 @@ CASES: list[CoverageCase] = [
         window_end=date(2023, 12, 31),
         floor_count=30,
         max_records=300,
-        # Of the 5 series we require ≥3 to appear. Don't pin to specific names
-        # so the test doesn't over-specify.
-        expected_sections=set(),  # diversity asserted via custom check below
+        expected_sections=set(),  # diversity asserted via multi-section rule
         min_date_span_days=120,
-        skip_check=requires_curl_cffi,
     ),
     CoverageCase(
         name="bis_2023_multi_section",
         iterator_factory=lambda s, e: BISIngestor().fetch(s, e),
         window_start=date(2023, 1, 1),
         window_end=date(2023, 12, 31),
-        # Pre-ADR-017 BIS yielded ~working-papers only (~70/year).
-        # Post-ADR-017 should yield working_paper + quarterly_review + bulletin
-        # + speech + other_publication. Floor is conservative.
         floor_count=40,
         max_records=400,
-        # Diversity asserted via custom check below — require ≥3 distinct
-        # sections out of {working_paper, quarterly_review, bulletin, speech,
-        # other_publication}.
         expected_sections=set(),
         min_date_span_days=120,
     ),
@@ -291,28 +273,26 @@ CASES: list[CoverageCase] = [
         min_date_span_days=30,
     ),
     CoverageCase(
-        name="cbo_2023_datadome",
+        name="cbo_2023_wayback",
         iterator_factory=lambda s, e: CBOIngestor().fetch(s, e),
         window_start=date(2023, 6, 1),
         window_end=date(2023, 7, 31),
-        # Pre-ADR-017 CBO = 0 records (DataDome 403). Any non-zero proves
-        # the Playwright + curl_cffi-with-cookies hybrid is working.
+        # CBO publishes ~700-1200 items/year so a 2-month window has
+        # ~120-200 expected. Floor at 5 is a sanity check; the empirical
+        # yield is the CBO methodology question still pending resolution.
         floor_count=5,
         max_records=30,
         expected_sections={"cbo_publication"},
         min_date_span_days=14,
-        skip_check=requires_playwright,
     ),
     # -----------------------------------------------------------------
-    # Tier 2 — academic / policy
+    # Academic / policy
     # -----------------------------------------------------------------
     CoverageCase(
         name="voxeu_2012_historical_window",
         iterator_factory=lambda s, e: VoxEUIngestor().fetch(s, e),
         window_start=date(2012, 1, 1),
         window_end=date(2012, 12, 31),
-        # Pre-fix VoxEU silent-timeout dropped everything before 2019.
-        # Any non-trivial 2012 count proves the year-sharded fetch works.
         floor_count=15,
         max_records=100,
         min_date_span_days=120,
@@ -341,28 +321,17 @@ CASES: list[CoverageCase] = [
         iterator_factory=lambda s, e: PIIEIngestor().fetch(s, e),
         window_start=date(2023, 1, 1),
         window_end=date(2023, 12, 31),
-        # Pre-ADR-017 PIIE silently emitted title-only fallbacks (179 total
-        # for 2010-present). ADR-017 dropped the title-only fallback;
-        # floor here proves bodies are being captured.
         floor_count=15,
         max_records=120,
         expected_sections={"piie_publication"},
         min_date_span_days=90,
     ),
-    # CFR removed by ADR-020 (basis-set redundancy with PIIE on the
-    # international-policy dimension). CFRIngestor class is retained in
-    # institutional.py for backwards-compat data reads but is not run in
-    # any new ingest — no coverage test.
     # -----------------------------------------------------------------
-    # ADR-020 additions: NBER (academic primary work) and CEA (executive
-    # fiscal voice). Each is tested with a narrow window so the integration
-    # battery stays under ~30 minutes per source.
+    # ADR-020 additions: NBER + CEA
     # -----------------------------------------------------------------
     CoverageCase(
         name="nber_2023h2_direct_url_enum",
         iterator_factory=lambda s, e: NBERIngestor().fetch(s, e),
-        # 2023 Q3-Q4 hits w31500..w32000 — a few hundred papers, manageable
-        # to scan within max_records cap.
         window_start=date(2023, 7, 1),
         window_end=date(2023, 9, 30),
         floor_count=30,
@@ -373,8 +342,6 @@ CASES: list[CoverageCase] = [
     CoverageCase(
         name="nber_2014_historical_edge",
         iterator_factory=lambda s, e: NBERIngestor().fetch(s, e),
-        # 2014 Q1 hits w19800..w20100 — sanity check that the year-floor
-        # table is calibrated correctly for the historical edge.
         window_start=date(2014, 1, 1),
         window_end=date(2014, 3, 31),
         floor_count=20,
@@ -385,18 +352,18 @@ CASES: list[CoverageCase] = [
     CoverageCase(
         name="cea_erp_2023_govinfo",
         iterator_factory=lambda s, e: CEAIngestor().fetch(s, e),
-        # ERP-2023 was published in March 2023; the test window covers all
-        # of 2023 so we capture the single ERP issued that year. Every
-        # chapter granule shares the same dateIssued, so we disable the
-        # date-span check (the floor + section check are the assertions
-        # that matter).
         window_start=date(2023, 1, 1),
         window_end=date(2023, 12, 31),
         floor_count=10,
         max_records=60,
         expected_sections={"cea_erp_chapter"},
+        # All ERP chapters share the volume's dateIssued, so date span
+        # is irrelevant — the floor + section check are the assertions
+        # that matter.
         min_date_span_days=0,
-        skip_check=requires_pypdf,
+        # ERP chapters are PDF-extracted; full chapter is thousands of
+        # words. A 500-word floor catches partial-page-only extraction.
+        min_body_word_count=500,
     ),
     CoverageCase(
         name="cea_erp_2014_historical",
@@ -407,13 +374,10 @@ CASES: list[CoverageCase] = [
         max_records=60,
         expected_sections={"cea_erp_chapter"},
         min_date_span_days=0,
-        skip_check=requires_pypdf,
+        min_body_word_count=500,
     ),
     # -----------------------------------------------------------------
-    # Tier 1/2 historical-edge cross-check: confirm each historically-
-    # significant source still yields content in 2010 (the corpus floor).
-    # 2010 is the most failure-prone window because many sites' URL
-    # patterns and feed formats changed between then and now.
+    # Historical-edge cross-checks at the 2010 corpus floor
     # -----------------------------------------------------------------
     CoverageCase(
         name="brookings_2010_historical_edge",
@@ -434,7 +398,6 @@ CASES: list[CoverageCase] = [
         max_records=300,
         expected_sections=set(),
         min_date_span_days=120,
-        skip_check=requires_curl_cffi,
     ),
     CoverageCase(
         name="bis_2010_historical_edge",
@@ -490,6 +453,20 @@ _MULTI_SECTION_MIN_SECTIONS: dict[str, tuple[int, set[str]]] = {
 
 
 # ---------------------------------------------------------------------------
+# Exception classes that count as "true network failures" — these skip
+# the test gracefully (the network is the problem, not the code). Any other
+# exception fails loudly.
+# ---------------------------------------------------------------------------
+
+_NETWORK_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    requests.ConnectionError,
+    requests.Timeout,
+    socket.gaierror,
+    ConnectionResetError,
+)
+
+
+# ---------------------------------------------------------------------------
 # Test driver
 # ---------------------------------------------------------------------------
 
@@ -497,42 +474,84 @@ _MULTI_SECTION_MIN_SECTIONS: dict[str, tuple[int, set[str]]] = {
 @pytest.mark.integration
 @pytest.mark.parametrize("case", CASES, ids=[c.id for c in CASES])
 def test_source_coverage(case: CoverageCase) -> None:
-    """Run one coverage contract.
+    """Run one coverage contract — four assertions, one code path.
 
-    Three assertions, one common code path. See module docstring.
+    See the module docstring for the contracts (A floor count, B
+    authoritative date per record, C real body per record, D section
+    diversity + date span).
     """
-    if case.skip_check is not None:
-        case.skip_check()
-
     iterator = case.iterator_factory(case.window_start, case.window_end)
 
     # Collect up to max_records, filtering by section if requested.
+    # Network errors skip; everything else propagates as test failure.
     collected: list[Article] = []
     try:
         for art in itertools.islice(iterator, case.max_records):
             if case.section_filter and art.section != case.section_filter:
                 continue
             collected.append(art)
-    except Exception as exc:  # pragma: no cover - depends on upstream
+    except _NETWORK_EXCEPTIONS as exc:  # pragma: no cover
         pytest.skip(
-            f"{case.name}: upstream fetch raised {type(exc).__name__}: {exc}. "
-            "Treated as network/environment error, not a code failure."
+            f"{case.name}: network error ({type(exc).__name__}: {exc}). "
+            "Treated as transient connectivity issue, not a code defect."
         )
 
-    # ---- 1. Floor count ----
+    # ---- Contract A: floor count ----
     assert len(collected) >= case.floor_count, (
         f"{case.name}: only {len(collected)} records collected, "
         f"expected at least {case.floor_count} within "
         f"{case.window_start.isoformat()}..{case.window_end.isoformat()} "
-        f"(max_records cap = {case.max_records}, "
-        f"section_filter = {case.section_filter!r}). "
-        "Likely a silent coverage failure — investigate the ingestor."
+        f"(max_records={case.max_records}, section_filter={case.section_filter!r}). "
+        "Likely a silent coverage failure — fix the ingestor, don't lower the floor."
     )
 
-    # ---- 2. Section diversity ----
+    # ---- Contract B: authoritative date per record ----
+    # Every record must carry a real publication date inside the requested
+    # window. Methodology principle 1 (anchored or removed) — fabricated
+    # or fallback-derived dates are forbidden.
+    invalid_dates: list[tuple[str, str]] = []
+    out_of_window: list[tuple[str, date]] = []
+    parsed_dates: list[date] = []
+    for art in collected:
+        try:
+            pub = date.fromisoformat(art.published_at[:10])
+        except (ValueError, TypeError):
+            invalid_dates.append((art.url, art.published_at))
+            continue
+        if pub < case.window_start or pub > case.window_end:
+            out_of_window.append((art.url, pub))
+            continue
+        parsed_dates.append(pub)
+    assert not invalid_dates, (
+        f"{case.name}: {len(invalid_dates)} records have unparseable "
+        f"published_at values. Examples: {invalid_dates[:3]}. "
+        "Every emitted record must carry a valid ISO date — fix the ingestor "
+        "to drop records without authoritative dates rather than fabricating one."
+    )
+    assert not out_of_window, (
+        f"{case.name}: {len(out_of_window)} records have dates outside the "
+        f"requested window {case.window_start}..{case.window_end}. Examples: "
+        f"{out_of_window[:3]}. The ingestor's window filter is broken."
+    )
+
+    # ---- Contract C: real body per record ----
+    # Every record must carry a body whose word count meets the source's
+    # minimum. Catches title-only / teaser-only / abstract-only emission.
+    short_bodies = [
+        (art.url, art.word_count)
+        for art in collected
+        if art.word_count < case.min_body_word_count
+    ]
+    assert not short_bodies, (
+        f"{case.name}: {len(short_bodies)} records have body word_count "
+        f"below {case.min_body_word_count}. Examples: {short_bodies[:3]}. "
+        "Either body extraction is truncated, or the ingestor is emitting "
+        "title/teaser fallbacks — fix the ingestor."
+    )
+
+    # ---- Contract D1: section diversity ----
     seen_sections = {a.section for a in collected if a.section}
 
-    # Pinned-name diversity rule (≥ N distinct sections from a known set).
     if case.name in _MULTI_SECTION_MIN_SECTIONS:
         min_n, universe = _MULTI_SECTION_MIN_SECTIONS[case.name]
         relevant_seen = seen_sections & universe
@@ -542,7 +561,6 @@ def test_source_coverage(case: CoverageCase) -> None:
             "Likely indicates only one series is being captured."
         )
 
-    # Generic expected_sections rule (all listed sections must appear).
     if case.expected_sections:
         missing = case.expected_sections - seen_sections
         assert not missing, (
@@ -550,20 +568,13 @@ def test_source_coverage(case: CoverageCase) -> None:
             f"Seen sections: {seen_sections}. Indicates partial series coverage."
         )
 
-    # ---- 3. Date span ----
-    if case.min_date_span_days > 0:
-        pub_dates: list[date] = []
-        for art in collected:
-            try:
-                pub_dates.append(date.fromisoformat(art.published_at[:10]))
-            except ValueError:
-                continue
-        if pub_dates:
-            span_days = (max(pub_dates) - min(pub_dates)).days
-            assert span_days >= case.min_date_span_days, (
-                f"{case.name}: records clustered within {span_days} days "
-                f"({min(pub_dates).isoformat()}..{max(pub_dates).isoformat()}); "
-                f"expected span ≥ {case.min_date_span_days} days. "
-                "Indicates the ingestor may be silently ignoring its date range "
-                "and only returning recent records."
-            )
+    # ---- Contract D2: date span ----
+    if case.min_date_span_days > 0 and parsed_dates:
+        span_days = (max(parsed_dates) - min(parsed_dates)).days
+        assert span_days >= case.min_date_span_days, (
+            f"{case.name}: records clustered within {span_days} days "
+            f"({min(parsed_dates).isoformat()}..{max(parsed_dates).isoformat()}); "
+            f"expected span ≥ {case.min_date_span_days} days. "
+            "Indicates the ingestor may be silently ignoring its date range "
+            "and only returning recent records."
+        )

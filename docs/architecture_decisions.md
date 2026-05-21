@@ -1524,6 +1524,114 @@ Playwright remains in `requirements.txt` for now but is no longer load-bearing (
 
 ---
 
+## ADR-022: Methodology-principle-1 enforcement pass across all 12 ingestors
+
+- **Status**: Accepted
+- **Date**: 2026-05-21
+- **Refines**: ADR-015, ADR-016, ADR-019, ADR-020, ADR-021
+
+### Context
+
+Post-ADR-021, a senior-engineer audit of all 12 active basis-set ingestors found that several emit records derived from heuristic / fabricated values rather than authoritative source metadata, and several silent zero-yield paths could hide upstream regressions. Methodology principle 1 (`docs/METHODOLOGY.md` §7) says every parameter is anchored or removed; principle 4 says topic-relevance is decided in exactly one place. The audit findings violated principle 1 in seven places — three by fabricating publication dates when source metadata was absent, four by silently degrading to a lower-coverage fallback when an optional dependency or env var was missing.
+
+The defects were:
+
+1. **CBO** (`institutional.py` line 1413): when trafilatura could not extract a page date from a Wayback-archived cbo.gov snapshot, the ingestor fell back to the Wayback snapshot timestamp (the date the page was last crawled, which can be decades after publication). A local probe surfaced a 1993 NAFTA analysis tagged as 2023-07-23.
+2. **BIS** (line 845): when the sitemap `<lastmod>` field was missing, the ingestor fabricated `date(year, 1, 1)`.
+3. **Chicago Fed** (line 1125): when trafilatura's meta_date disagreed with the URL year, the ingestor fabricated `date(year, 6, 15)`.
+4. **Congressional Path B + CEA** (lines 2585-2595, 2969-2978): when `GOVINFO_API_KEY` was unset, the ingestor logged a warning and fell back to GovInfo's public `DEMO_KEY` (30 req/hr), which silently undercovers any full-corpus enumeration.
+5. **CEA + Congressional `_extract_pdf_text`** (lines 3022-3033, 2790-2799): when `pypdf` was unimportable, the ingestor logged an error and returned `""`, which the caller treated as a transient parse failure and dropped the granule — silently zeroing both sources for the full ingest if pypdf hadn't been installed.
+6. **Atlanta Fed** (line 1299): when the article page body extraction yielded < 50 words, the ingestor substituted the API listing's `Teaser` field (a 1-2 sentence summary) as the body — leaking listing boilerplate into the embedding text.
+7. **VoxEU** (line 1805): on any per-shard exception (Cloudflare 403, HTTP timeout), the ingestor logged a warning and `return`ed, silently truncating the year's coverage. The audit found this was how the 2026-05-19 Cloudflare tightening went unnoticed for 24 hours.
+
+A parallel audit of `tests/integration/test_source_coverage.py` found four further defects:
+
+8. `pytest.skip` on ANY exception (line 516) masked code defects as "network/environment errors."
+9. `requires_curl_cffi` / `requires_pypdf` / `requires_playwright` helpers (lines 70-92) skipped the test gracefully when those deps were missing — but curl_cffi and pypdf are mandatory for the real ingest per ADR-014 and ADR-020. Skipping their tests would let a developer ship without them.
+10. The contracts were three: floor count, section diversity, date span. They did not validate that every emitted record carries a parseable in-window publication date and a real body — i.e. they could pass a corpus full of mis-dated and title-only records.
+11. Per-record `min_body_word_count` was not enforced, so a teaser-substitution regression like #6 would not have failed any test.
+
+Two more methodological-cleanup items surfaced from the same audit:
+
+12. **FSOC Annual Reports** (line 1721): `_scrape_fsoc` returned silently with a comment that PDF-only content was "documented as a corpus limitation." This violates the project's mandate to ingest all available content from each basis-set source; FSOC Annual Reports are a major systemic-risk discourse artifact and they are PDF-text-layered (pypdf extracts cleanly).
+13. **Atlanta Fed docstring** described the pre-2019 / pre-2022 / pre-2016 cull as a "Hard site-side limitation"; this is a fact about the source's editorial choices, not a methodology limitation of the project, and the framing implied documentation of a flaw rather than a neutral statement about source coverage.
+
+### Decision
+
+All thirteen defects are addressed in one commit. The principles applied:
+
+- **No fabricated dates.** If an ingestor cannot extract a publication date from authoritative source metadata (URL slug, structured page meta, or sitemap `<lastmod>` confirmed by page-side cross-check), it drops the record and logs DEBUG with the candidate URL. We never emit a record with an inferred date — the SIR fit's temporal axis depends on correct dates, and a mis-dated record actively corrupts the analysis.
+
+- **No silent degradation to lower-coverage fallbacks.** `GOVINFO_API_KEY` missing now raises `RuntimeError`. `pypdf` ImportError propagates from `_extract_pdf_text` rather than being swallowed and returning an empty body. `curl_cffi` ImportError already propagated through VoxEU/IMF/Atlanta with a loud error log; we leave that pattern unchanged. The principle: a missing dependency is a configuration error, not a runtime fallback target.
+
+- **No teaser-as-body or title-as-body substitution.** Atlanta Fed's teaser-fallback is removed. PIIE already removed its title-only fallback in ADR-017; we audit-confirmed it.
+
+- **No silent zero-yield paths.** VoxEU now tracks per-shard yield and raises `RuntimeError` if no shard yielded across a multi-year window. Atlanta Fed distinguishes page-1-empty (legitimate "no rows in window," logged INFO) from HTTP error or JSON-parse failure (logged ERROR). The artificial 20-page Atlanta pagination cap is removed; pagination is bounded by the date-range filter alone.
+
+- **Test contracts validate every record, not just aggregate counts.** Every record's `published_at` must parse as an ISO date inside the requested window. Every record's `word_count` must meet a source-specific minimum. Failures specify the URL and value that broke the assertion. The `pytest.skip` for upstream exceptions is narrowed to `(requests.ConnectionError, requests.Timeout, socket.gaierror, ConnectionResetError)` only — every other exception fails loudly. The `requires_*` skip helpers for mandatory deps are removed; if `curl_cffi` or `pypdf` is missing at test time, pytest fails loudly at import time and the developer installs them.
+
+- **FSOC included.** `TreasuryOFRIngestor._scrape_fsoc` is implemented end-to-end. PDF discovery via the `_FSOC_PDF_RE` pattern on the canonical FSOC studies-and-reports index; PDF body via the shared `_extract_pdf_text` helper. FSOC Annual Reports get section `fsoc_annual_report` and document_type `fsoc_annual_report`, dated to December 31 of the reporting year (the report's reporting period closes at year end). This adds ~15 records to the corpus floor across 2010-present — small in count, large in narrative discourse weight.
+
+- **Atlanta Fed docstring reframed.** "Hard site-side limitation" framing replaced with a neutral statement of each series' inaugural date. No `stable_history_gap` marker (it was documented but never implemented). The basis-set composition is symmetric across sources: every source contributes what its publisher emits during the window. Atlanta's pre-2019 / pre-2022 / pre-2016 absence is a fact of the source's editorial choices, not a methodology limitation.
+
+- **NBER dynamic ceiling.** The hardcoded `_ABSOLUTE_CEILING = 38000` was researcher-judgment ("calibrated 2026-05-20, generous through 2026") that would silently undercount once NBER passed w36000. Replaced with `_compute_ceiling(end_year)` that prefers the calibrated next-year floor and otherwise projects forward at 2500 paper-IDs per forecast year. The consecutive-404 stop is the actual termination signal; the ceiling only needs to be `>=` the true head.
+
+### Consequences
+
+**Positive:**
+
+- The corpus is methodologically defensible at the per-record level. Every emitted Article has a real publication date and a real body, sourced from authoritative metadata.
+- Pre-registration text simplifies: "All basis-set ingestors emit only records whose publication date is extracted from source-side metadata; records lacking such a date are dropped." No researcher-fabricated dates anywhere.
+- Coverage regressions surface as test failures with the broken URL named in the assertion message, not as "skip" lines that scroll past during a CI run.
+- Missing dependencies (pypdf, curl_cffi) and missing env vars (GOVINFO_API_KEY) fail at the first call, not after a 48-hour ingest with a silent half-empty corpus.
+- FSOC Annual Reports now contribute to the financial-stability dimension; the basis-set framing is more complete.
+
+**Negative / risks:**
+
+- The strict-date enforcement may reduce corpus counts for sources where the upstream surface lacks reliable publication metadata. The empirical question is unresolved for CBO specifically — see calibration probe below.
+- A handful of records that previously made it into the corpus on URL-year-only metadata (e.g., Chicago Fed working papers where trafilatura silently picked up the page-modified date instead of the publication date) are now dropped. This is the right trade-off: methodology cleanliness over corpus size.
+- NBER's `_compute_ceiling` is calibrated through 2026; running for end-year 2030+ would project 5 × 2500 = +12500 IDs beyond the latest floor. The consecutive-404 stop bounds this in practice but adds a few hundred wasted HTTP calls in the tail.
+
+**Open question — CBO Wayback yield (deferred to RCC empirical check):**
+
+The local probe of the CBO Wayback path (2026-05-21) returned 1 record out of 10036 candidates, mis-dated by ~30 years (a 1993 NAFTA analysis tagged as 2023-07-23). Two interpretations are possible: (a) Wayback's archived snapshots of cbo.gov genuinely lack structured publication metadata on ~99% of pages, in which case the strict-date enforcement above will produce near-zero CBO yield; (b) the probe was time-bounded and most candidates were never actually fetched. We need empirical data before deciding next steps.
+
+`scripts/probe_cbo_wayback_dates.py` samples N candidates uniformly at random, runs each through the same `_fetch_page_full` + page-date extraction the ingestor uses, and reports the empirical `page_date_yield_pct`. Decision tree in the script docstring.
+
+The choices we'll face if Wayback yield is too low:
+1. Common Crawl WARC fetch for cbo.gov (free, dense, requires WARC parsing).
+2. Residential-IP scraping service for cbo.gov direct (paid).
+3. govinfo CBO collection (sparse over time, page-date clean).
+4. Drop CBO from the basis set (loses the legislative half of the fiscal-authority dimension).
+
+This ADR does not pre-commit to any of (1-4); the probe result decides.
+
+### Verification
+
+Local:
+
+- `python -m py_compile` clean across all edited files (institutional.py, fed.py, tests).
+- Non-integration unit test suite passes (51 tests).
+- Smoke-test instantiating each of 13 ingestor classes and verifying `_govinfo_api_key()` raises RuntimeError when the env var is unset.
+- Integration test collection identifies 25 cases (was 25 before; the `cbo_2023_datadome` and `fed_atlanta_2023_curl_cffi` cases renamed to `cbo_2023_wayback` and `fed_atlanta_2023_listing_api` to reflect the actual access path).
+
+To verify end-to-end:
+
+- `pytest tests/integration/test_source_coverage.py -m integration -v` on RCC with `GOVINFO_API_KEY` set and `curl_cffi` + `pypdf` installed.
+- `python scripts/probe_cbo_wayback_dates.py --sample-size 50` on RCC.
+
+### Implementation notes
+
+All changes are in three files:
+
+- `src/mnd/ingestion/institutional.py` — defects 1-7, 12, 13 above.
+- `tests/integration/test_source_coverage.py` — defects 8-11.
+- `scripts/probe_cbo_wayback_dates.py` — new file, calibration probe for the open question.
+
+No changes to `_sub_ingestors`, the composite ingestor, the filter / embed / cluster pipeline, the config, or any other module.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

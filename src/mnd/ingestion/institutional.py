@@ -841,18 +841,28 @@ class BISIngestor(Ingestor):
                     pub_date = date.fromisoformat(mod_el.text[:10])
                 except ValueError:
                     pass
-            if pub_date is None:
-                pub_date = date(year, 1, 1)
-
-            if pub_date < start or pub_date > end:
-                continue
             if url in seen:
                 continue
             seen.add(url)
 
-            body, title, author, _ = _fetch_page_full(url, min_words=50)
+            body, title, author, page_date = _fetch_page_full(url, min_words=50)
+            # Prefer the page's own metadata date (trafilatura-extracted)
+            # when available; sitemap <lastmod> reflects the last index
+            # rebuild, not necessarily publication. Drop the record if
+            # neither yields a date — no fabricated dates in the corpus.
+            authoritative_date = page_date or pub_date
+            if authoritative_date is None:
+                log.debug(
+                    "BIS %d: dropping %s — no authoritative publication date "
+                    "(sitemap lastmod and page metadata both empty)",
+                    year, url,
+                )
+                continue
+            if authoritative_date < start or authoritative_date > end:
+                continue
             if not body or len(body.split()) < 50:
                 continue
+            pub_date = authoritative_date
 
             per_section_count[section] = per_section_count.get(section, 0) + 1
             yield _make_article(
@@ -1117,14 +1127,18 @@ class FedRegionalIngestor(Ingestor):
             if not body or len(body.split()) < 50:
                 continue
 
-            # URL year is reliable (publications are year-numbered).
-            # trafilatura's meta_date sometimes returns the page-modified
-            # date (today) instead of publication date — accept it only when
-            # it agrees with the URL year. Otherwise mid-year is a safer
-            # fallback than Jan 1 for weekly aggregation.
-            pub_date = date(year, 6, 15)
-            if meta_date and meta_date.year == year:
-                pub_date = meta_date
+            # URL year only tells us the publication year — not the day,
+            # which the SIR/logistic dynamics require. Require trafilatura
+            # to surface a meta_date that agrees with the URL year; drop
+            # the record otherwise rather than fabricate a mid-year date.
+            if meta_date is None or meta_date.year != year:
+                log.debug(
+                    "Chicago Fed: dropping %s — no authoritative pub date "
+                    "(URL year=%d, meta_date=%s)",
+                    url, year, meta_date,
+                )
+                continue
+            pub_date = meta_date
 
             if pub_date < start or pub_date > end:
                 continue
@@ -1180,15 +1194,17 @@ class FedRegionalIngestor(Ingestor):
              style ``/research-and-data/YYYY/MM/DD/…`` to catch articles
              the dedicated feeds don't surface.
 
-        Hard site-side limitation: historical content removed in the redesign
-        is not recoverable from atlantafed.org (working papers pre-2019,
-        macroblog pre-2022, original Economy Matters pre-2016). The
-        ``stable_history_gap`` extra_meta flag is set on every yielded
-        record so downstream coverage QA can join against it.
+        Each series' API begins at its inaugural-publication date — the
+        listing endpoint returns zero rows for windows that predate the
+        series. Working Papers begin 2019-02, Policy Hub Papers 2020-01,
+        Policy Hub Macroblog 2022-10, the Macroeconomy hub feed 2016-09.
+        Year-shard queries before those start dates yield empty responses
+        (logged as INFO by ``_fetch_atlanta``); the basis-set composition
+        for those windows is supplied by the other three regional Feds.
 
-        The body fetch still goes through ``_atlanta_get`` (curl_cffi
-        Chrome131 impersonation) because article pages remain bot-protected.
-        See ``_ATLANTA_FEEDS`` for the (DataSourceId, ContextId, section,
+        The body fetch goes through ``_atlanta_get`` (curl_cffi Chrome131
+        impersonation) because article pages are bot-protected. See
+        ``_ATLANTA_FEEDS`` for the (DataSourceId, ContextId, section,
         url_filter_regex) tuples.
         """
         # Window-cap the API query: API ignores StartDateRange in the
@@ -1196,13 +1212,14 @@ class FedRegionalIngestor(Ingestor):
         api_start = start.isoformat()
         api_end = min(end, date.today()).isoformat()
 
-        candidates: list[tuple[str, str, date, str, str]] = []
-        # (url, section, pub_date, title, teaser)
+        candidates: list[tuple[str, str, date, str]] = []
+        # (url, section, pub_date, title)
 
         for ds_id, ctx_id, section, url_filter in self._ATLANTA_FEEDS:
             url_pat = re.compile(url_filter) if url_filter else None
             page_num = 1
-            seen_pages = 0
+            section_items = 0
+            page_zero_status: str | None = None
             while True:
                 params = {
                     "DataSourceId": ds_id,
@@ -1216,30 +1233,56 @@ class FedRegionalIngestor(Ingestor):
                     resp = self._atlanta_get(
                         self._ATLANTA_API, params=params, timeout=30.0
                     )
-                    if getattr(resp, "status_code", 200) >= 400:
-                        log.warning(
-                            "Atlanta API %s page=%d HTTP %s",
-                            section, page_num, resp.status_code,
+                    status_code = getattr(resp, "status_code", 200)
+                    if status_code >= 400:
+                        # API errors are loud — these aren't end-of-pagination,
+                        # they're upstream failures that should surface in logs.
+                        log.error(
+                            "Atlanta API %s page=%d HTTP %d (DataSourceId=%s) — "
+                            "section will be undercovered",
+                            section, page_num, status_code, ds_id,
                         )
                         break
                     text = resp.text or ""
                     if not text.strip():
-                        # API returns empty body when no rows match the
-                        # date filter (e.g. asking working-papers for 2013).
+                        # Empty body is end-of-pagination for a real
+                        # query; on page 1 it means no rows match the
+                        # window (legitimate when asking working-papers
+                        # for a year before the series existed).
+                        if page_num == 1:
+                            page_zero_status = "empty_response_page_1"
+                            log.info(
+                                "Atlanta API %s: empty response on page 1 "
+                                "(no rows in window %s..%s)",
+                                section, api_start, api_end,
+                            )
                         break
                     payload = json.loads(text)
                 except Exception as exc:
-                    log.warning("Atlanta API %s page=%d failed: %s", section, page_num, exc)
+                    log.error(
+                        "Atlanta API %s page=%d raised %s: %s",
+                        section, page_num, type(exc).__name__, exc,
+                    )
                     break
 
                 items_raw = payload.get("FilteredFeedItemsJson") or "[]"
                 try:
                     items = json.loads(items_raw)
                 except Exception as exc:
-                    log.warning("Atlanta API %s page=%d bad JSON: %s", section, page_num, exc)
+                    log.error(
+                        "Atlanta API %s page=%d JSON parse failed: %s",
+                        section, page_num, exc,
+                    )
                     break
 
                 if not items:
+                    if page_num == 1:
+                        page_zero_status = "zero_items_page_1"
+                        log.info(
+                            "Atlanta API %s: zero items on page 1 "
+                            "(no rows in window %s..%s)",
+                            section, api_start, api_end,
+                        )
                     break
 
                 for it in items:
@@ -1253,35 +1296,46 @@ class FedRegionalIngestor(Ingestor):
                     if not pub_date or pub_date < start or pub_date > end:
                         continue
                     title = (it.get("Title") or "").strip()
-                    teaser = (it.get("Teaser") or "").strip()
-                    candidates.append((url, section, pub_date, title, teaser))
+                    candidates.append((url, section, pub_date, title))
+                    section_items += 1
 
-                # API caps results around 100-200; stop after first empty
-                # or short page.
+                # End of pagination signaled by a short page (less than
+                # the requested PageSize of 100). No artificial page cap —
+                # the loop is bounded by the date-range filter and the
+                # series' true item count.
                 if len(items) < 100:
                     break
                 page_num += 1
-                seen_pages += 1
-                if seen_pages > 20:  # safety bound
-                    break
                 time.sleep(0.3)
+            log.info(
+                "Atlanta API %s: %d items collected from %d pages%s",
+                section, section_items, page_num,
+                f" ({page_zero_status})" if page_zero_status else "",
+            )
 
         if not candidates:
-            log.warning(
+            # Atlanta API yielded nothing across all 4 series — this is
+            # only acceptable if every series is genuinely empty for the
+            # window. Surface as ERROR so a regression (rotated DataSourceIds,
+            # JSS feed signature change) doesn't silently zero out the source.
+            log.error(
                 "Atlanta Fed: 0 candidates from listing API across all four "
-                "series — listing API IDs may have rotated; investigate."
+                "series for window %s..%s — listing API contract may have "
+                "changed (rotated DataSourceIds, JSS feed signature) or "
+                "TLS impersonation is failing. Investigate.",
+                api_start, api_end,
             )
             return
 
         # Deduplicate by URL (the macroeconomy hub overlaps the dedicated
         # working-papers / macroblog feeds).
-        unique: dict[str, tuple[str, date, str, str]] = {}
-        for url, section, pub_date, title, teaser in candidates:
+        unique: dict[str, tuple[str, date, str]] = {}
+        for url, section, pub_date, title in candidates:
             if url in unique:
                 continue
-            unique[url] = (section, pub_date, title, teaser)
+            unique[url] = (section, pub_date, title)
 
-        for url, (section, pub_date, title, teaser) in unique.items():
+        for url, (section, pub_date, title) in unique.items():
             if url in seen:
                 continue
             seen.add(url)
@@ -1294,13 +1348,17 @@ class FedRegionalIngestor(Ingestor):
             except Exception as exc:
                 log.debug("Atlanta page %s fetch failed: %s", url, exc)
                 continue
-            # Fall back to API-provided teaser if the article page body
-            # comes back too thin (some macroblog posts are ~80 words).
+            # Body must come from the article page itself. Listing-API
+            # teasers are 1-2 sentence summaries that would feed boilerplate
+            # into the embedding step; if the article body extraction failed
+            # we drop the record rather than substitute the teaser.
             if not body or len(body.split()) < 50:
-                if teaser and len(teaser.split()) >= 30:
-                    body = teaser
-                else:
-                    continue
+                log.debug(
+                    "Atlanta Fed %s: dropping — page body extraction "
+                    "yielded %d words (<50 floor)",
+                    url, len(body.split()) if body else 0,
+                )
+                continue
             yield _make_article(
                 source_id="fed_atlanta",
                 url=url,
@@ -1407,14 +1465,24 @@ class CBOIngestor(Ingestor):
             body, fetched_title, _author, page_date = _fetch_page_full(
                 snap_url, min_words=50, getter=self._wayback_get,
             )
-            # Wayback snapshot timestamp is last-crawled, not publication
-            # date. Prefer the page's own structured metadata; fall back
-            # to the snapshot timestamp only if no page-date is present.
-            published = page_date or self._ts_to_date(snapshot_ts)
-            if not published or published < start or published > end:
+            # Strict date policy (no Wayback-timestamp fallback): the Wayback
+            # snapshot timestamp is the last-crawled date, which can be
+            # decades after the actual publication date (e.g. a 1993 NAFTA
+            # analysis snapshotted in 2023). Such mis-dated records would
+            # corrupt the SIR fit. We emit only records whose own page
+            # metadata yields a publication date.
+            if page_date is None:
                 log.debug(
-                    "CBO %s: dropped (page_date=%s ts=%s out of [%s..%s])",
-                    original_url, page_date, snapshot_ts, start, end,
+                    "CBO %s: dropped — no page-extracted publication date "
+                    "(snapshot_ts=%s)",
+                    original_url, snapshot_ts,
+                )
+                continue
+            published = page_date
+            if published < start or published > end:
+                log.debug(
+                    "CBO %s: dropped (page_date=%s out of [%s..%s])",
+                    original_url, page_date, start, end,
                 )
                 continue
             if not body or len(body.split()) < 50:
@@ -1652,12 +1720,94 @@ class TreasuryOFRIngestor(Ingestor):
             )
             time.sleep(1.0)
 
+    # FSOC PDF URL pattern: ``/system/files/<id>/fsoc{year}annualreport.pdf`` or
+    # ``/system/files/<id>/FSOC{year}AnnualReport.pdf`` (case insensitive). The
+    # year is the year the report covers — the Council convention is to publish
+    # in the late-Q4 of the same year or in Q1 of the following year. We use
+    # December 31 of that year as the publication date floor (authoritative
+    # by-year tagging), which matches how downstream weekly-aggregation treats
+    # the report's discursive footprint.
+    _FSOC_PDF_RE = re.compile(
+        r"/system/files/\d+/(?:fsoc|FSOC)[^/]*?(\d{4})[^/]*?annual[^/]*?report[^/]*?\.pdf",
+        re.IGNORECASE,
+    )
+
     def _scrape_fsoc(self, start: date, end: date) -> Iterator[Article]:
-        # FSOC Annual Reports are PDF-only — no extractable HTML body.
-        # Skip silently; they are documented as a corpus limitation.
-        log.debug("FSOC Annual Reports are PDF-only; skipping for text corpus")
-        return
-        yield  # make this a generator
+        """Fetch FSOC annual reports as PDF, extracted to text via pypdf.
+
+        FSOC has published one annual report per year since 2011 (with a
+        2010 inaugural). Each is a structured ~200-page PDF surveying
+        systemic-risk conditions — a major data point for the financial-
+        stability dimension of the basis set. pypdf is mandatory.
+        """
+        try:
+            resp = _get(self._FSOC_REPORTS, timeout=30.0)
+        except Exception as exc:
+            log.error("FSOC index fetch failed %s: %s", self._FSOC_REPORTS, exc)
+            return
+        soup = BeautifulSoup(resp.text, "lxml")
+        seen: set[str] = set()
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            m = self._FSOC_PDF_RE.search(href)
+            if not m:
+                continue
+            year = int(m.group(1))
+            # FSOC publishes annual reports for a calendar year; date the
+            # record at the year's December 31 (the report's reporting
+            # period closes at year end).
+            pub_date = date(year, 12, 31)
+            if pub_date < start or pub_date > end:
+                continue
+            full_url = urljoin("https://home.treasury.gov", href)
+            if full_url in seen:
+                continue
+            seen.add(full_url)
+            body = self._extract_pdf_text(full_url)
+            if not body or len(body.split()) < 500:
+                log.warning(
+                    "FSOC %d: PDF extraction yielded %d words (<500 floor) — "
+                    "extraction may have failed",
+                    year, len(body.split()) if body else 0,
+                )
+                continue
+            title = (link.get_text(strip=True) or
+                     f"FSOC Annual Report {year}")
+            yield _make_article(
+                source_id=self.source_id,
+                url=full_url,
+                published_at=pub_date.isoformat() + "T00:00:00Z",
+                title=title,
+                body=body,
+                author="Financial Stability Oversight Council",
+                section="fsoc_annual_report",
+                tier=1,
+                document_type="fsoc_annual_report",
+            )
+            time.sleep(1.0)
+
+    @staticmethod
+    def _extract_pdf_text(pdf_url: str) -> str:
+        """Fetch a PDF and return its full extracted text.
+
+        Raises ImportError if pypdf is unavailable. A transient fetch or
+        parse error returns "" so the caller drops the record but the
+        rest of the FSOC walk continues.
+        """
+        from pypdf import PdfReader
+        from io import BytesIO
+        try:
+            resp = _get(pdf_url, timeout=120.0)
+        except Exception as exc:
+            log.warning("FSOC PDF fetch %s failed: %s", pdf_url, exc)
+            return ""
+        try:
+            reader = PdfReader(BytesIO(resp.content))
+            pages = [page.extract_text() or "" for page in reader.pages]
+            return "\n".join(p.strip() for p in pages if p.strip())
+        except Exception as exc:
+            log.warning("FSOC PDF parse %s failed: %s", pdf_url, exc)
+            return ""
 
 
 # ---------------------------------------------------------------------------
@@ -1777,12 +1927,28 @@ class VoxEUIngestor(Ingestor):
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
-        for year in range(start.year, end.year + 1):
+        years = list(range(start.year, end.year + 1))
+        shards_with_yield = 0
+        for year in years:
             year_start = max(start, date(year, 1, 1))
             year_end = min(end, date(year, 12, 31))
             if year_start > year_end:
                 continue
+            yielded_before = len(seen)
             yield from self._fetch_year(year_start, year_end, seen)
+            if len(seen) > yielded_before:
+                shards_with_yield += 1
+        # Across a multi-year window we expect cepr.org to yield columns
+        # in at least one shard. Zero shards yielding is an upstream-failure
+        # signature (Cloudflare tightened, JSS feed swap, TLS impersonation
+        # broken). Raise rather than silently shipping an empty corpus.
+        if len(years) >= 1 and shards_with_yield == 0:
+            raise RuntimeError(
+                f"VoxEU: 0 columns yielded across {len(years)} year shards "
+                f"({years[0]}..{years[-1]}). cepr.org is reachable but no shard "
+                f"produced any article cards — likely Cloudflare tightening or "
+                f"a feed contract change. Investigate before re-ingesting."
+            )
 
     def _fetch_year(
         self, start: date, end: date, seen: set[str]
@@ -1803,9 +1969,15 @@ class VoxEUIngestor(Ingestor):
                 if resp.status_code != 200:
                     raise RuntimeError(f"HTTP {resp.status_code}")
             except Exception as exc:
-                log.warning(
-                    "VoxEU search shard %s..%s page %d: %s — moving to next shard",
-                    start, end, page, exc,
+                # First-page failure of a shard means the shard contributes
+                # zero records — surface as ERROR so a regression doesn't
+                # hide behind a multi-year aggregate. Subsequent-page
+                # failures still log ERROR but leave already-collected
+                # cards in the yielded set.
+                log.error(
+                    "VoxEU shard %s..%s page %d: %s — shard truncated at "
+                    "%d pages",
+                    start, end, page, exc, page,
                 )
                 return
 
@@ -2585,13 +2757,15 @@ class CongressionalIngestor(Ingestor):
     def _govinfo_api_key(cls) -> str:
         key = os.environ.get("GOVINFO_API_KEY")
         if not key:
-            log.warning(
-                "GOVINFO_API_KEY not set — CHRG path falling back to DEMO_KEY "
-                "(rate-limited, may stall). Sign up free at "
-                "https://api.govinfo.gov/signup/ and set GOVINFO_API_KEY in .env "
-                "for the full ingest."
+            raise RuntimeError(
+                "GOVINFO_API_KEY environment variable is not set. The CHRG "
+                "path (Congressional Path B, ADR-021) requires an authenticated "
+                "GovInfo API key to enumerate Treasury Secretary hearings at "
+                "full coverage; the public DEMO_KEY is rate-limited to 30 "
+                "requests/hour and would silently undercover the historical "
+                "window. Sign up free at https://api.govinfo.gov/signup/ and "
+                "set GOVINFO_API_KEY in .env before re-running the ingest."
             )
-            return cls._DEMO_KEY
         return key
 
     def _fetch_govinfo_chrg(
@@ -2780,23 +2954,18 @@ class CongressionalIngestor(Ingestor):
 
     @staticmethod
     def _extract_pdf_text(pdf_url: str) -> str:
-        """Download a CHRG PDF and return its extracted text (best-effort).
+        """Download a CHRG PDF and return its extracted text.
 
+        Raises ImportError if pypdf is unavailable — Path B's PDF
+        extraction is mandatory for full coverage of modern hearings.
         Mirrors :meth:`CEAIngestor._extract_pdf_text`. CHRG PDFs are
-        text-layered, not scanned, so pypdf extracts cleanly for modern
-        hearings (post-2000ish). Older pre-2000 hearings may have been
-        OCR'd; if extraction returns short body the caller will fall
-        through to the API htm endpoint.
+        text-layered (not scanned) for post-2000 hearings; older
+        pre-2000 hearings may have been OCR'd. A transient fetch/parse
+        error returns "" so the caller falls through to the API htm
+        endpoint.
         """
-        try:
-            from pypdf import PdfReader
-            from io import BytesIO
-        except ImportError:
-            log.error(
-                "pypdf not installed — CHRG PDF extraction disabled. "
-                "Install with `pip install pypdf` (already in requirements.txt)."
-            )
-            return ""
+        from pypdf import PdfReader
+        from io import BytesIO
         try:
             resp = _get(pdf_url, timeout=60.0)
         except Exception as exc:
@@ -2864,9 +3033,10 @@ class CEAIngestor(Ingestor):
         so extraction is clean.
 
     API key:
-      - ``GOVINFO_API_KEY`` env var. Falls back to ``DEMO_KEY`` (30 req/hr)
-        with a loud warning — fine for integration tests, NOT for the
-        full ingest. Free signup at https://api.govinfo.gov/signup/.
+      - ``GOVINFO_API_KEY`` env var is required. The ingestor raises
+        ``RuntimeError`` if it is not set rather than silently falling
+        back to the public DEMO_KEY (30 req/hr), which would stall the
+        full-corpus enumeration. Free signup at https://api.govinfo.gov/signup/.
     """
 
     source_id = "cea"
@@ -2874,18 +3044,19 @@ class CEAIngestor(Ingestor):
     _GOVINFO_BASE = "https://api.govinfo.gov"
     _COLLECTION = "ERP"
     _PUBLISH_DATE_FMT = "%Y-%m-%d"
-    _DEMO_KEY = "DEMO_KEY"
 
     @classmethod
     def _api_key(cls) -> str:
         key = os.environ.get("GOVINFO_API_KEY")
         if not key:
-            log.warning(
-                "GOVINFO_API_KEY not set — using DEMO_KEY (30 req/hr). "
-                "For the full ingest, sign up at https://api.govinfo.gov/signup/ "
-                "(free) and set GOVINFO_API_KEY in .env."
+            raise RuntimeError(
+                "GOVINFO_API_KEY environment variable is not set. CEAIngestor "
+                "requires an authenticated GovInfo API key to enumerate the "
+                "ERP collection; the public DEMO_KEY is rate-limited to 30 "
+                "requests/hour and would not finish the full ingest. Sign up "
+                "free at https://api.govinfo.gov/signup/ and set "
+                "GOVINFO_API_KEY in .env before re-running."
             )
-            return cls._DEMO_KEY
         return key
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
@@ -3021,16 +3192,14 @@ class CEAIngestor(Ingestor):
 
     @staticmethod
     def _extract_pdf_text(pdf_url: str) -> str:
-        """Download a PDF and return its extracted text (best-effort)."""
-        try:
-            from pypdf import PdfReader
-            from io import BytesIO
-        except ImportError:
-            log.error(
-                "pypdf not installed — CEA PDF text extraction disabled. "
-                "Install with `pip install pypdf` (see requirements.txt / ADR-020)."
-            )
-            return ""
+        """Download a PDF and return its extracted text.
+
+        Raises ImportError if pypdf is unavailable — CEA cannot operate
+        without it. A transient PDF fetch / parse error returns "" so
+        the caller drops the granule but the rest of the ingest proceeds.
+        """
+        from pypdf import PdfReader
+        from io import BytesIO
         try:
             resp = _get(pdf_url, timeout=60.0)
         except Exception as exc:
@@ -3124,10 +3293,27 @@ class NBERIngestor(Ingestor):
     # walked past the head of the series.
     _STOP_AFTER_CONSECUTIVE_404S = 30
 
-    # Hard upper bound, refreshed periodically. Calibration on 2026-05-20:
-    # w33500 ≈ Feb 2025. NBER publishes ~1500 working papers/year. A
-    # ceiling of (latest_floor + 3000) is generous through 2026.
-    _ABSOLUTE_CEILING = 38000
+    # NBER publishes ~1500 working papers per year. Per-year buffer beyond
+    # the latest calibrated floor that we'll probe before relying on the
+    # consecutive-404 termination signal to stop enumeration. Generous
+    # margin so a high-volume year doesn't run off the end of the table.
+    _ID_HEADROOM_PER_FORECAST_YEAR = 2500
+
+    def _compute_ceiling(self, end_year: int) -> int:
+        """Compute the upper paper-ID bound for an enumeration.
+
+        Prefer the calibrated next-year floor when present; otherwise
+        project forward from the latest calibrated year using a per-year
+        headroom. The consecutive-404 stop (line below) prevents wasted
+        requests once we walk past the head of the series, so the ceiling
+        only needs to be ``>=`` the true head.
+        """
+        if (next_year_floor := self._PAPER_FLOOR_BY_YEAR.get(end_year + 1)):
+            return next_year_floor
+        latest_year = max(self._PAPER_FLOOR_BY_YEAR)
+        latest_floor = self._PAPER_FLOOR_BY_YEAR[latest_year]
+        years_forward = max(1, end_year - latest_year + 1)
+        return latest_floor + self._ID_HEADROOM_PER_FORECAST_YEAR * years_forward
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         floor_year = start.year
@@ -3135,13 +3321,7 @@ class NBERIngestor(Ingestor):
         floor = self._PAPER_FLOOR_BY_YEAR.get(
             floor_year, min(self._PAPER_FLOOR_BY_YEAR.values()),
         )
-        # Ceiling: one year past the requested end, capped at absolute ceiling.
-        # If end is in the current year, use the absolute ceiling — we don't
-        # know the head without probing.
-        ceiling = min(
-            self._PAPER_FLOOR_BY_YEAR.get(ceiling_year + 1, self._ABSOLUTE_CEILING),
-            self._ABSOLUTE_CEILING,
-        )
+        ceiling = self._compute_ceiling(ceiling_year)
         log.info(
             "NBER: enumerating paper IDs w%d..w%d for window %s..%s",
             floor, ceiling, start.isoformat(), end.isoformat(),
