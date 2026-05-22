@@ -10,6 +10,7 @@ fetch each linked artifact.
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Iterator
 
@@ -77,23 +78,36 @@ class FederalReserveIngestor(Ingestor):
         yield from self._fetch_mpr(start, end)
         yield from self._fetch_fsr(start, end)
 
+    # FOMC statement URL: /newsevents/pressreleases/monetary{YYYYMMDD}[a].htm
+    # Implementation notes (separate documents, ~9 words of operational
+    # directive): monetary{YYYYMMDD}a1.htm, a2.htm. These aren't part of
+    # the narrative discourse and should not be in the corpus. The regex
+    # matches statements (optional single trailing letter) but rejects
+    # implementation notes (letter followed by digit).
+    _FOMC_STATEMENT_HREF_RE = re.compile(
+        r"/newsevents/pressreleases/monetary(\d{8})[a-z]?\.htm$"
+    )
+
     def _fetch_fomc_statements(self, start: date, end: date) -> Iterator[Article]:
-        """Walk the FOMC calendars page; emit one Article per statement."""
+        """Walk the FOMC calendars page; emit one Article per statement.
+
+        Filters out FOMC implementation notes (URLs ending in
+        ``aN.htm`` where N is a digit) — these are short operational
+        directives about reserve balance management, not the narrative-
+        carrying statement itself.
+        """
         try:
             resp = _get(FOMC_CALENDARS_URL)
         except Exception as exc:
             raise RuntimeError(f"FOMC calendar index fetch failed after retries: {exc}") from exc
         soup = BeautifulSoup(resp.text, "lxml")
-        # Statement links match patterns like /newsevents/pressreleases/monetary20240131a.htm
         for link in soup.find_all("a", href=True):
             href = link["href"]
-            if "pressreleases/monetary" not in href:
+            m = self._FOMC_STATEMENT_HREF_RE.search(href)
+            if not m:
                 continue
-            # Filename format: monetaryYYYYMMDD[a].htm
             try:
-                stem = href.rsplit("/", 1)[-1]
-                date_str = stem.replace("monetary", "")[:8]
-                meeting_date = datetime.strptime(date_str, "%Y%m%d").date()
+                meeting_date = datetime.strptime(m.group(1), "%Y%m%d").date()
             except Exception:
                 continue
             if meeting_date < start or meeting_date > end:
@@ -107,7 +121,7 @@ class FederalReserveIngestor(Ingestor):
                 continue
 
             body = _extract_text(page.text)
-            if not body:
+            if not body or len(body.split()) < 50:
                 continue
             title = f"FOMC Statement — {meeting_date.isoformat()}"
             yield Article(

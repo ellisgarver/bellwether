@@ -216,6 +216,91 @@ def _parse_date_flexible(text: str) -> date | None:
     return None
 
 
+_MONTH_NAME_TO_NUM = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5,
+    "june": 6, "july": 7, "august": 8, "september": 9, "october": 10,
+    "november": 11, "december": 12,
+}
+_QUARTER_MID_MONTH = {"1": 2, "2": 5, "3": 8, "4": 11}
+_CHICAGO_FED_MONTH_RE = re.compile(
+    r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b",
+    re.IGNORECASE,
+)
+_CHICAGO_FED_QUARTER_RE = re.compile(
+    r"\b(?:Q([1-4])|(?:Quarter|Qtr\.?)\s*([1-4]))\b[^\n]{0,30}(\d{4})",
+    re.IGNORECASE,
+)
+
+
+def _chicago_fed_date_from_html(html: str, expected_year: int) -> date | None:
+    """Read the structured citation block from a Chicago Fed page.
+
+    Chicago Fed publication pages (Chicago Fed Letter, Economic
+    Perspectives, Policy Discussion Papers, etc.) render the issue date
+    inside dedicated CSS-class spans that trafilatura's main-content
+    extractor strips out:
+
+        <span class="cfedArticle__cite__month">September</span>
+        <span class="cfedArticle__cite__year">2023</span>
+
+    We read those spans directly via BS4 and synthesize a date with
+    day=15 (mid-month). Year must match the URL-derived expected year
+    so we don't pick up a citation of someone else's paper. Returns
+    None if either span is missing — caller will try the body-text
+    fallback.
+    """
+    if not html:
+        return None
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:
+        return None
+    month_el = soup.find(class_="cfedArticle__cite__month")
+    year_el = soup.find(class_="cfedArticle__cite__year")
+    if not (month_el and year_el):
+        return None
+    month_name = month_el.get_text(strip=True).lower()
+    year_text = year_el.get_text(strip=True)
+    month = _MONTH_NAME_TO_NUM.get(month_name)
+    try:
+        year = int(year_text)
+    except ValueError:
+        return None
+    if month is None or year != expected_year:
+        return None
+    return date(year, month, 15)
+
+
+def _chicago_fed_date_from_body(body: str, expected_year: int) -> date | None:
+    """Extract a publication date from Chicago Fed article body text.
+
+    Used when the structured citation block (handled by
+    ``_chicago_fed_date_from_html``) is missing. We scan the body for a
+    "MONTH YEAR" or "Q[1-4] YEAR" mention whose year matches the
+    URL-derived expected year and synthesize a date with day=15
+    (mid-month) or mid-quarter for the SIR weekly aggregation.
+
+    Returns None if no in-year date string is found.
+    """
+    if not body:
+        return None
+    head = body[:3000]
+    for m in _CHICAGO_FED_MONTH_RE.finditer(head):
+        year = int(m.group(2))
+        if year != expected_year:
+            continue
+        month = _MONTH_NAME_TO_NUM[m.group(1).lower()]
+        return date(year, month, 15)
+    for m in _CHICAGO_FED_QUARTER_RE.finditer(head):
+        year = int(m.group(3))
+        if year != expected_year:
+            continue
+        q = m.group(1) or m.group(2)
+        month = _QUARTER_MID_MONTH[q]
+        return date(year, month, 15)
+    return None
+
+
 def _fetch_page_full(
     url: str, *, min_words: int = 30, getter=None,
 ) -> tuple[str, str, str | None, date | None]:
@@ -1123,22 +1208,44 @@ class FedRegionalIngestor(Ingestor):
                 continue
             seen.add(url)
 
-            body, title, author, meta_date = _fetch_page_full(url, min_words=50)
+            # Chicago Fed needs both body extraction AND access to the
+            # raw HTML for the structured citation block (.cfedArticle__cite__*
+            # CSS classes), which trafilatura strips. Fetch once, extract twice.
+            try:
+                resp = _get(url, timeout=30.0)
+            except Exception as exc:
+                log.debug("Chicago Fed fetch failed %s: %s", url, exc)
+                continue
+            page_html = resp.text
+            body, title, author, meta_date = _extract_from_html(
+                page_html, min_words=50,
+            )
             if not body or len(body.split()) < 50:
                 continue
 
-            # URL year only tells us the publication year — not the day,
-            # which the SIR/logistic dynamics require. Require trafilatura
-            # to surface a meta_date that agrees with the URL year; drop
-            # the record otherwise rather than fabricate a mid-year date.
-            if meta_date is None or meta_date.year != year:
+            # Date extraction strategy for Chicago Fed (verified 2026-05-21):
+            #   1. Prefer trafilatura's meta_date if it agrees with URL year.
+            #      Working papers typically populate this correctly.
+            #   2. Else read the structured citation block (Chicago Fed Letter
+            #      / Economic Perspectives / etc. render it inside
+            #      <span class="cfedArticle__cite__month"> + ".cfedArticle__cite__year">).
+            #   3. Else fall back to a body-text "MONTH YYYY" or "QN YYYY"
+            #      regex constrained to the URL-derived year.
+            #   4. Else drop — no fabricated dates.
+            pub_date: date | None = None
+            if meta_date is not None and meta_date.year == year:
+                pub_date = meta_date
+            if pub_date is None:
+                pub_date = _chicago_fed_date_from_html(page_html, year)
+            if pub_date is None:
+                pub_date = _chicago_fed_date_from_body(body, year)
+            if pub_date is None:
                 log.debug(
                     "Chicago Fed: dropping %s — no authoritative pub date "
                     "(URL year=%d, meta_date=%s)",
                     url, year, meta_date,
                 )
                 continue
-            pub_date = meta_date
 
             if pub_date < start or pub_date > end:
                 continue
@@ -2724,8 +2831,14 @@ class CongressionalIngestor(Ingestor):
                     continue
 
                 seen.add(url)
-                body, fetched_title, author, page_date = _fetch_page_full(url, min_words=30)
-                if not body or len(body.split()) < 20:
+                body, fetched_title, author, page_date = _fetch_page_full(url, min_words=100)
+                # Floor at 100 words filters out media advisories (~50-80
+                # word announcements like "Secretary will testify on X day
+                # before Y committee") while still capturing real
+                # statements (typically 800-3000 words) and meaningful
+                # readouts (200-500 words). Below 100 the record contributes
+                # no narrative content for the embedding stage.
+                if not body or len(body.split()) < 100:
                     continue
                 # Prefer the article-page date (more precise) but fall back to
                 # the listing-row date when the page omits it.
@@ -3289,6 +3402,14 @@ class CEAIngestor(Ingestor):
         for gran in granules:
             granule_id = gran.get("granuleId")
             if not granule_id:
+                continue
+            # Skip statistical-table granules: ERP includes ~20 chapter
+            # granules + ~50 appendix tables per volume. Tables (granule
+            # IDs containing "table") are short statistical summaries
+            # (~400 words of column headers + numbers), not narrative
+            # text; including them dilutes the per-cluster signal in
+            # the discourse analysis.
+            if "table" in granule_id.lower():
                 continue
             article = self._build_article(
                 api_key=api_key,
