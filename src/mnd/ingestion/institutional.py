@@ -301,6 +301,40 @@ def _chicago_fed_date_from_body(body: str, expected_year: int) -> date | None:
     return None
 
 
+def _extract_from_html(
+    html: str, *, min_words: int = 30,
+) -> tuple[str, str, str | None, date | None]:
+    """Extract (body_text, title, author, pub_date) from a raw HTML string.
+
+    Body extraction via trafilatura, with a BS4 ``<main>/<article>/<body>``
+    fallback when trafilatura returns nothing or a sub-``min_words`` stub.
+    Author/date come from trafilatura's metadata extractor.
+
+    Separated from ``_fetch_page_full`` so callers that already hold the
+    page HTML (e.g. ``FedRegionalIngestor._fetch_chicago_fed_letter``, which
+    re-parses the same HTML for a structured citation block that trafilatura
+    strips) don't have to refetch the URL.
+    """
+    try:
+        body = trafilatura.extract(html, include_comments=False, include_tables=False)
+        meta = trafilatura.extract_metadata(html)
+    except Exception:
+        body, meta = None, None
+    title = (meta.title or "") if meta else ""
+    author = (meta.author or None) if meta else None
+    pub_date: date | None = None
+    if meta and meta.date:
+        pub_date = _parse_date_flexible(str(meta.date))
+    if not body or len(body.split()) < min_words:
+        soup = BeautifulSoup(html, "lxml")
+        for tag in soup.find_all(["nav", "footer", "script", "style", "header"]):
+            tag.decompose()
+        content = soup.find("main") or soup.find("article") or soup.find("body")
+        if content:
+            body = content.get_text(separator=" ", strip=True)
+    return (body or ""), title, author, pub_date
+
+
 def _fetch_page_full(
     url: str, *, min_words: int = 30, getter=None,
 ) -> tuple[str, str, str | None, date | None]:
@@ -316,24 +350,7 @@ def _fetch_page_full(
     except Exception as exc:
         log.debug("Fetch failed %s: %s", url, exc)
         return "", "", None, None
-    try:
-        body = trafilatura.extract(resp.text, include_comments=False, include_tables=False)
-        meta = trafilatura.extract_metadata(resp.text)
-    except Exception:
-        body, meta = None, None
-    title = (meta.title or "") if meta else ""
-    author = (meta.author or None) if meta else None
-    pub_date: date | None = None
-    if meta and meta.date:
-        pub_date = _parse_date_flexible(str(meta.date))
-    if not body or len(body.split()) < min_words:
-        soup = BeautifulSoup(resp.text, "lxml")
-        for tag in soup.find_all(["nav", "footer", "script", "style", "header"]):
-            tag.decompose()
-        content = soup.find("main") or soup.find("article") or soup.find("body")
-        if content:
-            body = content.get_text(separator=" ", strip=True)
-    return (body or ""), title, author, pub_date
+    return _extract_from_html(resp.text, min_words=min_words)
 
 
 def _wp_rest_fetch(
@@ -1557,8 +1574,8 @@ class CBOIngestor(Ingestor):
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         candidates = list(self._enumerate_wayback_candidates(start, end))
         log.info(
-            "CBO: Wayback CDX found %d unique cbo.gov/publication/* URLs in "
-            "[%s..%s]",
+            "CBO: %d candidate cbo.gov/publication/* URLs after first-snapshot "
+            "filter for window [%s..%s]",
             len(candidates), start, end,
         )
         seen: set[str] = set()
@@ -1626,27 +1643,71 @@ class CBOIngestor(Ingestor):
     # Wayback CDX enumeration
     # ------------------------------------------------------------------
 
+    # First-snapshot lag: Wayback typically discovers a new cbo.gov URL
+    # within a few weeks of publication, but can lag up to ~90 days for
+    # less-trafficked URLs. We extend the publication window by this much
+    # when filtering URLs by first-snapshot date so we don't drop genuine
+    # in-window publications that Wayback didn't crawl promptly.
+    _WAYBACK_DISCOVERY_LAG_DAYS = 90
+    # Wayback Machine launched in 1996; older CBO publications appear as
+    # later-archived snapshots, never as first-ever snapshots before 1996.
+    _WAYBACK_INCEPTION_YEAR = 1996
+
     def _enumerate_wayback_candidates(
         self, start: date, end: date
     ) -> Iterator[tuple[str, str]]:
-        """Yield (cbo.gov publication URL, Wayback timestamp YYYYMMDDhhmmss).
+        """Yield (cbo.gov publication URL, first-ever Wayback timestamp).
 
-        Shards the requested window into year-sized CDX queries to keep
-        each result set under the Wayback rate-limiter's 503 ceiling.
-        Dedupes URLs across shards (a URL crawled in multiple years yields
-        only its earliest in-window snapshot — sufficient since the body
-        is the same).
+        We walk all Wayback history (year-sharded from 1996 to today),
+        deduping URLs across shards. Because shards run in chronological
+        order and ``collapse=urlkey`` returns the earliest snapshot per URL
+        within each shard, the FIRST time we see a URL across the whole
+        walk is its first-ever snapshot. That first-snapshot date is a
+        strong proxy for publication date (Wayback typically crawls new
+        cbo.gov URLs within days-to-weeks). We then yield only URLs whose
+        first snapshot falls in ``[start, end + _WAYBACK_DISCOVERY_LAG_DAYS]``.
+
+        Why not just shard the requested window? Because CDX ``from/to``
+        filters by CRAWL date, not publication date. A 2-month window
+        catches every CBO URL that happened to be re-crawled in that
+        period — decades of accumulated publications. The 2026-05-21
+        integration test for the 2023-06-01..2023-07-31 window returned
+        10,036 URLs that way, of which only ~0.01% were genuinely from
+        the window (the rest pre-existed and were re-crawled). Pre-filtering
+        on first-snapshot date avoids fetching tens of thousands of bodies
+        only to drop them on the page-date precision filter.
         """
-        seen_urls: set[str] = set()
-        for shard_start, shard_end in self._year_shards(start, end):
+        today = date.today()
+        search_start = date(self._WAYBACK_INCEPTION_YEAR, 1, 1)
+        search_end = today
+        window_end_with_lag = min(
+            end + timedelta(days=self._WAYBACK_DISCOVERY_LAG_DAYS), today
+        )
+
+        first_seen: dict[str, str] = {}
+        for shard_start, shard_end in self._year_shards(search_start, search_end):
             rows = self._cdx_fetch(shard_start, shard_end)
             for original_url, ts in rows:
-                if original_url in seen_urls:
+                if original_url in first_seen:
                     continue
-                seen_urls.add(original_url)
-                yield original_url, ts
-            # Polite delay between shards — Wayback rate-limits per minute
+                first_seen[original_url] = ts
             time.sleep(0.5)
+
+        in_window = 0
+        for url, ts in first_seen.items():
+            snap_date = self._ts_to_date(ts)
+            if snap_date is None:
+                continue
+            if snap_date < start or snap_date > window_end_with_lag:
+                continue
+            in_window += 1
+            yield url, ts
+        log.info(
+            "CBO: %d URLs seen across Wayback 1996-%d; %d have first-snapshot "
+            "in [%s..%s] (publication window + %d-day discovery lag)",
+            len(first_seen), today.year, in_window,
+            start, window_end_with_lag, self._WAYBACK_DISCOVERY_LAG_DAYS,
+        )
 
     def _year_shards(
         self, start: date, end: date
@@ -2221,51 +2282,53 @@ class BrookingsIngestor(Ingestor):
 
 
 class PIIEIngestor(Ingestor):
-    """Peterson Institute for International Economics: listing page scraper.
+    """Peterson Institute for International Economics: sitemap-based discovery.
 
-    Access pattern (verified 2026-05-21)
+    Access pattern (verified 2026-05-24)
     ----------------------------------
-    Host: ``piie.com`` is fronted by **Cloudflare**. Listing pages
-    sometimes pass a stdlib ``requests`` fetch but individual article
-    pages return ``HTTP 403`` with a JS-challenge interstitial
-    ("Enable JavaScript and cookies to continue"). The JA3/JA4 TLS
-    fingerprint of OpenSSL is the rejection signal — same root cause
-    as VoxEU/CEPR (ADR-021) and IMF/Akamai (ADR-014).
+    Host: ``piie.com`` is fronted by **Cloudflare** with the same JS-challenge
+    posture as VoxEU/CEPR (ADR-021) and IMF/Akamai (ADR-014). ``curl_cffi``
+    with ``impersonate='chrome131'`` clears the challenge; stdlib ``requests``
+    gets HTTP 403 on the JA3/JA4 TLS fingerprint.
 
-    ``curl_cffi`` with ``impersonate='chrome131'`` clears the challenge
-    without needing JS execution. Both listing and body fetches are
-    routed through ``_piie_get`` so the entire ingest is TLS-impersonated;
-    Cloudflare can tighten the listing surface at any time, so it's
-    safer to use the impersonating path uniformly.
+    Discovery: ``piie.com/sitemap.xml``.  Drupal xmlsitemap exposes a
+    flat or index sitemap; the walker handles both.  Each URL is dispatched
+    by regex to one of five publication-section labels; URL paths for
+    policy-briefs / working-papers / piie-briefings encode the publication
+    year (e.g. ``/publications/policy-briefs/2023/pb23-22-...``), so we
+    year-filter URLs before fetching bodies.  Blog URLs lack the year
+    segment and are fetched-then-date-checked.
 
-    The listing covers policy-briefs, working-papers, piie-briefings,
-    realtime-economic-issues-watch, and trade-investment-policy-watch.
-    Pagination via ``?page=N`` (Drupal default), 10 cards/page.
+    Why sitemap, not ``?page=N`` listing pagination
+    ----------------------------------------------
+    Listing pagination (the ADR-017 strategy) burns ~3 pages of post-window
+    2024+ content per section before reaching a 2023 window, and Cloudflare
+    tightens on deep page=N requests within a session — the 2026-05-21
+    integration test got HTTP 403 on page 3 of working-papers and pages 1+
+    of two blog sections, yielding 11 records vs the floor of 15. Sitemap
+    discovery uses one request per sitemap file (typically <10 total),
+    avoiding the deep-pagination tripwire entirely.
 
     Failure mode if curl_cffi missing
     ---------------------------------
-    We log an ``error`` and fall back to stdlib ``requests``, which
-    will reliably 403 on body fetches — intentional loud failure
-    rather than silent zero-yield. ``curl_cffi==0.15.0`` is in
-    ``requirements.txt``.
-
-    History
-    -------
-    - Originally stdlib ``requests`` worked from university IPs because
-      PIIE wasn't on Cloudflare. The site enabled Cloudflare bot
-      mitigation between ADR-017 (2026-05-19) and 2026-05-21; the
-      integration battery on 2026-05-21 surfaced zero PIIE records for
-      2023, confirming the regression.
+    Same as ADR-014: we log an ``error`` and fall back to stdlib ``requests``,
+    which will reliably 403 — intentional loud failure rather than silent
+    zero-yield. ``curl_cffi==0.15.0`` is in ``requirements.txt``.
     """
 
     source_id = "piie"
 
-    _LISTING_PATHS = [
-        ("/publications/policy-briefs", "policy_brief"),
-        ("/publications/working-papers", "working_paper"),
-        ("/publications/piie-briefings", "piie_briefing"),
-        ("/blogs/realtime-economic-issues-watch", "blog_post"),
-        ("/blogs/trade-investment-policy-watch", "blog_post"),
+    _SITEMAP_URL = "https://www.piie.com/sitemap.xml"
+
+    # (regex, doc_type, year_group_index_or_None). When year_group_index is
+    # not None, we pre-filter URLs whose URL-encoded year lies outside the
+    # requested window — this lets us discard publications without fetching.
+    _URL_PATTERNS: list[tuple[str, str, int | None]] = [
+        (r"/publications/policy-briefs/(\d{4})/[^/]+$", "policy_brief", 1),
+        (r"/publications/working-papers/(\d{4})/[^/]+$", "working_paper", 1),
+        (r"/publications/piie-briefings/(\d{4})/[^/]+$", "piie_briefing", 1),
+        (r"/blogs/realtime-economic-issues-watch/[^/]+$", "blog_post", None),
+        (r"/blogs/trade-investment-policy-watch/[^/]+$", "blog_post", None),
     ]
 
     # Same Chrome 131 header set used by VoxEUIngestor — paired with the
@@ -2318,128 +2381,131 @@ class PIIEIngestor(Ingestor):
             return requests.get(url, headers=cls._PIIE_HEADERS, **kwargs)
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
+        candidates = self._discover_sitemap_urls(start, end)
+        log.info(
+            "PIIE: %d candidate URLs after sitemap walk + URL-year pre-filter "
+            "[%s..%s]",
+            len(candidates), start, end,
+        )
+
         seen: set[str] = set()
-        for path, doc_type in self._LISTING_PATHS:
-            yield from self._fetch_listing(path, doc_type, start, end, seen)
+        yielded = 0
+        body_failed = 0
+        no_date = 0
+        out_of_window = 0
 
-    def _fetch_listing(
-        self,
-        path: str,
-        doc_type: str,
-        start: date,
-        end: date,
-        seen: set[str],
-    ) -> Iterator[Article]:
-        base = "https://www.piie.com"
-        page = 0
-        past_window = False
-        total_emitted = 0
+        for url, doc_type in candidates:
+            if url in seen:
+                continue
+            seen.add(url)
 
-        while not past_window:
-            try:
-                resp = self._piie_get(
-                    base + path,
-                    params={"page": page} if page > 0 else {},
-                    timeout=30.0,
-                )
-                if resp.status_code in (403, 404):
-                    log.error(
-                        "PIIE %s page %d: HTTP %d — Cloudflare tightening or "
-                        "section retired. Section will be undercovered.",
-                        path, page, resp.status_code,
-                    )
-                    return
-                if resp.status_code != 200:
-                    raise RuntimeError(f"HTTP {resp.status_code}")
-            except Exception as exc:
-                log.error(
-                    "PIIE %s page %d: %s — stopping pagination",
-                    path, page, exc,
-                )
-                return
-
-            soup = BeautifulSoup(resp.text, "lxml")
-            # Broader teaser selector — PIIE redesign occasionally swaps
-            # <article class="teaser"> for <div class="teaser ..."> on certain
-            # listing variants. ".teaser" matches both.
-            items = soup.select(".teaser")
-            if not items:
-                log.info("PIIE %s page %d: 0 teaser items — pagination exhausted",
-                         path, page)
-                break
-
-            page_in_window = 0
-            page_body_failed = 0
-            for item in items:
-                date_el = item.select_one("time")
-                if not date_el:
-                    continue
-                dt_str = date_el.get("datetime", "")
-                try:
-                    pub_date = datetime.fromisoformat(dt_str.replace("Z", "+00:00")).date()
-                except (ValueError, AttributeError):
-                    pub_date = _parse_date_flexible(date_el.get_text(strip=True))
-                if not pub_date:
-                    continue
-
-                if pub_date > end:
-                    continue
-                if pub_date < start:
-                    past_window = True
-                    continue
-
-                page_in_window += 1
-                link = item.select_one(".teaser__title a") or item.select_one("h2 a, h3 a")
-                if not link:
-                    continue
-                href = link.get("href", "")
-                url = urljoin(base, href) if href.startswith("/") else href
-                if url in seen:
-                    continue
-                seen.add(url)
-
-                title = link.get_text(strip=True)
-                author_el = item.select_one(".author-list")
-                author = author_el.get_text(" ", strip=True) if author_el else None
-
-                # Fetch full body. ADR-016: ingest is content-neutral and there
-                # is NO Stage 1 topic filter; we either capture the article
-                # body or skip the record (do not emit title-only fallbacks
-                # that would carry no body signal for Stage 2 to evaluate).
-                # Body fetch routes through _piie_get so it bypasses the
-                # Cloudflare JS challenge that defeats stdlib requests.
-                body, fetched_title, _, _pd = _fetch_page_full(
-                    url, min_words=50, getter=self._piie_get,
-                )
-                if fetched_title and not title:
-                    title = fetched_title
-                if not body or len(body.split()) < 50:
-                    page_body_failed += 1
-                    log.debug("PIIE body unavailable / too short for %s", url)
-                    continue
-
-                yield _make_article(
-                    source_id=self.source_id,
-                    url=url,
-                    published_at=pub_date.isoformat() + "T00:00:00Z",
-                    title=title,
-                    body=body,
-                    author=author,
-                    section="piie_publication",
-                    tier=2,
-                    document_type=f"piie_{doc_type}",
-                )
-                total_emitted += 1
-                time.sleep(1.0)
-
-            log.info(
-                "PIIE %s page %d: %d items, %d in-window, %d body-failed, %d emitted "
-                "(running total: %d)",
-                path, page, len(items), page_in_window, page_body_failed,
-                page_in_window - page_body_failed, total_emitted,
+            body, fetched_title, author, page_date = _fetch_page_full(
+                url, min_words=50, getter=self._piie_get,
             )
-            page += 1
+            if not body or len(body.split()) < 50:
+                body_failed += 1
+                log.debug("PIIE %s: body unavailable / too short", url)
+                continue
+
+            # Methodology principle 1: drop records without an authoritative
+            # publication date rather than fabricating one from URL year.
+            if page_date is None:
+                no_date += 1
+                log.debug("PIIE %s: no page-extracted publication date", url)
+                continue
+            if page_date < start or page_date > end:
+                out_of_window += 1
+                continue
+
+            title = fetched_title or url.rstrip("/").split("/")[-1].replace("-", " ").title()
+            yield _make_article(
+                source_id=self.source_id,
+                url=url,
+                published_at=page_date.isoformat() + "T00:00:00Z",
+                title=title,
+                body=body,
+                author=author,
+                section="piie_publication",
+                tier=2,
+                document_type=f"piie_{doc_type}",
+            )
+            yielded += 1
             time.sleep(0.5)
+
+        log.info(
+            "PIIE: yielded %d / %d candidates "
+            "(body_failed=%d, no_date=%d, out_of_window=%d)",
+            yielded, len(candidates), body_failed, no_date, out_of_window,
+        )
+
+    def _discover_sitemap_urls(
+        self, start: date, end: date,
+    ) -> list[tuple[str, str]]:
+        """Walk piie.com sitemap (index or flat) and return matching URLs.
+
+        Returns ``[(url, doc_type), ...]`` for URLs whose path matches one
+        of ``_URL_PATTERNS``. For publication URLs that encode a year in
+        the path, we pre-filter on year so out-of-window publications are
+        never fetched. Blog URLs (no year in path) are returned unfiltered
+        and date-checked after body fetch.
+        """
+        compiled = [(re.compile(p), d, y) for p, d, y in self._URL_PATTERNS]
+        candidates: list[tuple[str, str]] = []
+
+        ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+        to_walk: list[str] = [self._SITEMAP_URL]
+        walked: set[str] = set()
+
+        while to_walk:
+            sm_url = to_walk.pop()
+            if sm_url in walked:
+                continue
+            walked.add(sm_url)
+
+            try:
+                resp = self._piie_get(sm_url, timeout=60.0)
+                if resp.status_code != 200:
+                    log.error(
+                        "PIIE sitemap %s: HTTP %d — Cloudflare may have "
+                        "tightened. Discovery will undercover.",
+                        sm_url, resp.status_code,
+                    )
+                    continue
+                tree = ET.fromstring(resp.content)
+            except Exception as exc:
+                log.error("PIIE sitemap %s: %s", sm_url, exc)
+                continue
+
+            # Sitemap-index references to child sitemaps
+            for child in tree.findall("s:sitemap/s:loc", ns):
+                if child.text:
+                    to_walk.append(child.text.strip())
+
+            # Flat sitemap entries
+            for url_el in tree.findall("s:url", ns):
+                loc_el = url_el.find("s:loc", ns)
+                if loc_el is None or not loc_el.text:
+                    continue
+                url = loc_el.text.strip()
+                for pat, doc_type, year_grp in compiled:
+                    m = pat.search(url)
+                    if not m:
+                        continue
+                    if year_grp is not None:
+                        try:
+                            url_year = int(m.group(year_grp))
+                        except (ValueError, IndexError):
+                            url_year = None
+                        if url_year is not None and (
+                            url_year < start.year or url_year > end.year
+                        ):
+                            break
+                    candidates.append((url, doc_type))
+                    break
+
+            time.sleep(0.3)
+
+        return candidates
 
 
 class CFRIngestor(Ingestor):
