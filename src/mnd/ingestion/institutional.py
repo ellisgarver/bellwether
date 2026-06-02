@@ -3980,6 +3980,12 @@ class InstitutionalIngestor(Ingestor):
 
     def __init__(self, checkpoint_path: Path | None = None) -> None:
         self._checkpoint_path = checkpoint_path
+        # Order matters for timeout-resume: fast/proven sources first so they
+        # checkpoint early, with the two long poles (CBO Wayback enumeration,
+        # NBER direct-ID enumeration) last. If the 48h wall is hit mid-run, the
+        # resume skips the completed fast sources and reaches the long poles
+        # with a fresh wall-clock budget. Yield order has no effect on corpus
+        # content (dedup is by URL at the filter stage).
         self._sub_ingestors: list[Ingestor] = [
             FederalReserveIngestor(),
             FedRegionalIngestor(),
@@ -3987,11 +3993,11 @@ class InstitutionalIngestor(Ingestor):
             IMFIngestor(),
             BISIngestor(),
             TreasuryOFRIngestor(),
-            CBOIngestor(),
             CEAIngestor(),
             VoxEUIngestor(),
             BrookingsIngestor(),
             PIIEIngestor(),
+            CBOIngestor(),
             NBERIngestor(),
         ]
 
