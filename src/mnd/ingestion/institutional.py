@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -361,7 +362,18 @@ def _wp_rest_fetch(
     *,
     extra_fields: str = "link,date,title,excerpt,content",
 ) -> Iterator[dict]:
-    """Yield raw post dicts from a WordPress REST API for the given date range."""
+    """Yield raw post dicts from a WordPress REST API for the given date range.
+
+    Pagination is fail-loud. A transient 5xx/429/network error on a page is
+    retried with backoff; if it still fails after several attempts the function
+    RAISES rather than returning the partial set. The prior behavior — break on
+    any exception — let a single transient failure on page 7 of a 500-page
+    source silently truncate the tail while the checkpoint still marked the
+    sub-ingestor 'completed' (a silent under-capture hole). A genuine
+    end-of-list (WordPress returns HTTP 400/404 when paging past the last page)
+    ends pagination cleanly. The caller's per-sub-ingestor try/except marks the
+    source failed-for-retry on a raise; re-yielded pages are caught by dedup.
+    """
     page = 1
     while True:
         params = {
@@ -371,28 +383,50 @@ def _wp_rest_fetch(
             "before": (end + timedelta(days=1)).isoformat() + "T00:00:00Z",
             "_fields": extra_fields,
         }
-        try:
-            resp = requests.get(
-                f"{api_base}/wp-json/wp/v2/{post_type}",
-                params=params,
-                headers=_HEADERS,
-                timeout=30.0,
-            )
+        url = f"{api_base}/wp-json/wp/v2/{post_type}"
+        resp = None
+        last_err: str | None = None
+        backoff = 2.0
+        for _attempt in range(5):
+            try:
+                resp = requests.get(
+                    url, params=params, headers=_HEADERS, timeout=(10.0, 30.0),
+                )
+            except Exception as exc:
+                last_err = str(exc)
+                resp = None
+                time.sleep(backoff)
+                backoff *= 2
+                continue
             if resp.status_code in (400, 404):
-                break
-            resp.raise_for_status()
-        except Exception as exc:
-            log.warning("WP REST %s/%s page %d: %s", api_base, post_type, page, exc)
+                return  # genuine end-of-list (paged past last page)
+            if resp.status_code == 429 or resp.status_code >= 500:
+                last_err = f"HTTP {resp.status_code}"
+                resp = None
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"WP REST {api_base}/{post_type} page {page}: "
+                    f"unexpected HTTP {resp.status_code}"
+                )
             break
+        if resp is None:
+            raise RuntimeError(
+                f"WP REST {api_base}/{post_type} page {page} failed after "
+                f"5 attempts (last error: {last_err}) — refusing to truncate "
+                f"silently"
+            )
 
         posts = resp.json()
         if not isinstance(posts, list) or not posts:
-            break
+            return
         yield from posts
 
         total_pages = int(resp.headers.get("X-WP-TotalPages", "1"))
         if page >= total_pages:
-            break
+            return
         page += 1
         time.sleep(0.5)
 
@@ -908,13 +942,50 @@ class BISIngestor(Ingestor):
         self, year: int, start: date, end: date, seen: set[str]
     ) -> Iterator[Article]:
         sitemap_url = self._SITEMAP_TMPL.format(year=year)
-        try:
-            resp = requests.get(sitemap_url, headers=_HEADERS, timeout=30.0)
-            resp.raise_for_status()
-            tree = ET.fromstring(resp.content)
-        except Exception as exc:
-            log.warning("BIS sitemap %d: %s", year, exc)
-            return
+        # Fail-loud per-year fetch: retry transient 5xx/429/network errors with
+        # backoff, then RAISE rather than silently dropping the whole year (the
+        # prior behavior returned on any exception, so one transient failure
+        # lost a full year of BIS). A definitive 404 means BIS publishes no
+        # sitemap for that year — a legitimate skip, logged at WARNING so a
+        # URL-pattern change still surfaces.
+        tree = None
+        last_err: str | None = None
+        backoff = 2.0
+        for _attempt in range(5):
+            try:
+                resp = requests.get(
+                    sitemap_url, headers=_HEADERS, timeout=(10.0, 30.0),
+                )
+            except Exception as exc:
+                last_err = str(exc)
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            if resp.status_code == 404:
+                log.warning(
+                    "BIS sitemap %d: 404 — no sitemap for this year (skipping)",
+                    year,
+                )
+                return
+            if resp.status_code == 429 or resp.status_code >= 500:
+                last_err = f"HTTP {resp.status_code}"
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            try:
+                resp.raise_for_status()
+                tree = ET.fromstring(resp.content)
+            except Exception as exc:
+                last_err = str(exc)
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            break
+        if tree is None:
+            raise RuntimeError(
+                f"BIS sitemap {year} failed after 5 attempts "
+                f"(last error: {last_err}) — refusing to drop the year silently"
+            )
 
         ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
         compiled = [(re.compile(p), s, d) for p, s, d in self._URL_PATTERNS]
@@ -1520,38 +1591,50 @@ class CBOIngestor(Ingestor):
     "cbo.gov content" choice — we just retrieve it via the archive instead
     of direct.
 
-    Network architecture:
-      1. CDX query: ``web.archive.org/cdx/search/cdx`` enumerates unique
-         cbo.gov/publication/* URLs that have at least one 200/text/html
-         snapshot in the requested window. Queries are sharded by year to
-         keep result sets under the Wayback rate-limit ceiling (a single
-         query for >~5k rows triggers 503). Each query uses
-         ``collapse=urlkey`` so we get one (latest) snapshot per publication.
-      2. Snapshot fetch: ``web.archive.org/web/{ts}id_/{url}`` — the ``id_``
+    Enumeration strategy (ADR-023, 2026-06-01) — bounded ID walk, NOT a
+    window-sharded CDX wildcard:
+      The prior design (ADR-021) queried CDX with ``url=cbo.gov/publication/*``
+      and ``from/to`` set to the publication window. That is fundamentally
+      broken because CDX ``from/to`` filters by CRAWL date, not publication
+      date: a 2-month window matched every cbo.gov URL re-crawled in that
+      period (~10k URLs, decades of back-catalog). Worse, the resulting
+      wildcard result set is so large it routinely 504s, and the same query
+      returned 0 / 849 / 6575 rows across three runs in one hour — the bulk
+      wildcard endpoint is non-deterministic under load. A 77-minute
+      production run yielded 0 records.
+
+      CBO assigns each publication a monotically increasing integer node id
+      at ``cbo.gov/publication/{id}``. We enumerate that ID space the same
+      way ``NBERIngestor`` enumerates ``/papers/wNNNNN``: estimate the ID
+      range corresponding to the requested date window from a calibrated
+      ID↔date anchor table, then issue one CDX query per 100-ID block
+      (``matchType=prefix``). Each block query is small (≤~100 rows),
+      returns deterministically in 1-8s, and ``collapse=urlkey`` gives the
+      EARLIEST snapshot per URL (CDX sorts timestamp-ascending per urlkey).
+      That earliest-snapshot timestamp is a cheap proxy for crawl-soon-after-
+      publication, so we pre-filter candidates by snapshot date before
+      fetching any body — bounding body fetches to the true in-window set.
+
+    Per-record pipeline:
+      1. Snapshot fetch: ``web.archive.org/web/{ts}id_/{url}`` — the ``id_``
          modifier returns the raw archived body, no Wayback toolbar rewrite.
-         Page-level extraction via the same ``_fetch_page_full`` pipeline
-         used elsewhere (trafilatura + BS4 fallback).
-      3. Authoritative date: from the page's own structured metadata
-         (Drupal's ``<meta name="dcterms.created">`` or trafilatura's date
-         extraction). The Wayback snapshot timestamp is the LAST-CRAWLED
-         date and is only used as a coarse fallback when the page lacks
-         any structured publication date.
+         Page-level extraction via ``_fetch_page_full`` (trafilatura + BS4).
+      2. Authoritative date: from the page's own structured metadata
+         (Drupal ``<meta name="dcterms.created">`` / trafilatura). The
+         Wayback snapshot timestamp is the LAST/earliest-CRAWLED date and is
+         NEVER used as the publication date — only as the pre-fetch filter.
+      3. Strict keep gate: page_date present AND in ``[start, end]`` AND
+         body ≥ 50 words. Records failing any are dropped (no fabricated
+         dates, no teaser-only bodies).
 
-    Politeness:
-      - 0.5s sleep between CDX shard queries (Wayback rate-limits per minute).
-      - 0.3s sleep between snapshot fetches.
-      - Exponential backoff retry on Wayback 5xx / 429 — never 403.
+    Politeness / robustness:
+      - 0.5s sleep between block CDX queries; 0.3s between snapshot fetches.
+      - Exponential backoff retry on Wayback 429 / 502 / 503 / 504 — never
+        403 (Wayback does not bot-block CDX).
 
-    Operational notes:
-      - No external dependencies beyond stdlib requests. Playwright and
-        curl_cffi are NOT used by this ingestor; both were ineffective
-        against cbo.gov's current DataDome policy.
-      - The canonical ``url`` field on each emitted Article is the
-        cbo.gov publication URL, NOT the Wayback wrapper, so downstream
-        dedupe / cluster reporting matches the cbo.gov source-set framing.
-      - If DataDome's posture relaxes in the future (or we acquire a paid
-        scraping path), the ingestor can be swapped back to cbo.gov direct
-        without changing the wrapper signature.
+    The canonical ``url`` field on each emitted Article is the cbo.gov
+    publication URL, NOT the Wayback wrapper, so downstream dedupe / cluster
+    reporting matches the cbo.gov source-set framing.
     """
 
     source_id = "cbo"
@@ -1567,234 +1650,227 @@ class CBOIngestor(Ingestor):
         "academic research; via web.archive.org)"
     )
 
-    # Wayback CDX rows can be large; shard the requested window by year to
-    # stay under the per-query 503 ceiling.
-    _CDX_SHARD_YEARS = 1
+    # ID↔date calibration anchors (publication id, observed page/snapshot
+    # date), empirically probed 2026-06-01 via per-URL Wayback fetches:
+    #   42000≈2010-01, 44000≈2013-03, 54000≈2018-06, 56000≈2020-01,
+    #   58000≈2022-04, 59460≈2023-07.
+    # CBO node ids are monotone in time but the rate is NOT constant
+    # (~625/yr 2010-2013, ~1900/yr 2013-2018, ~800/yr since 2020), so we
+    # interpolate piecewise-linearly between anchors and extrapolate past
+    # the last anchor at the recent ~800/yr slope. The estimate only needs
+    # to bracket the true range; ``_ID_RANGE_PAD`` absorbs slope error and
+    # the page-date filter discards anything that slips outside the window.
+    _ID_DATE_ANCHORS: list[tuple[date, int]] = [
+        (date(2010, 1, 1), 42000),
+        (date(2013, 3, 18), 44000),
+        (date(2018, 6, 6), 54000),
+        (date(2020, 1, 9), 56000),
+        (date(2022, 4, 19), 58000),
+        (date(2023, 7, 31), 59460),
+    ]
+    # Pad each end of the estimated ID range to absorb anchor/slope error.
+    # ~2 quarters of recent-rate publications — generous but cheap (extra
+    # block queries are pre-filtered out by snapshot date before any body
+    # fetch).
+    _ID_RANGE_PAD = 500
+    # CBO node ids below this are pre-2010 back-catalog / non-publication
+    # nodes, out of the 2010+ corpus scope.
+    _MIN_PUBLICATION_ID = 40000
+    # First-snapshot discovery lag: Wayback usually crawls a new cbo.gov URL
+    # within weeks, occasionally up to ~90 days. We pass candidates whose
+    # earliest snapshot is in [start, end + lag] to the body-fetch stage;
+    # the authoritative page-date filter is the real window gate.
+    _WAYBACK_DISCOVERY_LAG_DAYS = 90
+
+    _PUBLICATION_RE = re.compile(r"/publication/(\d+)\b")
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
-        candidates = list(self._enumerate_wayback_candidates(start, end))
+        id_lo, id_hi = self._estimate_id_range(start, end)
         log.info(
-            "CBO: %d candidate cbo.gov/publication/* URLs after first-snapshot "
-            "filter for window [%s..%s]",
-            len(candidates), start, end,
+            "CBO: enumerating publication ids [%d..%d] for window [%s..%s] "
+            "(%d 100-id blocks)",
+            id_lo, id_hi, start, end, (id_hi // 100) - (id_lo // 100) + 1,
         )
-        seen: set[str] = set()
+        window_end_with_lag = min(
+            end + timedelta(days=self._WAYBACK_DISCOVERY_LAG_DAYS), date.today()
+        )
+        seen_pids: set[int] = set()
         yielded = 0
-        for original_url, snapshot_ts in candidates:
-            if original_url in seen:
-                continue
-            seen.add(original_url)
-            snap_url = self._SNAP_PREFIX.format(ts=snapshot_ts, url=original_url)
-
-            body, fetched_title, _author, page_date = _fetch_page_full(
-                snap_url, min_words=50, getter=self._wayback_get,
-            )
-            # Strict date policy (no Wayback-timestamp fallback): the Wayback
-            # snapshot timestamp is the last-crawled date, which can be
-            # decades after the actual publication date (e.g. a 1993 NAFTA
-            # analysis snapshotted in 2023). Such mis-dated records would
-            # corrupt the SIR fit. We emit only records whose own page
-            # metadata yields a publication date.
-            if page_date is None:
-                log.debug(
-                    "CBO %s: dropped — no page-extracted publication date "
-                    "(snapshot_ts=%s)",
-                    original_url, snapshot_ts,
+        for prefix in range(id_lo // 100, id_hi // 100 + 1):
+            for pid, ts in self._cdx_block(prefix):
+                if pid in seen_pids or pid < id_lo or pid > id_hi:
+                    continue
+                seen_pids.add(pid)
+                snap_date = self._ts_to_date(ts)
+                # Cheap pre-filter: earliest snapshot ≈ first crawl, which is
+                # at or after publication. If it falls outside the window
+                # (+lag) the publication can't be in-window — skip the fetch.
+                if snap_date is None or snap_date < start or snap_date > window_end_with_lag:
+                    continue
+                original_url = f"https://www.cbo.gov/publication/{pid}"
+                snap_url = self._SNAP_PREFIX.format(ts=ts, url=original_url)
+                body, fetched_title, _author, page_date = _fetch_page_full(
+                    snap_url, min_words=50, getter=self._wayback_get,
                 )
-                continue
-            published = page_date
-            if published < start or published > end:
-                log.debug(
-                    "CBO %s: dropped (page_date=%s out of [%s..%s])",
-                    original_url, page_date, start, end,
+                time.sleep(0.3)
+                # Strict date policy (no Wayback-timestamp fallback): the
+                # snapshot timestamp is a crawl date, not the publication
+                # date. We emit only records whose own page metadata yields
+                # a publication date inside the window.
+                if page_date is None:
+                    log.debug("CBO pub/%d: dropped — no page-extracted date (ts=%s)", pid, ts)
+                    continue
+                if page_date < start or page_date > end:
+                    log.debug("CBO pub/%d: dropped (page_date=%s out of [%s..%s])",
+                              pid, page_date, start, end)
+                    continue
+                if not body or len(body.split()) < 50:
+                    log.debug("CBO pub/%d: body too short (%d words)",
+                              pid, len(body.split()) if body else 0)
+                    continue
+                yield _make_article(
+                    source_id=self.source_id,
+                    # Canonical cbo.gov URL — NOT the Wayback wrapper. Keeps
+                    # the source-set framing on cbo.gov even though retrieval
+                    # went through the archive.
+                    url=original_url,
+                    published_at=page_date.isoformat() + "T00:00:00Z",
+                    title=fetched_title or "CBO publication",
+                    body=body,
+                    author="CBO",
+                    section="cbo_publication",
+                    tier=1,
+                    document_type="cbo_publication",
                 )
-                continue
-            if not body or len(body.split()) < 50:
-                log.debug(
-                    "CBO %s: body too short (%d words)",
-                    original_url, len(body.split()) if body else 0,
-                )
-                continue
-            yield _make_article(
-                source_id=self.source_id,
-                # Canonical cbo.gov URL — NOT the Wayback wrapper. Keeps the
-                # source-set framing on cbo.gov even though retrieval went
-                # through the archive.
-                url=original_url,
-                published_at=published.isoformat() + "T00:00:00Z",
-                title=fetched_title or "CBO publication",
-                body=body,
-                author="CBO",
-                section="cbo_publication",
-                tier=1,
-                document_type="cbo_publication",
-            )
-            yielded += 1
-            time.sleep(0.3)
+                yielded += 1
+            time.sleep(0.5 + random.uniform(0, 0.3))
         if yielded == 0:
             log.warning(
-                "CBO: 0 publications from Wayback in [%s..%s]. Either the "
-                "window has no archived snapshots or Wayback CDX is failing "
-                "(check upstream availability of web.archive.org).",
-                start, end,
+                "CBO: 0 publications from Wayback in [%s..%s] (id range "
+                "[%d..%d]). Either the window has no archived snapshots or "
+                "Wayback CDX is failing (check web.archive.org availability).",
+                start, end, id_lo, id_hi,
             )
 
     # ------------------------------------------------------------------
-    # Wayback CDX enumeration
+    # ID-range estimation (calibrated anchor interpolation)
     # ------------------------------------------------------------------
 
-    # First-snapshot lag: Wayback typically discovers a new cbo.gov URL
-    # within a few weeks of publication, but can lag up to ~90 days for
-    # less-trafficked URLs. We extend the publication window by this much
-    # when filtering URLs by first-snapshot date so we don't drop genuine
-    # in-window publications that Wayback didn't crawl promptly.
-    _WAYBACK_DISCOVERY_LAG_DAYS = 90
-    # Wayback Machine launched in 1996; older CBO publications appear as
-    # later-archived snapshots, never as first-ever snapshots before 1996.
-    _WAYBACK_INCEPTION_YEAR = 1996
+    def _estimate_id_range(self, start: date, end: date) -> tuple[int, int]:
+        """Estimate the [id_lo, id_hi] CBO node-id range for a date window.
 
-    def _enumerate_wayback_candidates(
-        self, start: date, end: date
-    ) -> Iterator[tuple[str, str]]:
-        """Yield (cbo.gov publication URL, first-ever Wayback timestamp).
-
-        We walk all Wayback history (year-sharded from 1996 to today),
-        deduping URLs across shards. Because shards run in chronological
-        order and ``collapse=urlkey`` returns the earliest snapshot per URL
-        within each shard, the FIRST time we see a URL across the whole
-        walk is its first-ever snapshot. That first-snapshot date is a
-        strong proxy for publication date (Wayback typically crawls new
-        cbo.gov URLs within days-to-weeks). We then yield only URLs whose
-        first snapshot falls in ``[start, end + _WAYBACK_DISCOVERY_LAG_DAYS]``.
-
-        Why not just shard the requested window? Because CDX ``from/to``
-        filters by CRAWL date, not publication date. A 2-month window
-        catches every CBO URL that happened to be re-crawled in that
-        period — decades of accumulated publications. The 2026-05-21
-        integration test for the 2023-06-01..2023-07-31 window returned
-        10,036 URLs that way, of which only ~0.01% were genuinely from
-        the window (the rest pre-existed and were re-crawled). Pre-filtering
-        on first-snapshot date avoids fetching tens of thousands of bodies
-        only to drop them on the page-date precision filter.
+        Piecewise-linear interpolation over ``_ID_DATE_ANCHORS``, padded by
+        ``_ID_RANGE_PAD`` on each side, clamped at ``_MIN_PUBLICATION_ID``.
         """
-        today = date.today()
-        search_start = date(self._WAYBACK_INCEPTION_YEAR, 1, 1)
-        search_end = today
-        window_end_with_lag = min(
-            end + timedelta(days=self._WAYBACK_DISCOVERY_LAG_DAYS), today
-        )
+        lo = self._estimate_id(start) - self._ID_RANGE_PAD
+        hi = self._estimate_id(end) + self._ID_RANGE_PAD
+        lo = max(self._MIN_PUBLICATION_ID, lo)
+        if hi < lo:
+            hi = lo
+        return lo, hi
 
-        first_seen: dict[str, str] = {}
-        for shard_start, shard_end in self._year_shards(search_start, search_end):
-            rows = self._cdx_fetch(shard_start, shard_end)
-            for original_url, ts in rows:
-                if original_url in first_seen:
-                    continue
-                first_seen[original_url] = ts
-            time.sleep(0.5)
+    def _estimate_id(self, target: date) -> int:
+        anchors = self._ID_DATE_ANCHORS
+        if target <= anchors[0][0]:
+            d0, i0 = anchors[0]
+            d1, i1 = anchors[1]
+        elif target >= anchors[-1][0]:
+            d0, i0 = anchors[-2]
+            d1, i1 = anchors[-1]
+        else:
+            d0, i0 = anchors[0]
+            d1, i1 = anchors[1]
+            for j in range(1, len(anchors)):
+                if target <= anchors[j][0]:
+                    d0, i0 = anchors[j - 1]
+                    d1, i1 = anchors[j]
+                    break
+        span_days = (d1 - d0).days or 1
+        slope = (i1 - i0) / span_days  # ids per day
+        return int(round(i0 + slope * (target - d0).days))
 
-        in_window = 0
-        for url, ts in first_seen.items():
-            snap_date = self._ts_to_date(ts)
-            if snap_date is None:
-                continue
-            if snap_date < start or snap_date > window_end_with_lag:
-                continue
-            in_window += 1
-            yield url, ts
-        log.info(
-            "CBO: %d URLs seen across Wayback 1996-%d; %d have first-snapshot "
-            "in [%s..%s] (publication window + %d-day discovery lag)",
-            len(first_seen), today.year, in_window,
-            start, window_end_with_lag, self._WAYBACK_DISCOVERY_LAG_DAYS,
-        )
+    # ------------------------------------------------------------------
+    # Wayback CDX — one query per 100-id block (matchType=prefix)
+    # ------------------------------------------------------------------
 
-    def _year_shards(
-        self, start: date, end: date
-    ) -> Iterator[tuple[date, date]]:
-        """Split [start, end] into ``_CDX_SHARD_YEARS``-year chunks."""
-        cur = start
-        while cur <= end:
-            shard_end = date(cur.year + self._CDX_SHARD_YEARS - 1, 12, 31)
-            if shard_end > end:
-                shard_end = end
-            yield cur, shard_end
-            cur = date(shard_end.year + 1, 1, 1)
+    def _cdx_block(
+        self, prefix: int, *, max_attempts: int = 7
+    ) -> list[tuple[int, str]]:
+        """Query CDX for cbo.gov/publication/{prefix}* (one 100-id block).
 
-    def _cdx_fetch(
-        self, start: date, end: date, *, max_attempts: int = 4
-    ) -> list[tuple[str, str]]:
-        """Query Wayback CDX for one shard.
+        Returns [(publication_id, earliest_snapshot_ts), ...] for 5-digit
+        ids matching this prefix. ``matchType=prefix`` also matches shorter
+        and longer ids sharing the prefix (e.g. prefix 594 → 594, 5940-5949,
+        59400-59499, 594000+); we keep only the 5-digit ids and let the
+        caller range-clamp. ``collapse=urlkey`` yields the earliest snapshot
+        per URL (CDX sorts ascending by timestamp within a urlkey).
 
-        Returns [(original_url, timestamp), ...]. Retries with exponential
-        backoff on 429 / 5xx — Wayback never returns 403 for CDX. Returns
-        [] on definitive failure rather than raising; the outer walk keeps
-        going across shards.
+        Retries with exponential backoff + jitter on 429 / 502 / 503 / 504
+        AND on raw network errors (Wayback resets connections under burst —
+        ``ConnectionResetError`` is its most common transient failure on a
+        long walk). Wayback never 403s CDX. The retry budget (7 attempts,
+        5s→320s backoff ≈ 10 min total) is sized to outlast Wayback's
+        per-minute rate-limit window so a transient reset clears rather than
+        aborting the multi-hour full-history walk. Raises RuntimeError only
+        on true exhaustion, so a persistent failure surfaces as a failed
+        ingest (checkpoint re-run + dedup) rather than a silent coverage hole.
         """
         params = {
-            "url": "cbo.gov/publication/*",
-            "from": start.strftime("%Y%m%d"),
-            "to": end.strftime("%Y%m%d"),
+            "url": f"cbo.gov/publication/{prefix}",
+            "matchType": "prefix",
             "fl": "original,timestamp",
             "filter": ["statuscode:200", "mimetype:text/html"],
             "collapse": "urlkey",
+            "limit": 1000,
         }
-        backoff = 3.0
+        backoff = 5.0
+        last_err: str | None = None
         for attempt in range(1, max_attempts + 1):
             try:
                 resp = requests.get(
                     self._CDX_API,
                     params=params,
                     headers={"User-Agent": self._UA},
-                    timeout=(10, 120),
+                    timeout=(10, 90),
                 )
-                if resp.status_code == 200:
-                    rows: list[tuple[str, str]] = []
-                    for line in resp.text.strip().split("\n"):
-                        if not line:
-                            continue
-                        parts = line.split(" ")
-                        if len(parts) < 2:
-                            continue
-                        original, ts = parts[0], parts[1]
-                        if "/publication/" not in original:
-                            continue
-                        # Drop trailing /html so we hit the canonical URL
-                        if original.endswith("/html"):
-                            original = original[:-5]
-                        rows.append((original, ts))
-                    log.debug(
-                        "CBO CDX shard %s..%s: %d rows",
-                        start, end, len(rows),
-                    )
-                    return rows
-                if resp.status_code in (429, 503):
-                    log.debug(
-                        "CBO CDX shard %s..%s: HTTP %d (attempt %d/%d) — "
-                        "backing off %.1fs",
-                        start, end, resp.status_code, attempt, max_attempts,
-                        backoff,
-                    )
-                    time.sleep(backoff)
-                    backoff *= 2
-                    continue
-                log.warning(
-                    "CBO CDX shard %s..%s: HTTP %d — giving up on shard",
-                    start, end, resp.status_code,
-                )
-                return []
             except Exception as exc:
-                log.debug(
-                    "CBO CDX shard %s..%s attempt %d/%d: %s",
-                    start, end, attempt, max_attempts, exc,
-                )
-                time.sleep(backoff)
+                last_err = str(exc)
+                log.debug("CBO CDX block %d*: %s (attempt %d/%d) — backoff %.1fs",
+                          prefix, last_err, attempt, max_attempts, backoff)
+                time.sleep(backoff + random.uniform(0, backoff * 0.25))
                 backoff *= 2
-        log.warning(
-            "CBO CDX shard %s..%s: exhausted %d retries — dropping shard",
-            start, end, max_attempts,
+                continue
+            if resp.status_code == 200:
+                rows: list[tuple[int, str]] = []
+                for line in resp.text.strip().split("\n"):
+                    if not line:
+                        continue
+                    parts = line.split(" ")
+                    if len(parts) < 2 or not parts[1].isdigit():
+                        continue
+                    m = self._PUBLICATION_RE.search(parts[0])
+                    if not m:
+                        continue
+                    pid = int(m.group(1))
+                    if pid < 10000 or pid > 99999:
+                        continue  # keep only 5-digit publication ids
+                    rows.append((pid, parts[1]))
+                log.debug("CBO CDX block %d*: %d ids", prefix, len(rows))
+                return rows
+            if resp.status_code in (429, 502, 503, 504):
+                last_err = f"HTTP {resp.status_code}"
+                log.debug("CBO CDX block %d*: %s (attempt %d/%d) — backoff %.1fs",
+                          prefix, last_err, attempt, max_attempts, backoff)
+                time.sleep(backoff + random.uniform(0, backoff * 0.25))
+                backoff *= 2
+                continue
+            raise RuntimeError(
+                f"CBO CDX block {prefix}*: unexpected HTTP {resp.status_code}"
+            )
+        raise RuntimeError(
+            f"CBO CDX block {prefix}* failed after {max_attempts} attempts "
+            f"(last error: {last_err}) — refusing to drop the block silently"
         )
-        return []
 
     # ------------------------------------------------------------------
     # Wayback snapshot fetcher (passed to _fetch_page_full as ``getter``)
@@ -3389,6 +3465,45 @@ class CEAIngestor(Ingestor):
             )
         return key
 
+    @classmethod
+    def _govinfo_get_json(cls, url: str, *, max_attempts: int = 6) -> dict:
+        """GET a govinfo JSON endpoint, retrying 429 / 5xx / network.
+
+        The shared ``_get`` does NOT retry 429 (it classifies 4xx as
+        non-retryable), but govinfo throttles bursts with 429 even on a
+        real key. A swallowed 429 on a listing call would silently truncate
+        the package/granule enumeration — a coverage hole. So we retry here
+        and raise RuntimeError on exhaustion (fail-loud → checkpoint re-run).
+        """
+        safe = cls._redact_key(url)
+        backoff = 3.0
+        last_err: str | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = requests.get(url, headers=_HEADERS, timeout=(10.0, 60.0))
+            except Exception as exc:
+                last_err = str(exc)
+                log.debug("CEA govinfo %s: %s (attempt %d/%d) — backoff %.1fs",
+                          safe, last_err, attempt, max_attempts, backoff)
+                time.sleep(backoff + random.uniform(0, backoff * 0.25))
+                backoff *= 2
+                continue
+            if resp.status_code == 200:
+                return resp.json()
+            if resp.status_code == 429 or resp.status_code >= 500:
+                last_err = f"HTTP {resp.status_code}"
+                log.debug("CEA govinfo %s: %s (attempt %d/%d) — backoff %.1fs",
+                          safe, last_err, attempt, max_attempts, backoff)
+                time.sleep(backoff + random.uniform(0, backoff * 0.25))
+                backoff *= 2
+                continue
+            raise RuntimeError(f"CEA govinfo {safe}: unexpected HTTP {resp.status_code}")
+        raise RuntimeError(
+            f"CEA govinfo fetch failed after {max_attempts} attempts "
+            f"(last error: {last_err}) for {safe} — refusing to silently "
+            "truncate the ERP enumeration"
+        )
+
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         api_key = self._api_key()
         # Walk packages in the ERP collection within the date window.
@@ -3424,12 +3539,7 @@ class CEAIngestor(Ingestor):
         while True:
             page += 1
             paged_url = re.sub(r"offsetMark=[^&]+", f"offsetMark={offset}", url)
-            try:
-                resp = _get(paged_url, timeout=60.0)
-                data = resp.json()
-            except Exception as exc:
-                log.warning("CEA package list fetch failed (page %d): %s", page, exc)
-                return
+            data = self._govinfo_get_json(paged_url)
             packages = data.get("packages", [])
             if not packages:
                 return
@@ -3456,12 +3566,7 @@ class CEAIngestor(Ingestor):
             f"{self._GOVINFO_BASE}/packages/{package_id}/granules"
             f"?api_key={api_key}&pageSize=200&offsetMark=*"
         )
-        try:
-            resp = _get(url, timeout=60.0)
-            data = resp.json()
-        except Exception as exc:
-            log.warning("CEA granule list %s failed: %s", package_id, exc)
-            return
+        data = self._govinfo_get_json(url)
         granules = data.get("granules", [])
         log.info("CEA: package %s issued=%s — %d granules",
                  package_id, issued.isoformat(), len(granules))
@@ -3529,27 +3634,77 @@ class CEAIngestor(Ingestor):
         )
 
     @staticmethod
-    def _extract_pdf_text(pdf_url: str) -> str:
-        """Download a PDF and return its extracted text.
+    def _redact_key(url: str) -> str:
+        """Strip the api_key query param so it never reaches logs."""
+        return re.sub(r"api_key=[^&]+", "api_key=***", url)
+
+    @classmethod
+    def _extract_pdf_text(cls, pdf_url: str) -> str:
+        """Download a granule PDF and return its extracted text.
+
+        Two failure registers, deliberately distinguished so we never
+        silently drop a chapter (the user's "no holes" requirement):
+          - FETCH failure (429 / 5xx / network) — transient infrastructure.
+            ``_fetch_pdf_bytes`` retries with backoff and raises RuntimeError
+            on exhaustion, so a persistent throttle fails the CEA ingest
+            loudly (checkpoint re-run + dedup) instead of emitting a partial
+            chapter set. This matters because govinfo throttles bursts even
+            with a real key, and the shared ``_get`` does NOT retry 429
+            (it's a 4xx) — so the retry has to live here.
+          - PARSE failure (pypdf can't read a successfully-downloaded PDF) —
+            a permanent property of that one granule; retrying can't help.
+            Logged at WARNING (not silent) and skipped via "".
 
         Raises ImportError if pypdf is unavailable — CEA cannot operate
-        without it. A transient PDF fetch / parse error returns "" so
-        the caller drops the granule but the rest of the ingest proceeds.
+        without it.
         """
         from pypdf import PdfReader
         from io import BytesIO
+        content = cls._fetch_pdf_bytes(pdf_url)
         try:
-            resp = _get(pdf_url, timeout=60.0)
-        except Exception as exc:
-            log.debug("CEA PDF fetch %s failed: %s", pdf_url, exc)
-            return ""
-        try:
-            reader = PdfReader(BytesIO(resp.content))
+            reader = PdfReader(BytesIO(content))
             pages = [page.extract_text() or "" for page in reader.pages]
             return "\n".join(p.strip() for p in pages if p.strip())
         except Exception as exc:
-            log.debug("CEA PDF parse %s failed: %s", pdf_url, exc)
+            log.warning("CEA PDF parse failed (skipping this granule): %s — %s",
+                        cls._redact_key(pdf_url), exc)
             return ""
+
+    @classmethod
+    def _fetch_pdf_bytes(cls, pdf_url: str, *, max_attempts: int = 6) -> bytes:
+        """Download a govinfo PDF, retrying 429 / 5xx / network with backoff.
+
+        Raises RuntimeError on exhaustion — a persistent fetch failure must
+        fail the ingest loudly rather than silently drop an ERP chapter.
+        """
+        safe = cls._redact_key(pdf_url)
+        backoff = 3.0
+        last_err: str | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = requests.get(pdf_url, headers=_HEADERS, timeout=(10.0, 60.0))
+            except Exception as exc:
+                last_err = str(exc)
+                log.debug("CEA PDF %s: %s (attempt %d/%d) — backoff %.1fs",
+                          safe, last_err, attempt, max_attempts, backoff)
+                time.sleep(backoff + random.uniform(0, backoff * 0.25))
+                backoff *= 2
+                continue
+            if resp.status_code == 200:
+                return resp.content
+            if resp.status_code == 429 or resp.status_code >= 500:
+                last_err = f"HTTP {resp.status_code}"
+                log.debug("CEA PDF %s: %s (attempt %d/%d) — backoff %.1fs",
+                          safe, last_err, attempt, max_attempts, backoff)
+                time.sleep(backoff + random.uniform(0, backoff * 0.25))
+                backoff *= 2
+                continue
+            raise RuntimeError(f"CEA PDF {safe}: unexpected HTTP {resp.status_code}")
+        raise RuntimeError(
+            f"CEA PDF fetch failed after {max_attempts} attempts "
+            f"(last error: {last_err}) for {safe} — refusing to silently "
+            "drop an ERP chapter"
+        )
 
     @staticmethod
     def _parse_iso_date(value: str | None) -> date | None:

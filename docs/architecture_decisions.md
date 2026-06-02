@@ -1632,6 +1632,74 @@ No changes to `_sub_ingestors`, the composite ingestor, the filter / embed / clu
 
 ---
 
+## ADR-023: CBO via bounded publication-ID enumeration; fail-loud hardening of WP-REST / BIS / CEA-govinfo paths
+
+- **Status**: Accepted
+- **Date**: 2026-06-01
+- **Refines / resolves**: ADR-021 (CBO Wayback access path), ADR-022 (CBO yield open question)
+
+### Context
+
+ADR-022 left the CBO Wayback path's yield as an explicit open question: a local probe returned 1 in-window record out of 10,036 candidates. The deferred RCC empirical check was run as part of the pre-re-ingest settling pass. The finding is decisive and was misattributed in ADR-022:
+
+**The CBO failure was in the enumeration layer, not the page-date layer.** ADR-021's `CBOIngestor` queried Wayback CDX with `url=cbo.gov/publication/*` and `from`/`to` set to the publication window. This is fundamentally broken because CDX `from`/`to` filter by **crawl date, not publication date**: a 2-month window matches every cbo.gov URL that was *re-crawled* in that period — decades of accumulated back-catalog (~10k URLs), of which a handful are genuinely from the window. Worse, the bulk-wildcard CDX endpoint is non-deterministic under load: the identical query returned 0 / 849 / 6,575 rows across three runs within one hour, and routinely 504s. A full-production run executed during this pass took 77 minutes and yielded 0 records.
+
+Two facts established empirically during the pass, both of which the ADR-022 probe could not see because it never got past the broken enumeration:
+
+1. **Wayback's archival coverage of cbo.gov publications is essentially complete.** A density probe over a contiguous block of 2023 publication IDs (`/publication/59400`–`59460`) found 13/15 archived with clean 200/HTML snapshots and real page bodies; the 2 misses were transient CDX 504s, not archival gaps. The earlier "Wayback doesn't contain all the data points" worry was an artifact of the broken bulk query, not a property of the archive.
+2. **Per-URL and narrow-prefix CDX queries are reliable and deterministic.** A 3-digit-prefix CDX query (`cbo.gov/publication/{id//100}`, `matchType=prefix`, `collapse=urlkey`) returns ~90–99 IDs per 100-ID block in 1–8s, with `collapse=urlkey` yielding the earliest snapshot per URL (CDX sorts ascending by timestamp within a urlkey — confirmed empirically). The 847/849-dropped-on-page-date symptom in the ADR-022 probe was Wayback rate-limiting (503 stubs from a rapid burst yield `page_date=None`), not missing page metadata; at a polite per-URL pace the page dates extract correctly.
+
+CBO assigns each publication a monotonically increasing integer node id at `cbo.gov/publication/{id}`. This is the same structure `NBERIngestor` already enumerates for `/papers/wNNNNN` (ADR-020). The user directive for this pass was explicit: fix CBO **without changing the methodology** — CBO stays in the basis set (dimension 5, legislative fiscal authority), retrieval stays on cbo.gov-via-Wayback, the canonical Article.url stays cbo.gov.
+
+### Decision
+
+**1. `CBOIngestor` rewritten to bounded ID enumeration (mirrors `NBERIngestor`).**
+
+- A calibrated `_ID_DATE_ANCHORS` table maps publication-id↔date at six empirically probed points (42000≈2010-01, 44000≈2013-03, 54000≈2018-06, 56000≈2020-01, 58000≈2022-04, 59460≈2023-07). The id rate is non-constant (~625/yr 2010-13, ~1900/yr 2013-18, ~800/yr since 2020), so `_estimate_id` interpolates piecewise-linearly between anchors and extrapolates past the last anchor at the recent slope. `_estimate_id_range` pads ±500 and clamps the floor at `_MIN_PUBLICATION_ID = 40000` (below that is pre-2010 back-catalog, out of corpus scope).
+- `fetch` walks the estimated id range one 100-id block at a time (`_cdx_block`), pre-filters each candidate by its earliest-snapshot date ∈ `[start, end + 90d lag]` (a cheap proxy that bounds body fetches to the true in-window set), then fetches the `id_` raw snapshot, extracts the authoritative page date via `_fetch_page_full`, and keeps only records with `page_date ∈ [start, end]` and body ≥ 50 words. The ADR-022 strict-date policy is unchanged — the snapshot timestamp is never used as the publication date.
+- The generator yields lazily in id-ascending (≈date-ascending) order, so a bounded consumer (`itertools.islice`) short-circuits without enumerating the whole range.
+
+**2. Fail-loud everywhere a transient upstream failure could silently truncate coverage.** The same audit that produced ADR-022 missed three `except: return` / swallow-to-empty paths that mark a sub-ingestor "completed" in the checkpoint while under-capturing:
+
+- **`_wp_rest_fetch`** (Brookings, Liberty Street, FRBSF) used a single-float timeout and `break` on any exception — silently truncating mid-pagination. Now: tuple timeout, retries 5xx/429/network with backoff, treats 400/404 as genuine end-of-list, raises `RuntimeError` on exhaustion.
+- **`BISIngestor._fetch_year`** used a single-float timeout and `return` (dropping the whole year) on any exception. Now: retries transient errors, treats 404 as a legitimate per-year skip (logged WARNING), raises on exhaustion.
+- **CEA govinfo path.** The shared `_get` classifies 429 as non-retryable (it's a 4xx), but govinfo throttles bursts with 429 even on a real key, and `_extract_pdf_text` / the listing calls swallowed the resulting `HTTPError` as `""` / silent `return` — dropping ERP chapters or truncating the package enumeration. New `_govinfo_get_json` and `_fetch_pdf_bytes` helpers retry 429/5xx/network with jittered backoff and raise `RuntimeError` on exhaustion. PDF **parse** failure (permanent property of one granule) is distinguished from PDF **fetch** failure (transient): parse failure logs WARNING and skips that granule; fetch failure fails the ingest loudly. API keys are redacted from all log/error messages (`_redact_key`).
+
+The principle is the one ADR-022 established: a sub-ingestor that under-captures but yields > 0 is marked "completed" by the checkpoint, hiding the hole; raising marks it failed-for-retry, and checkpoint-based dedup handles the re-yielded duplicates on the next run.
+
+### Consequences
+
+**Positive:**
+
+- CBO yields cleanly. Battery validation (window 2023-06-01..07-31, floor 5, cap 30) collected the full 30 records, all in-window, all bodies ≥ 50 words, 56-day span — versus 0 from the ADR-021 path. ADR-022's open question is resolved in favor of keeping CBO on cbo.gov-via-Wayback; none of the four fallback options (Common Crawl, paid scraping, govinfo, drop CBO) are needed.
+- No methodology change: CBO stays in the basis set, canonical url stays cbo.gov, the strict page-date filter is preserved verbatim.
+- Three more silent-truncation paths are now fail-loud, consistent with ADR-022. The corpus cannot be marked "complete" while a transient throttle has quietly halved a source.
+
+**Negative / risks:**
+
+- **Runtime.** The bounded enumeration is one CDX block query per 100 ids plus one body fetch per in-window record. For the full 2010-present window that is ~200 block queries + ~13,000–19,000 body fetches at ~0.3–0.5s politeness ≈ **15–22 wall-clock hours for CBO alone**. Combined with NBER (~5–8h) inside the single institutional SLURM job, the 48h limit in CLAUDE.md is tight. Recommend either bumping the institutional job to 72h or splitting CBO into its own parallel SLURM job (the checkpoint architecture supports this).
+- **CEA cannot be validated with DEMO_KEY.** The 30 req/hr public quota is exhausted by a single ERP volume's chapter fetches, so the local battery shows CEA `n=3` (a quota artifact, not a capture bug — the granule structure is intact). CEA must be validated on RCC with a real `GOVINFO_API_KEY`. The hardening above makes a real-key run robust to incidental throttling.
+- The `_ID_DATE_ANCHORS` table is calibrated through 2023; windows past it extrapolate at ~800 ids/yr. The ±500 pad and the page-date filter absorb slope error, but a large future drift would need a new anchor.
+
+### Verification
+
+- `python -m pytest -m "not integration"` — 51 pass.
+- CBO battery case validated live: 30/30 in-window, real bodies, 56-day span, hardened retry survived a Wayback `ConnectionResetError` burst on block 593 (the first run aborted there with a 5-attempt budget; budget raised to 7 attempts / 5s→320s backoff + jitter, second run completed).
+- Beige Book 2014 re-confirmed (8 records, all ≥ 200 words) — the empty battery log was an aborted run, not a defect.
+- Remaining 21 battery cases were green in the same pass (Fed main/speeches/FEDS-notes, regional NY/SF/Chicago/Atlanta, Congressional, IMF ×2, BIS ×2, Treasury OFR ×2, Brookings ×2, VoxEU ×2, NBER ×2, PIIE).
+- **To verify end-to-end on RCC:** `pytest tests/integration/test_source_coverage.py -m integration -v` with `GOVINFO_API_KEY` set and `curl_cffi` + `pypdf` installed (this is the run that validates CEA).
+
+### Implementation notes
+
+All changes in two files:
+
+- `src/mnd/ingestion/institutional.py` — `CBOIngestor` rewrite (ID enumeration, `_estimate_id_range`, `_cdx_block`, retained `_wayback_get` / `_ts_to_date`); `_wp_rest_fetch` and `BISIngestor._fetch_year` fail-loud retry; CEA `_govinfo_get_json`, `_fetch_pdf_bytes`, `_redact_key`, two-register PDF failure handling. Added `import random`.
+- `docs/architecture_decisions.md` — this entry.
+
+No changes to `_sub_ingestors`, the pipeline, the config, or the test contracts (the existing `cbo_2023_wayback` case validates the rewrite unchanged).
+
+---
+
 ## ADR template (copy for new entries)
 
 ```
