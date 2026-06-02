@@ -17,7 +17,12 @@ from typing import Iterator
 import feedparser
 import requests
 from bs4 import BeautifulSoup
-from tenacity import retry, stop_after_attempt, wait_random_exponential
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_random_exponential,
+)
 
 from mnd.ingestion.base import Article, Ingestor, _now_utc_iso, _stable_article_id
 from mnd.utils.logging import get_logger
@@ -38,7 +43,29 @@ SPEECHES_INDEX_LEGACY = f"{SPEECHES_BASE}/{{year}}speech.htm"
 SPEECHES_RSS = "https://www.federalreserve.gov/feeds/speeches.xml"
 
 
-@retry(stop=stop_after_attempt(8), wait=wait_random_exponential(multiplier=2, max=120))
+def _is_retryable(exc: Exception) -> bool:
+    """Retry on server errors and transient network failures; not on 4xx.
+
+    The Fed ingestor probes many URLs that legitimately 404 (Beige Book
+    backstop enumeration tries both era URL variants for every month;
+    speech-index fallback probes legacy filenames; FOMC pages that don't
+    exist yet for a window edge). Retrying a 404 is pointless and — with
+    ``wait_random_exponential(max=120)`` over 8 attempts — could stall the
+    walk for minutes per dead URL, compounding to hours across a full
+    ingest. Mirror institutional.py's predicate: only 5xx and true
+    transient transport errors are retried.
+    """
+    if isinstance(exc, requests.exceptions.HTTPError):
+        resp = getattr(exc, "response", None)
+        return resp is not None and resp.status_code >= 500
+    return True
+
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_random_exponential(multiplier=1, max=30),
+    retry=retry_if_exception(_is_retryable),
+)
 def _get(url: str, *, timeout=30.0) -> requests.Response:
     # Normalize float timeout to a (connect, read) tuple. Single-value timeouts
     # in stdlib `requests` are unreliable on TCP-level stalls — the read timeout
