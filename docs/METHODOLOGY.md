@@ -41,7 +41,7 @@ The corpus is a **basis set**: the minimum set of sources spanning every indepen
 | Dimension | Source(s) |
 |---|---|
 | 1. US monetary authority | Federal Reserve Board (FOMC, speeches incl. Jackson Hole, Beige Book, FEDS Notes, MPR, FSR) |
-| 2. US monetary research | Regional Feds — NY (Liberty Street), SF (Economic Letter), Chicago (multi-series), Atlanta (macroblog + working papers) |
+| 2. US monetary research | Regional Feds — NY (Liberty Street + Staff Reports via RePEc/IDEAS, ADR-025), SF (Economic Letter), Chicago (multi-series), Atlanta (macroblog + working papers) |
 | 3. International macro authority | IMF (WEO, GFSR, F&D, working papers, blog) |
 | 4. International central-bank network | BIS (Quarterly Review, working papers, Bulletins, curated CB speeches) |
 | 5. US fiscal authority | CBO (legislative scoring + outlook + working papers + MBR) + **CEA** (executive — Economic Report of the President via govinfo.gov ERP) |
@@ -56,7 +56,7 @@ The corpus is a **basis set**: the minimum set of sources spanning every indepen
 
 **Why not the press as text.** Two reasons. First, premium analytical press is paywalled and not bulk-licensable. Second, ingesting press text would bias toward narratives that already broke through to journalism, missing the earlier formation phase that's the analytical target. We *do* capture press volume separately — see Stage 6 — but we don't ingest the text.
 
-**Why not govinfo.gov for CBO.** govinfo.gov has a CBO collection (~772 publications) but GPO-deposit coverage is uneven over time (41 records 2010 → 6 records 2024), which would inject a non-random, time-varying selection filter into the CBO volume signal — exactly the artifact the basis-set framing was designed to eliminate. The Playwright + curl_cffi cbo.gov path (ADR-017) covers the full archive directly. Engineering complexity is the cost we pay for methodological cleanliness.
+**Why not govinfo.gov for CBO.** govinfo.gov has a CBO collection (~772 publications) but GPO-deposit coverage is uneven over time (41 records 2010 → 6 records 2024), which would inject a non-random, time-varying selection filter into the CBO volume signal — exactly the artifact the basis-set framing was designed to eliminate. The Wayback bounded publication-ID enumeration path (ADR-023, supersedes the ADR-017 Playwright approach) covers the full cbo.gov archive directly. Engineering complexity is the cost we pay for methodological cleanliness.
 
 **What we don't include.** Paywalled databases (no ProQuest, Factiva, Bloomberg, RavenPack); the financial press itself as embeddable text (no AP, Reuters, MarketWatch corpus); SSRN (no public historical archive); CFR (basis redundancy with PIIE).
 

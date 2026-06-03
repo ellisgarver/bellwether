@@ -62,39 +62,30 @@ modify pilot code. Resume instructions below are retained for reference only.
 
 - [x] Phase 0 — scaffold, configs, anchor set, ingestors, embedding module
 - [x] Phase 1 — filtering, dedup, clustering, dynamics, stages, validation, CLI
-- [/] Phase 2 — initial chain COMPLETE 2026-05-18 (jobs 49740251–49740257, 21,289 articles, 63,600 chunks). Six coverage bugs identified by corpus-composition QA and patched in commit fc8fb60 (FEDS Notes regex, Beige Book historical enumeration, fed_chicago meta_date guard, VoxEU date-shard, CBO curl_cffi attempt). Tuple-timeout fix landed c47fb91. CBO fail-fast guard landed f9222ba. Patch ingest 49771521 ran 2026-05-18 16:01 with the partial fixes; post-patch corpus-composition QA on RCC surfaced four further coverage gaps that the patch did NOT close (FEDS Notes 2013-2015 still 0, Beige Book 2010-2016 still 0, fed_atlanta still 0, fed_chicago capped at 246). All four addressed in subsequent commits along with ADR-015 implementation — see "post-patch fixes" below. The next FULL re-ingest (NUKE_RAW=1) will run with everything baked in; the patch ingest is treated as a diagnostic run.
-- [/] Phase 3 — initial embedding + clustering COMPLETE 2026-05-18 (jobs 49740254/256/257, Qwen3 primary, BERTopic single-level output, outlier 25.4%). Stability check: mean NMI=0.880±0.003, ARI=0.612±0.012 across 19 bootstrap replicates. Anchor recovery on pre-patch corpus: 6/10 — 4 failing anchors are all 2013-2020 events that land in BERTopic outlier bucket due to corpus undercoverage in that era. Re-validation deferred until after the post-patch full re-ingest with ADR-019 methodology lock-in applied.
+- [/] Phase 2 — first corpus built 2026-05-18 (21,289 articles, 63,600 chunks). Multiple coverage bugs since fixed across the ingestors. Awaiting the next FULL re-ingest (parallel fan-out, NUKE_PRIOR=1) with all fixes + the ADR-020 basis set baked in, then corpus-composition QA before ticking the box.
+- [/] Phase 3 — first embedding + clustering 2026-05-18 (Qwen3 primary, BERTopic single-level, outlier 25.4%, stability NMI=0.880±0.003). Anchor recovery on that pre-fix corpus was 6/10 — the 4 misses were 2013-2020 events lost to corpus undercoverage in that era, which the re-ingest targets. Re-validation deferred until after the re-ingest.
 
-### Pre-full-re-ingest fixes (2026-05-18 → 2026-05-19)
-
-1. **Beige Book historical (`src/mnd/ingestion/fed.py`):** archive-page walk + dual URL-pattern enumeration — historical issues live at `/monetarypolicy/beigebook/beigebook{YYYYMM}.htm` (extra subdirectory) while modern issues at `/monetarypolicy/beigebook{YYYYMM}.htm`.
-2. **FEDS Notes legacy URLs (`src/mnd/ingestion/fed.py`):** regex broadened to accept `/econresdata/notes/feds-notes/{YEAR}/{slug}-YYYYMMDD.html` (2013-2016 layout) in addition to the modern `/econres/notes/feds-notes/{slug}-YYYYMMDD.html`.
-3. **fed_chicago (`src/mnd/ingestion/institutional.py`):** sitemap walk matches eight Chicago Fed publication series instead of one.
-4. **fed_atlanta (`src/mnd/ingestion/institutional.py`):** new sitemap walker via curl_cffi covers working papers, policy hub, macroblog, economy matters; RSS fallback.
-5. **ADR-015 implementation:** `config/topic_filter_keywords.yaml` schema 2.0.0 with JEL annotations + ~50 keyword additions + `named_events` category (234 total). NBER and Congressional kept JEL-primary / role-guard logic at the time.
-6. **ADR-016 implementation:** ALL Stage 1 topic filters removed (CBO/VoxEU/Brookings/CFR title checks, CFR URL-slug `_URL_MACRO_TOKENS`, Congressional sanctions-dedup + canonical title gate). Only structural filters remain (Congressional role guard, CFR `_RELEVANT_SECTIONS`, date windows, word-count mins). Topic relevance decided once at Stage 2 over title+body. Layer 1B switched from RavenPack-via-WRDS to Media Cloud Premium Press.
-7. **ADR-017 implementation (2026-05-19):**
-   - **CBO via Playwright + curl_cffi hybrid.** Closes the DataDome gap. ~25,000-URL sitemap walk via curl_cffi-with-cookies after a one-time headless Chromium session captures clearance cookies. `playwright==1.48.0` added to `requirements.txt`; setup script `scripts/install_playwright_for_cbo.sh`.
-   - **PIIE rewrite.** Broader `.teaser` selector. Title-only fallback dropped (was silently dropping records). Per-page diagnostic logging. Expect ~1,000-2,000 records (vs 179).
-   - **BIS expansion.** `_URL_PATTERNS` dispatcher covers Working Papers + Quarterly Review (`/publ/qtrpdf/r_qt*.htm`) + Bulletins (`/publ/bisbull*.htm`) + curated central-bank speeches (`/review/r*.htm`) + a `/publ/` catch-all. Expect ~5,000-8,000 records (vs 1,057).
-   - **NBER and SSRN removed entirely.** No longer in Phase 6 — Phase 6 = Tier 1/2 re-ingest + Media Cloud Premium only.
-   - **Treasury naming clarified.** Treasury Secretary press releases are ingested under `congressional` source_id by design; OFR research is `treasury_ofr`. No restructure (renaming would invalidate existing data alignment).
 - [ ] Phase 4 — pre-registration finalized, full anchor + fizzled validation
 - [ ] Phase 5 — Streamlit dashboard, Hugging Face Spaces deploy
-- [ ] Phase 6 — weekly cron update pipeline (Tier 1/2 re-ingest + Media Cloud Premium live, ADR-016)
+- [ ] Phase 6 — weekly cron update pipeline (basis-set re-ingest + Media Cloud Premium live, ADR-016)
 - [ ] Phase 7 — technical report, reproducibility audit
+
+The retrieval mechanics and coverage-bug history for each source live in their
+ADRs (`docs/architecture_decisions.md`) and commit messages — not duplicated here.
+Current ingestor behavior is whatever the code does now; the "Critical rules"
+section above lists only the live, load-bearing constraints.
 
 ### Open work (priority order)
 
-1. **One-time RCC setup:** install playwright + chromium + pypdf in the mnd conda env, and obtain a free GovInfo API key.
+1. **One-time RCC setup:** install the mnd conda env from `requirements.txt` (pypdf + curl_cffi) and obtain a free GovInfo API key.
    ```bash
    conda activate mnd
-   pip install -r requirements.txt          # now includes pypdf==5.0.1 (ADR-020)
-   bash scripts/install_playwright_for_cbo.sh
+   pip install -r requirements.txt          # includes pypdf==5.0.1 (ADR-020), curl_cffi==0.15.0 (ADR-014)
    # Sign up at https://api.govinfo.gov/signup/ and add GOVINFO_API_KEY=... to .env
    ```
-2. **Per-source ingestion integration tests on RCC (25-case battery, ADR-020).** `pytest tests/integration/test_source_coverage.py -m integration -v` — validates each of the 12 active sub-ingestors against a narrow window. Now includes NBER 2014 + 2023h2 historical-edge cases, CEA ERP 2014 + 2023 cases, plus 2010-window historical-edge cases for Brookings / IMF / BIS and 2016 for Treasury OFR. Catches silent-zero failures before the 48h re-ingest. CEA cases skip gracefully if `pypdf` is missing.
-3. **Full re-ingest (NUKE_RAW=1) with ADR-019 methodology + ADR-020 basis-set corpus baked in.** Submit `scripts/rcc/submit_full_pipeline.sh` with `NUKE_RAW=1`. Bump institutional ingest SLURM time limit to 48h (the NBER direct-URL enumeration is the new long pole — ~30,000 paper IDs × 0.6s polite delay ≈ 5-8 wall-clock hours).
+   (CBO no longer needs Playwright — ADR-023 moved it to Wayback bounded-ID enumeration.)
+2. **Per-source ingestion integration tests on RCC (25-case battery, ADR-020).** `pytest tests/integration/test_source_coverage.py -m integration -v` — validates each of the 12 active sub-ingestors against a narrow window. Now includes NBER 2014 + 2023h2 historical-edge cases, CEA ERP 2014 + 2023 cases, plus 2010-window historical-edge cases for Brookings / IMF / BIS and 2016 for Treasury OFR. Catches silent-zero failures before the full re-ingest. CEA cases skip gracefully if `pypdf` is missing.
+3. **Full re-ingest via the parallel fan-out.** Submit `scripts/rcc/submit_parallel_ingest.sh` with `NUKE_PRIOR=1` (one SLURM job per source, per-source `--time` budgets, downstream filter→embed→cluster chained on afterok of every ingest job). This supersedes the single chained `submit_full_pipeline.sh`, where a long pole (CBO Wayback walk, NBER ID enumeration, Brookings ~44k articles) could starve the rest and risk the wall clock. Per-source runs don't touch the composite checkpoint, so a single source can fail and be re-run in isolation: `SOURCES="<src>" SKIP_DOWNSTREAM=1 SKIP_CLEANUP=1 bash scripts/rcc/submit_parallel_ingest.sh`.
 4. **Post-re-ingest validation:** filter → embed → cluster → JEL post-classify → dynamics. Report anchor recovery rate; no pass/fail threshold (ADR-019). Run `mnd.clustering.jel_classifier.classify_clusters` on the BERTopic output and confirm sensible scope labels (≥40% in-scope for E/F/G/H given basis-set composition). If recovery looks reasonable, tick Phase 2 and Phase 3 boxes.
 5. **Phase 4** — pre-registration finalize, citing METHODOLOGY.md and ADRs 015 / 016 / 017 / 018 / 019 / 020 as the methodology lock-in. Blocked by items 1-4.
 
@@ -152,7 +143,7 @@ The corpus is a basis set, not a tier hierarchy: the minimum set of sources span
 
 ### Continuous update (Phase 6) — re-ingest, not RSS
 
-New items detection uses periodic re-ingest of Tier 1 + Tier 2 sources. The same `run_pipeline.py ingest --sources institutional` job that powers the historical run, scheduled weekly, with checkpoint-based dedup catching new publications since the prior run. Plus Media Cloud Premium Press for journalism volume (Layer 1B). Nothing else is added in Phase 6 — no NBER, no SSRN, no AP News RSS, no RavenPack live. The historical plan ("AP News RSS + RavenPack live") was abandoned in ADR-016/ADR-017.
+New items detection uses periodic re-ingest of the ADR-020 basis set (all 12 sub-ingestors, NBER included). The same ingest jobs that power the historical run, scheduled weekly, with checkpoint-based dedup catching new publications since the prior run. Plus Media Cloud Premium Press for journalism volume (Layer 1B). Nothing outside the basis set is added in Phase 6 — no SSRN, no AP News RSS, no RavenPack live. The historical plan ("AP News RSS + RavenPack live") was abandoned in ADR-016.
 
 ### Anchor narratives (FINAL — 10 narratives)
 
@@ -197,14 +188,13 @@ Removed from prior version: FTX collapse, GameStop short squeeze (out of macro s
 ### Phase 2 pipeline (run on RCC, ADR-010)
 
 ```bash
-# Full historical ingestion (2010-present) — SLURM dependency chain
-# Journalism tier removed; single institutional job only.
-INGEST=$(sbatch --parsable scripts/rcc/ingest_institutional_rcc.sh)
-FILTER=$(sbatch --parsable --dependency=afterok:$INGEST scripts/rcc/filter_rcc.sh)
-EMBED=$(sbatch --parsable --dependency=afterok:$FILTER scripts/rcc/embed_rcc.sh)
-sbatch --dependency=afterok:$EMBED scripts/rcc/cluster_rcc.sh
+# Full historical ingestion (2010-present) — parallel fan-out, one SLURM job
+# per source, downstream filter→embed→cluster chained on afterok of all 12.
+# Handles cleanup, per-source --time budgets, and the downstream chain itself.
+NUKE_PRIOR=1 bash scripts/rcc/submit_parallel_ingest.sh
 
 # Pre-embedding filter (excludes any archived journalism sources from raw JSONL)
+# Already chained by submit_parallel_ingest.sh; shown here for a manual re-run.
 python scripts/run_pipeline.py filter-pre-embed
 
 # Corpus composition QA (run after filter)
