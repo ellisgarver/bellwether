@@ -1912,7 +1912,13 @@ class TreasuryOFRIngestor(Ingestor):
 
     _OFR_WORKING_PAPERS = "https://www.financialresearch.gov/working-papers/"
     _OFR_BRIEFS = "https://www.financialresearch.gov/briefs/"
-    _FSOC_REPORTS = "https://home.treasury.gov/policy-issues/financial-markets-financial-institutions-and-fiscal-service/fsoc/studies-and-reports"
+    # FSOC annual reports: the current index page publishes the most-recent
+    # report directly; prior years live on per-year landing pages linked from
+    # the archive page. (The /studies-and-reports parent page used previously
+    # links neither, which is why FSOC ingested 0 records.)
+    _FSOC_ANNUAL_INDEX = "https://home.treasury.gov/policy-issues/financial-markets-financial-institutions-and-fiscal-service/fsoc/studies-and-reports/annual-reports"
+    _FSOC_ARCHIVE = "https://home.treasury.gov/policy-issues/financial-markets-financial-institutions-and-fiscal-service/financial-stability-oversight-council/council-work/studies-and-reports/annual-reports/fsoc-annual-reports-archive"
+    _FSOC_LANDING_RE = re.compile(r"fsoc-(\d{4})-annual-report")
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         yield from self._scrape_ofr_index(self._OFR_WORKING_PAPERS, "ofr_working_paper", start, end)
@@ -1964,71 +1970,161 @@ class TreasuryOFRIngestor(Ingestor):
             )
             time.sleep(1.0)
 
-    # FSOC PDF URL pattern: ``/system/files/<id>/fsoc{year}annualreport.pdf`` or
-    # ``/system/files/<id>/FSOC{year}AnnualReport.pdf`` (case insensitive). The
-    # year is the year the report covers — the Council convention is to publish
-    # in the late-Q4 of the same year or in Q1 of the following year. We use
-    # December 31 of that year as the publication date floor (authoritative
-    # by-year tagging), which matches how downstream weekly-aggregation treats
-    # the report's discursive footprint.
-    _FSOC_PDF_RE = re.compile(
-        r"/system/files/\d+/(?:fsoc|FSOC)[^/]*?(\d{4})[^/]*?annual[^/]*?report[^/]*?\.pdf",
-        re.IGNORECASE,
+    # Section/supplement PDFs that share a report year but are NOT the main
+    # report (chart decks, slide decks, executive summaries, glossaries, the
+    # 2011 report's per-chapter split, etc.). Matched against the separator-
+    # stripped lowercased filename stem.
+    _FSOC_NON_REPORT_TOKENS = (
+        "chart", "slide", "deck", "summary", "glossary", "abbrev", "recommend",
+        "letter", "statement", "contents", "notesonthe", "boxes", "developments",
+        "macroeconomic", "emergingthreats", "progress", "listofcharts", "tableof",
+        "factsheet",
     )
+
+    @staticmethod
+    def _page_pdf_urls(page_url: str) -> list[str]:
+        resp = _get(page_url, timeout=30.0)
+        soup = BeautifulSoup(resp.text, "lxml")
+        return [
+            urljoin("https://home.treasury.gov", a["href"])
+            for a in soup.find_all("a", href=True)
+            if a["href"].lower().endswith(".pdf")
+        ]
+
+    @classmethod
+    def _annual_years(cls, pdf_urls: list[str]) -> set[int]:
+        """Report years for which a main annual-report PDF appears in the list."""
+        years: set[int] = set()
+        for u in pdf_urls:
+            name = u.rsplit("/", 1)[-1]
+            if not name.lower().endswith(".pdf"):
+                continue
+            norm = re.sub(r"[^a-z0-9]", "", name[:-4].lower())
+            if "annualreport" not in norm and not norm.startswith("fsocar"):
+                continue
+            m = re.search(r"(20\d{2})", norm)
+            if m:
+                years.add(int(m.group(1)))
+        return years
+
+    @classmethod
+    def _pick_annual_pdf(cls, pdf_urls: list[str], year: int) -> str | None:
+        """Choose the single main annual-report PDF for ``year``.
+
+        FSOC filenames are wildly inconsistent across years (``FSOCAR2011.pdf``,
+        ``2012-Annual-Report.pdf``, ``FSOC-2013-Annual-Report.pdf``,
+        ``FSOC2018AnnualReport.pdf`` …). We normalise the stem and prefer an
+        exact canonical match, then fall back to any non-supplement PDF that
+        carries the year and reads as an annual report.
+        """
+        cands: list[tuple[str, str]] = []
+        for u in pdf_urls:
+            name = u.rsplit("/", 1)[-1]
+            if not name.lower().endswith(".pdf"):
+                continue
+            norm = re.sub(r"[^a-z0-9]", "", name[:-4].lower())
+            if str(year) not in norm:
+                continue
+            if any(tok in norm for tok in cls._FSOC_NON_REPORT_TOKENS):
+                continue
+            if norm in (f"fsoc{year}annualreport", f"fsocar{year}"):
+                return u
+            cands.append((u, norm))
+        for u, norm in cands:
+            if "annualreport" in norm or norm.startswith(f"fsocar{year}"):
+                return u
+        return cands[0][0] if cands else None
 
     def _scrape_fsoc(self, start: date, end: date) -> Iterator[Article]:
         """Fetch FSOC annual reports as PDF, extracted to text via pypdf.
 
-        FSOC has published one annual report per year since 2011 (with a
-        2010 inaugural). Each is a structured ~200-page PDF surveying
-        systemic-risk conditions — a major data point for the financial-
-        stability dimension of the basis set. pypdf is mandatory.
+        FSOC has published one annual report per year since 2011. Each is a
+        structured ~200-page PDF surveying systemic-risk conditions — a major
+        data point for the financial-stability dimension of the basis set.
+        The most-recent report sits on the current index page; prior years are
+        reached through per-year landing pages linked from the archive page.
+        pypdf is mandatory.
         """
+        seen: set[int] = set()
+
+        # 1. Current index page hosts the most-recent annual report directly.
         try:
-            resp = _get(self._FSOC_REPORTS, timeout=30.0)
+            cur_pdfs = self._page_pdf_urls(self._FSOC_ANNUAL_INDEX)
         except Exception as exc:
-            log.error("FSOC index fetch failed %s: %s", self._FSOC_REPORTS, exc)
+            log.error("FSOC index fetch failed %s: %s", self._FSOC_ANNUAL_INDEX, exc)
+            cur_pdfs = []
+        for year in sorted(self._annual_years(cur_pdfs)):
+            yield from self._emit_fsoc_year(year, cur_pdfs, start, end, seen)
+
+        # 2. Archive lists per-year landing pages for prior years.
+        try:
+            resp = _get(self._FSOC_ARCHIVE, timeout=30.0)
+        except Exception as exc:
+            log.error("FSOC archive fetch failed %s: %s", self._FSOC_ARCHIVE, exc)
             return
         soup = BeautifulSoup(resp.text, "lxml")
-        seen: set[str] = set()
+        landing: dict[int, str] = {}
         for link in soup.find_all("a", href=True):
-            href = link["href"]
-            m = self._FSOC_PDF_RE.search(href)
-            if not m:
+            m = self._FSOC_LANDING_RE.search(link["href"])
+            if m:
+                landing.setdefault(
+                    int(m.group(1)),
+                    urljoin("https://home.treasury.gov", link["href"]),
+                )
+        for year in sorted(landing):
+            if year in seen:
                 continue
-            year = int(m.group(1))
-            # FSOC publishes annual reports for a calendar year; date the
-            # record at the year's December 31 (the report's reporting
-            # period closes at year end).
             pub_date = date(year, 12, 31)
             if pub_date < start or pub_date > end:
                 continue
-            full_url = urljoin("https://home.treasury.gov", href)
-            if full_url in seen:
-                continue
-            seen.add(full_url)
-            body = self._extract_pdf_text(full_url)
-            if not body or len(body.split()) < 500:
+            try:
+                pdfs = self._page_pdf_urls(landing[year])
+            except Exception as exc:
                 log.warning(
-                    "FSOC %d: PDF extraction yielded %d words (<500 floor) — "
-                    "extraction may have failed",
-                    year, len(body.split()) if body else 0,
+                    "FSOC %d landing fetch failed %s: %s", year, landing[year], exc
                 )
                 continue
-            title = (link.get_text(strip=True) or
-                     f"FSOC Annual Report {year}")
-            yield _make_article(
-                source_id=self.source_id,
-                url=full_url,
-                published_at=pub_date.isoformat() + "T00:00:00Z",
-                title=title,
-                body=body,
-                author="Financial Stability Oversight Council",
-                section="fsoc_annual_report",
-                tier=1,
-                document_type="fsoc_annual_report",
+            yield from self._emit_fsoc_year(year, pdfs, start, end, seen)
+
+    def _emit_fsoc_year(
+        self, year: int, pdf_urls: list[str], start: date, end: date, seen: set[int]
+    ) -> Iterator[Article]:
+        if year in seen:
+            return
+        # FSOC reports cover a calendar year; date the record at December 31
+        # (the report's reporting period close), matching downstream weekly
+        # aggregation's treatment of the report's discursive footprint.
+        pub_date = date(year, 12, 31)
+        if pub_date < start or pub_date > end:
+            return
+        pdf_url = self._pick_annual_pdf(pdf_urls, year)
+        if not pdf_url:
+            log.warning(
+                "FSOC %d: no main annual-report PDF among %d links",
+                year, len(pdf_urls),
             )
-            time.sleep(1.0)
+            return
+        body = self._extract_pdf_text(pdf_url)
+        if not body or len(body.split()) < 500:
+            log.warning(
+                "FSOC %d: PDF extraction yielded %d words (<500 floor) — "
+                "extraction may have failed",
+                year, len(body.split()) if body else 0,
+            )
+            return
+        seen.add(year)
+        yield _make_article(
+            source_id=self.source_id,
+            url=pdf_url,
+            published_at=pub_date.isoformat() + "T00:00:00Z",
+            title=f"FSOC Annual Report {year}",
+            body=body,
+            author="Financial Stability Oversight Council",
+            section="fsoc_annual_report",
+            tier=1,
+            document_type="fsoc_annual_report",
+        )
+        time.sleep(1.0)
 
     @staticmethod
     def _extract_pdf_text(pdf_url: str) -> str:
