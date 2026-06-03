@@ -1728,6 +1728,64 @@ Methodology kept drifting between work sessions: decisions already made (e.g. CB
 
 ---
 
+## ADR-025: NY Fed Staff Reports captured via RePEc/IDEAS; year-only dates imputed by sequence
+
+- **Status**: Accepted
+- **Date**: 2026-06-03
+
+### Context
+
+Dimension 2 of the basis set (US monetary research voice, ADR-020) is the NY
+Fed. `FedRegionalIngestor._fetch_liberty_street` only captured the Liberty
+Street Economics blog, which begins in 2011 and excludes the bank's flagship
+*Staff Reports* working-paper series — a large, on-topic body of macro-finance
+research that was silently absent from the corpus. This is an under-capture of
+an already-decided source, not a corpus change.
+
+newyorkfed.org item pages are JS-rendered and expose no machine-readable
+metadata. RePEc/IDEAS indexes the complete series (`fip/fednsr`); verified live
+2026-06-03 that each item page (`/p/fip/fednsr/{repec_id}.html`) carries clean
+`citation_*` meta tags — identical in shape to the NBER ingestor (ADR-020). The
+series listing pages enumerate every report newest-first under `<h3>YYYY</h3>`
+headers and provide the internal RePEc id, which is required because for recent
+papers the RePEc id differs from the SR number (so SR-number probing of item
+pages fails). `citation_publication_date` is full `YYYY/MM/DD` for ~sr659
+(late 2013) onward and **year-only** for earlier reports.
+
+### Decision
+
+1. Add `FedRegionalIngestor._fetch_ny_staff_reports`: walk the IDEAS listing
+   pages (descending, stop once below the window), then fetch each in-window
+   item page and parse `citation_*` meta (title, authors, abstract, date).
+   Body = title + abstract (NBER convention). Canonical `Article.url` is the
+   newyorkfed.org PDF (`.../staff_reports/sr{number}.pdf`); the RePEc id and
+   IDEAS url are kept in `raw_metadata`. Emitted under `source_id="fed_ny"`
+   (same bank/dimension as Liberty Street) with `document_type="fed_staff_report"`
+   so corpus-composition QA can separate the two streams.
+2. **Year-only date imputation.** When only the publication year is available
+   (pre-~2014 records), place the report within its year by its rank among
+   same-year reports (Staff Reports are numbered monotonically through the
+   year): `date = Jan 1 + round((rank + 0.5)/n × 364)`. This avoids piling
+   ~40-60 reports/year onto Jan 1, which would fabricate a weekly-volume spike
+   in 2010-2013. The imputation is deterministic and anchor-independent — it
+   estimates an unavailable field, it is not a tuned parameter (consistent with
+   the no-hand-tuning rule). Imputed records are flagged `date_imputed: true`
+   in `raw_metadata`. Reports with full dates (~sr659 onward, covering all
+   anchor-era years 2015+) use the exact `YYYY/MM/DD`.
+
+### Consequences
+
+- The NY Fed dimension now includes its working-paper series back to 2010, not
+  just the 2011+ blog; capture of an already-decided source is completed.
+- Pre-2014 NY Staff Reports carry imputed within-year dates; the `date_imputed`
+  flag lets downstream analysis identify them. All anchor-relevant years
+  (2015+) have exact dates, so no anchor's volume curve depends on the imputation.
+- The RePEc `refs.cgi` Python-repr export was evaluated and rejected in favor of
+  the item-page `citation_*` meta — same data, valid HTML, no fragile
+  literal-eval of a non-JSON payload.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

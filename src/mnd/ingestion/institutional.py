@@ -63,6 +63,7 @@ FOMC minutes = release date.
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import random
@@ -1171,6 +1172,7 @@ class FedRegionalIngestor(Ingestor):
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
         yield from self._fetch_liberty_street(start, end, seen)
+        yield from self._fetch_ny_staff_reports(start, end, seen)
         yield from self._fetch_frbsf(start, end, seen)
         yield from self._fetch_chicago_fed_letter(start, end, seen)
         yield from self._fetch_atlanta(start, end, seen)
@@ -1201,6 +1203,181 @@ class FedRegionalIngestor(Ingestor):
             if article:
                 yield article
                 time.sleep(0.5)
+
+    # ------------------------------------------------------------------
+    # NY Fed Staff Reports — RePEc/IDEAS series fip/fednsr
+    # ------------------------------------------------------------------
+    #
+    # Liberty Street Economics (above) only covers the NY Fed blog, which
+    # begins 2011 and excludes the bank's flagship working-paper series.
+    # Staff Reports are captured here via RePEc/IDEAS, which enumerates the
+    # complete series and — verified live 2026-06-03 — exposes clean
+    # citation_* meta tags on each item page, identical in shape to the
+    # NBER ingestor (citation_publication_date is YYYY/MM/DD for ~sr659+
+    # and YYYY-only before that). The series listing pages give the
+    # internal RePEc id for each report, which is required to fetch recent
+    # papers (whose RePEc id differs from the SR number). Canonical
+    # Article.url is the newyorkfed.org PDF.
+    _NYSR_LISTING_TEMPLATE = "https://ideas.repec.org/s/fip/fednsr{page}.html"
+    _NYSR_ITEM_TEMPLATE = "https://ideas.repec.org/p/fip/fednsr/{rid}.html"
+    _NYSR_PDF_TEMPLATE = (
+        "https://www.newyorkfed.org/medialibrary/media/research/"
+        "staff_reports/sr{number}.pdf"
+    )
+    # ~7 listing pages today; buffer so a growing series isn't clipped.
+    _NYSR_MAX_LISTING_PAGES = 10
+    # Listing entries appear newest-first, grouped under <h3>YYYY</h3>
+    # headers; each report row is <B>{number} <A HREF="/p/fip/fednsr/{id}.html">.
+    _NYSR_ENTRY_RE = re.compile(
+        r'<h3>(\d{4})</h3>|<B>\s*(\d+)\s+<A HREF="/p/fip/fednsr/(\d+)\.html"',
+        re.I,
+    )
+    _NYSR_DATE_RE = re.compile(
+        r'name="citation_publication_date"[^>]*?content="(\d{4})(?:/(\d{2})/(\d{2}))?"',
+        re.I,
+    )
+    _NYSR_TITLE_RE = re.compile(
+        r'name="citation_title"[^>]*?content="([^"]*)"', re.I,
+    )
+    _NYSR_AUTHORS_RE = re.compile(
+        r'name="citation_authors"[^>]*?content="([^"]*)"', re.I,
+    )
+    _NYSR_ABSTRACT_RE = re.compile(
+        r'name="citation_abstract"[^>]*?content="([^"]*)"', re.I,
+    )
+
+    @staticmethod
+    def _impute_nysr_date(year: int, number: int, cohort: list[int]) -> date:
+        """Impute a within-year date for a year-only Staff Report.
+
+        Pre-~2014 RePEc records carry only the publication year. Staff
+        Reports are numbered monotonically through the year, so we place
+        each one by its rank among same-year reports rather than piling
+        them all onto Jan 1 (which would fabricate a weekly-volume spike).
+        Deterministic and independent of any anchor — it is an imputation
+        of an unavailable field, not a tuned parameter. Falls back to
+        mid-year when the cohort is unknown.
+        """
+        n = len(cohort)
+        if n <= 1 or number not in cohort:
+            return date(year, 7, 1)
+        rank = cohort.index(number)  # 0-based, ascending → earliest first
+        frac = (rank + 0.5) / n
+        return date(year, 1, 1) + timedelta(days=int(round(frac * 364)))
+
+    def _fetch_ny_staff_reports(
+        self, start: date, end: date, seen: set[str]
+    ) -> Iterator[Article]:
+        # Pass 1: walk the series listing (descending by year) and collect
+        # (number, rid, year) for every report whose listing year is in window.
+        rows: list[tuple[int, str, int]] = []
+        for page_idx in range(self._NYSR_MAX_LISTING_PAGES):
+            page = "" if page_idx == 0 else str(page_idx + 1)
+            url = self._NYSR_LISTING_TEMPLATE.format(page=page)
+            try:
+                resp = _get(url, timeout=30.0)
+            except Exception as exc:
+                if isinstance(exc, requests.exceptions.HTTPError) and getattr(
+                    exc.response, "status_code", None
+                ) == 404:
+                    break  # walked past the last listing page
+                log.warning("NY Staff Reports listing %s failed: %s", url, exc)
+                break
+            current_year: int | None = None
+            page_rows = 0
+            stop = False
+            for m in self._NYSR_ENTRY_RE.finditer(resp.text):
+                if m.group(1):
+                    current_year = int(m.group(1))
+                    continue
+                page_rows += 1
+                if current_year is None:
+                    continue
+                if current_year < start.year:
+                    stop = True  # descending listing: nothing older is in window
+                    continue
+                if current_year > end.year:
+                    continue
+                rows.append((int(m.group(2)), m.group(3), current_year))
+            if page_rows == 0 or stop:
+                break
+            time.sleep(0.5)
+
+        # Cohort index for year-only date imputation (ascending report number).
+        cohorts: dict[int, list[int]] = {}
+        for number, _rid, year in rows:
+            cohorts.setdefault(year, []).append(number)
+        for year in cohorts:
+            cohorts[year].sort()
+
+        # Pass 2: fetch each item page, parse citation_* meta, emit Article.
+        for number, rid, _listing_year in rows:
+            item_url = self._NYSR_ITEM_TEMPLATE.format(rid=rid)
+            try:
+                resp = _get(item_url, timeout=30.0)
+            except Exception as exc:
+                log.debug("NY Staff Report sr%d (%s) fetch failed: %s", number, rid, exc)
+                continue
+            page_html = resp.text
+            m_date = self._NYSR_DATE_RE.search(page_html)
+            if not m_date:
+                continue
+            yr = int(m_date.group(1))
+            imputed = False
+            if m_date.group(2) and m_date.group(3):
+                try:
+                    pub_date = date(yr, int(m_date.group(2)), int(m_date.group(3)))
+                except ValueError:
+                    pub_date = self._impute_nysr_date(yr, number, cohorts.get(yr, []))
+                    imputed = True
+            else:
+                pub_date = self._impute_nysr_date(yr, number, cohorts.get(yr, []))
+                imputed = True
+            if pub_date < start or pub_date > end:
+                continue
+
+            pdf_url = self._NYSR_PDF_TEMPLATE.format(number=number)
+            if pdf_url in seen:
+                continue
+            seen.add(pdf_url)
+
+            def _meta(rx: re.Pattern) -> str:
+                m = rx.search(page_html)
+                return html.unescape(m.group(1)).strip() if m else ""
+
+            title = _meta(self._NYSR_TITLE_RE)
+            author = _meta(self._NYSR_AUTHORS_RE) or None
+            abstract = _meta(self._NYSR_ABSTRACT_RE)
+            if not abstract:
+                try:
+                    soup = BeautifulSoup(page_html, "lxml")
+                    el = soup.find(id="abstract-body")
+                    if el:
+                        abstract = el.get_text(" ", strip=True)
+                except Exception:
+                    pass
+            body = f"{title}\n\n{abstract}".strip() if abstract else title
+            if not body:
+                continue
+
+            yield _make_article(
+                source_id="fed_ny",
+                url=pdf_url,
+                published_at=pub_date.isoformat() + "T00:00:00Z",
+                title=title or f"NY Fed Staff Report {number}",
+                body=body,
+                author=author,
+                section="ny_staff_report",
+                tier=1,
+                document_type="fed_staff_report",
+                extra_meta={
+                    "report_number": f"sr{number}",
+                    "repec_id": rid,
+                    "ideas_url": item_url,
+                    "date_imputed": imputed,
+                },
+            )
+            time.sleep(0.5)
 
     # ------------------------------------------------------------------
     # FRBSF — sffed_publications WP REST API
