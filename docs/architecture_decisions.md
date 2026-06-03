@@ -1700,6 +1700,34 @@ No changes to `_sub_ingestors`, the pipeline, the config, or the test contracts 
 
 ---
 
+## ADR-024: Repo cleanse + single-source-of-truth doc governance + document-and-push-per-task workflow
+
+- **Status**: Accepted
+- **Date**: 2026-06-03
+
+### Context
+
+Methodology kept drifting between work sessions: decisions already made (e.g. CBO's retrieval path) were re-litigated because superseded docs and dead code still described the old state as if current. A concrete instance: `institutional.py:14`, `requirements.txt`, and `config/whitelist.yaml` all still described CBO as using the ADR-017 Playwright path (or the even older ADR-013 sitemap path), while the live code uses Wayback bounded-ID enumeration (ADR-023). That stale text caused the project owner to doubt whether we were using a known-unreliable Wayback approach. Scattered one-off scripts, an `scripts/archive/` tree of removed ingestors, and historical docs that contradicted the ADR log all added surface area for confusion.
+
+### Decision
+
+1. **Cleanse.** Removed dead/superseded artifacts (all recoverable from git history):
+   - Code: `scripts/smoke_test_checkpoint.py`, `scripts/_battery_case.py`, `scripts/archive/` (entire tree — 12 removed-ingestor files + archived keyword config).
+   - Docs: `docs/handoff_to_claude_code.md`, `docs/filter_audit_jel.md`, `docs/deviations_from_plan.md`.
+   - Local junk: `__pycache__/`, `.pytest_cache/`, `.DS_Store`.
+   - **Retained deliberately:** `scripts/probe_cbo_wayback_dates.py` (CBO `_ID_DATE_ANCHORS` re-calibration tool — CBO full-corpus completeness is still an open question), `playwright` dep + `scripts/install_playwright_for_cbo.sh` (ADR-023 dormant fallback), `docs/*.pdf` (frozen provenance).
+2. **Single-source-of-truth doc governance.** A methodology fact lives in exactly ONE place — its ADR. `docs/architecture_decisions.md` is the sole authority for any methodology *change*; `docs/METHODOLOGY.md` describes the *current* method; `CLAUDE.md` is the operational guide and *points to* ADRs rather than re-paraphrasing them; `MND_PROJECT_SPEC.md` holds scope/phases; `prereg/PREREGISTRATION.md` is the freeze. Every other doc references a fact by ADR number rather than restating its value. Fixed the stale CBO restatements in `institutional.py`, `requirements.txt`, and `whitelist.yaml` to point at ADR-023.
+3. **Document-and-push-per-task workflow.** Every completed task is documented (what happened, why, what was found) in the timeline — a git commit, plus a new ADR when the task is a methodology decision — and pushed. The project tolerates a timeline-based decision architecture; it does not tolerate scattered files or broken/superseded code.
+
+### Consequences
+
+- The repo now has one authoritative description of each methodology decision; contradictions between docs/code are removed.
+- Deleted items are recoverable via git history; nothing is permanently lost.
+- Going forward, agents start each session from a consistent base, reducing re-litigation of settled decisions.
+- Open item unaffected by this cleanse: CBO full-corpus Wayback completeness remains unvalidated (CBO never ran to completion in the 2026-06-02 ingest) and must be checked against CBO's narrative-prose publication count during the parallel-ingest verification.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

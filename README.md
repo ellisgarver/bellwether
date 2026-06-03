@@ -29,8 +29,9 @@ This is a **descriptive, educational, historical, and analytical measurement sys
 
 Permanently removed from the semantic corpus (do not reinstate without a new
 ADR): AP News, Reuters, MarketWatch (ADR-010); arXiv, separate Jackson Hole
-ingestor (ADR-012); ProQuest TDM, NewsAPI, GDELT, Common Crawl (ADR-010
-archived). Archived code lives in `scripts/archive/`.
+ingestor (ADR-012); ProQuest TDM, NewsAPI, GDELT, Common Crawl (ADR-010).
+Removed-source ingestor code was deleted in the ADR-024 cleanse and is
+recoverable from git history.
 
 ## Quick start
 
@@ -102,12 +103,9 @@ src/mnd/               Python package
 scripts/
   run_pipeline.py        CLI dispatching every stage
   preflight_check.py     Pre-flight environment validator
-  smoke_test_checkpoint.py  Smoke test for InstitutionalIngestor resume logic
   rcc/                   SLURM job scripts for UChicago Midway3
-  archive/               Removed sources (AP News, MarketWatch, Reuters, arXiv,
-                         GDELT, NewsAPI, ProQuest TDM, tdm_studio_export)
 prereg/                Pre-registration document
-docs/                  Architecture decisions, deviations, project plan PDF
+docs/                  Architecture decisions, methodology, project plan PDF
 tests/                 pytest suite
 ```
 

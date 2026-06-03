@@ -11,7 +11,7 @@ config/whitelist.yaml.
     2. US monetary research voice      FedRegionalIngestor (NY, SF, Chicago, Atlanta)
     3. International macro authority   IMFIngestor (curl_cffi + Coveo, ADR-014)
     4. International CB network        BISIngestor (multi-section, ADR-017)
-    5. US fiscal authority             CBOIngestor (Playwright + curl_cffi, ADR-017)
+    5. US fiscal authority             CBOIngestor (Wayback bounded-ID enumeration, ADR-023)
                                        CEAIngestor (govinfo ERP, ADR-020)
     6. US financial stability          TreasuryOFRIngestor
     7. US policy think-tank            BrookingsIngestor + PIIEIngestor
@@ -53,10 +53,10 @@ Added (ADR-020):
 
 Removed (ADR-012 / MND_PROJECT_SPEC rev3):
   JacksonHoleIngestor — covered by FederalReserveIngestor.
-  ArxivIngestor       — 2017-only coverage; archived in scripts/archive/.
+  ArxivIngestor       — 2017-only coverage; removed (code in git history).
 
 Removed (ADR-010):
-  AP News, Reuters, MarketWatch journalism tier — archived in scripts/archive/.
+  AP News, Reuters, MarketWatch journalism tier — removed (code in git history).
 
 All timestamps follow the ADR-008 rule: publication/release date only.
 FOMC minutes = release date.

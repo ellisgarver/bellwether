@@ -1,2 +1,1 @@
-"""dashboard stage. See plan for module-level responsibilities. Implementation
-deferred to Claude Code session per docs/handoff_to_claude_code.md."""
+"""dashboard stage (Phase 5). See MND_PROJECT_SPEC.md for module-level responsibilities."""

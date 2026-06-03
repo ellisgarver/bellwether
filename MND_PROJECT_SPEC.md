@@ -123,11 +123,11 @@ These are where macro narratives originate. Think tanks are downstream of this l
 
 | Source | Location | Reason |
 |--------|----------|--------|
-| AP News | `scripts/archive/` | Journalism layer replaced by Media Cloud Premium Press (Layer 1B, ADR-016) |
-| MarketWatch | `scripts/archive/` | Same |
-| GDELT | `scripts/archive/` | Superseded; no full text; quality issues |
-| Common Crawl ingestor | `scripts/archive/` | Superseded |
-| ProQuest export script | `scripts/archive/` | Superseded |
+| AP News | removed (git history) | Journalism layer replaced by Media Cloud Premium Press (Layer 1B, ADR-016) |
+| MarketWatch | removed (git history) | Same |
+| GDELT | removed (git history) | Superseded; no full text; quality issues |
+| Common Crawl ingestor | removed (git history) | Superseded |
+| ProQuest export script | removed (git history) | Superseded |
 | arXiv | Remove from any active scripts immediately | Cut from scope: 2017-only coverage, low macro volume, not in spec |
 | Jackson Hole (separate ingestor) | Remove from any active scripts immediately | Redundant: covered by Fed speeches ingestor |
 | NBER | Removed entirely (ADR-017) | Bulk retrieval failed; live RSS also dropped — no new sources in Phase 6 beyond Tier 1/2 re-ingest + Media Cloud Premium |

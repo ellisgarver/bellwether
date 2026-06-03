@@ -21,7 +21,7 @@ Removed sources (do not reinstate without a new ADR):
                only; NBER historical access is blocked and SSRN exposes
                no historical archive. RavenPack via WRDS — abandoned in
                ADR-016/019; Media Cloud Premium replaces it.
-  Archived ingestor code lives under scripts/archive/.
+  Removed-ingestor code is recoverable from git history (ADR-024 cleanse).
 """
 
 from mnd.ingestion.base import Article, Ingestor
