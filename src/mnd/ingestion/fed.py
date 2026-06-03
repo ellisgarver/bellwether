@@ -114,106 +114,149 @@ class FederalReserveIngestor(Ingestor):
     _FOMC_STATEMENT_HREF_RE = re.compile(
         r"/newsevents/pressreleases/monetary(\d{8})[a-z]?\.htm$"
     )
+    # Pre-2014 statements live under the legacy press path
+    # (/newsevents/press/monetary/{YYYYMMDD}a.htm). Same aN.htm
+    # implementation-note rejection applies via the [a-z]? + $ anchor.
+    _FOMC_STATEMENT_HREF_RE_LEGACY = re.compile(
+        r"/newsevents/press/monetary/(\d{8})[a-z]?\.htm$"
+    )
+
+    def _fomc_index_soups(self, start: date, end: date) -> list[BeautifulSoup]:
+        """Return the FOMC index pages covering [start, end], memoized.
+
+        The live calendars page only lists ~2021-present. Meetings from
+        2020 and earlier live on per-year historical pages
+        (fomchistorical{YYYY}.htm). We always include the calendars page,
+        then add a historical page for each year in range; years still on
+        the calendar 404 their historical page and are skipped. Both the
+        statement and minutes walks share this result so each page is
+        fetched once per ingest.
+        """
+        cache = getattr(self, "_fomc_soup_cache", None)
+        if cache is not None and cache[0] == (start, end):
+            return cache[1]
+        soups: list[BeautifulSoup] = []
+        try:
+            resp = _get(FOMC_CALENDARS_URL)
+        except Exception as exc:
+            raise RuntimeError(
+                f"FOMC calendar index fetch failed after retries: {exc}"
+            ) from exc
+        soups.append(BeautifulSoup(resp.text, "lxml"))
+        for year in range(start.year, min(end.year, date.today().year) + 1):
+            url = f"{FOMC_HISTORICAL_BASE}/fomchistorical{year}.htm"
+            try:
+                resp = _get(url)
+            except Exception:
+                continue  # no historical page for years still on the calendar
+            soups.append(BeautifulSoup(resp.text, "lxml"))
+        self._fomc_soup_cache = ((start, end), soups)
+        return soups
 
     def _fetch_fomc_statements(self, start: date, end: date) -> Iterator[Article]:
-        """Walk the FOMC calendars page; emit one Article per statement.
+        """Walk the FOMC index pages; emit one Article per statement.
 
         Filters out FOMC implementation notes (URLs ending in
         ``aN.htm`` where N is a digit) — these are short operational
         directives about reserve balance management, not the narrative-
         carrying statement itself.
         """
-        try:
-            resp = _get(FOMC_CALENDARS_URL)
-        except Exception as exc:
-            raise RuntimeError(f"FOMC calendar index fetch failed after retries: {exc}") from exc
-        soup = BeautifulSoup(resp.text, "lxml")
-        for link in soup.find_all("a", href=True):
-            href = link["href"]
-            m = self._FOMC_STATEMENT_HREF_RE.search(href)
-            if not m:
-                continue
-            try:
-                meeting_date = datetime.strptime(m.group(1), "%Y%m%d").date()
-            except Exception:
-                continue
-            if meeting_date < start or meeting_date > end:
-                continue
+        seen: set[str] = set()
+        for soup in self._fomc_index_soups(start, end):
+            for link in soup.find_all("a", href=True):
+                href = link["href"]
+                m = (self._FOMC_STATEMENT_HREF_RE.search(href)
+                     or self._FOMC_STATEMENT_HREF_RE_LEGACY.search(href))
+                if not m:
+                    continue
+                try:
+                    meeting_date = datetime.strptime(m.group(1), "%Y%m%d").date()
+                except Exception:
+                    continue
+                if meeting_date < start or meeting_date > end:
+                    continue
 
-            full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
-            try:
-                page = _get(full_url)
-            except Exception as exc:  # pragma: no cover
-                log.warning("Failed to fetch FOMC statement %s: %s", full_url, exc)
-                continue
+                full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
+                if full_url in seen:
+                    continue
+                seen.add(full_url)
+                try:
+                    page = _get(full_url)
+                except Exception as exc:  # pragma: no cover
+                    log.warning("Failed to fetch FOMC statement %s: %s", full_url, exc)
+                    continue
 
-            body = _extract_text(page.text)
-            if not body or len(body.split()) < 50:
-                continue
-            title = f"FOMC Statement — {meeting_date.isoformat()}"
-            yield Article(
-                article_id=_stable_article_id(self.source_id, full_url),
-                source_id="federalreserve",
-                url=full_url,
-                published_at=meeting_date.isoformat() + "T18:00:00Z",
-                retrieved_at=_now_utc_iso(),
-                title=title,
-                body=body,
-                author="FOMC",
-                section="fomc_statement",
-                language="en",
-                tier=1,
-                access="free",
-                retrieval="fed_site",
-                word_count=len(body.split()),
-                raw_metadata={"document_type": "fomc_statement"},
-            )
+                body = _extract_text(page.text)
+                if not body or len(body.split()) < 50:
+                    continue
+                title = f"FOMC Statement — {meeting_date.isoformat()}"
+                yield Article(
+                    article_id=_stable_article_id(self.source_id, full_url),
+                    source_id="federalreserve",
+                    url=full_url,
+                    published_at=meeting_date.isoformat() + "T18:00:00Z",
+                    retrieved_at=_now_utc_iso(),
+                    title=title,
+                    body=body,
+                    author="FOMC",
+                    section="fomc_statement",
+                    language="en",
+                    tier=1,
+                    access="free",
+                    retrieval="fed_site",
+                    word_count=len(body.split()),
+                    raw_metadata={"document_type": "fomc_statement"},
+                )
 
     def _fetch_fomc_minutes(self, start: date, end: date) -> Iterator[Article]:
-        """Fetch FOMC meeting minutes linked from the calendars page."""
-        try:
-            resp = _get(FOMC_CALENDARS_URL)
-        except Exception as exc:
-            raise RuntimeError(f"FOMC calendar index fetch failed after retries (minutes): {exc}") from exc
-        soup = BeautifulSoup(resp.text, "lxml")
-        for link in soup.find_all("a", href=True):
-            href = link["href"]
-            if "fomcminutes" not in href:
-                continue
-            try:
-                stem = href.rsplit("/", 1)[-1]
-                date_str = stem.replace("fomcminutes", "")[:8]
-                meeting_date = datetime.strptime(date_str, "%Y%m%d").date()
-            except Exception:
-                continue
-            if meeting_date < start or meeting_date > end:
-                continue
-            full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
-            try:
-                page = _get(full_url)
-            except Exception as exc:
-                log.warning("Failed to fetch FOMC minutes %s: %s", full_url, exc)
-                continue
-            body = _extract_text(page.text)
-            if not body:
-                continue
-            yield Article(
-                article_id=_stable_article_id(self.source_id, full_url),
-                source_id="federalreserve",
-                url=full_url,
-                published_at=meeting_date.isoformat() + "T18:00:00Z",
-                retrieved_at=_now_utc_iso(),
-                title=f"FOMC Minutes — {meeting_date.isoformat()}",
-                body=body,
-                author="FOMC",
-                section="fomc_minutes",
-                language="en",
-                tier=1,
-                access="free",
-                retrieval="fed_site",
-                word_count=len(body.split()),
-                raw_metadata={"document_type": "fomc_minutes"},
-            )
+        """Fetch FOMC meeting minutes from the calendars + historical pages.
+
+        Skips the .pdf minutes variant present on pre-2014 historical pages
+        (the .htm copy is always present alongside it and extracts cleanly).
+        """
+        seen: set[str] = set()
+        for soup in self._fomc_index_soups(start, end):
+            for link in soup.find_all("a", href=True):
+                href = link["href"]
+                if "fomcminutes" not in href or not href.endswith(".htm"):
+                    continue
+                try:
+                    stem = href.rsplit("/", 1)[-1]
+                    date_str = stem.replace("fomcminutes", "")[:8]
+                    meeting_date = datetime.strptime(date_str, "%Y%m%d").date()
+                except Exception:
+                    continue
+                if meeting_date < start or meeting_date > end:
+                    continue
+                full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
+                if full_url in seen:
+                    continue
+                seen.add(full_url)
+                try:
+                    page = _get(full_url)
+                except Exception as exc:
+                    log.warning("Failed to fetch FOMC minutes %s: %s", full_url, exc)
+                    continue
+                body = _extract_text(page.text)
+                if not body:
+                    continue
+                yield Article(
+                    article_id=_stable_article_id(self.source_id, full_url),
+                    source_id="federalreserve",
+                    url=full_url,
+                    published_at=meeting_date.isoformat() + "T18:00:00Z",
+                    retrieved_at=_now_utc_iso(),
+                    title=f"FOMC Minutes — {meeting_date.isoformat()}",
+                    body=body,
+                    author="FOMC",
+                    section="fomc_minutes",
+                    language="en",
+                    tier=1,
+                    access="free",
+                    retrieval="fed_site",
+                    word_count=len(body.split()),
+                    raw_metadata={"document_type": "fomc_minutes"},
+                )
 
     def _fetch_beige_books(self, start: date, end: date) -> Iterator[Article]:
         """Fetch Beige Book reports.
