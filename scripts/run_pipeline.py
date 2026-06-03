@@ -71,12 +71,13 @@ def cli(ctx: click.Context) -> None:
     "--sources", default="institutional",
     show_default=True,
     help=(
-        "Comma-separated source IDs. 'institutional' is the standard composite covering "
-        "Fed (FOMC/speeches/Beige Book/FEDS Notes), Regional Feds, IMF, BIS, CBO, Treasury/OFR, "
-        "Congressional testimony, VoxEU, Brookings, PIIE, CFR (Tiers 1–2). 'imf' runs the "
-        "IMFIngestor standalone — useful for small-window debug probes without paying for "
-        "the full composite cycle (ADR-014). arXiv and Jackson Hole removed in ADR-012. "
-        "AP News, Reuters, and MarketWatch removed in ADR-010 (code in git history)."
+        "Comma-separated source IDs. 'institutional' runs the full basis-set composite "
+        "(ADR-020): federalreserve, fed_regional, congressional, imf, bis, treasury_ofr, "
+        "cea, voxeu, brookings, piie, cbo, nber. Any of those names can also be passed "
+        "individually to run a single source standalone — used to split the ingest into "
+        "parallel SLURM jobs so no source starves behind a long pole. arXiv and Jackson "
+        "Hole removed in ADR-012; AP News, Reuters, MarketWatch removed in ADR-010; CFR "
+        "removed in ADR-020 (all recoverable from git history)."
     ),
 )
 @click.option("--output-dir", default=None, help="Output directory for raw JSONL files (overrides config default)")
@@ -88,7 +89,40 @@ def ingest(
     from datetime import date as date_t
 
     from mnd.ingestion import InstitutionalIngestor
-    from mnd.ingestion.institutional import IMFIngestor
+    from mnd.ingestion.institutional import (
+        BISIngestor,
+        BrookingsIngestor,
+        CBOIngestor,
+        CEAIngestor,
+        CongressionalIngestor,
+        FedRegionalIngestor,
+        FederalReserveIngestor,
+        IMFIngestor,
+        NBERIngestor,
+        PIIEIngestor,
+        TreasuryOFRIngestor,
+        VoxEUIngestor,
+    )
+
+    # The 12 basis-set sub-ingestors (ADR-020), individually addressable so the
+    # full ingest can be split into parallel single-source SLURM jobs (no
+    # sub-ingestor starves behind a long pole, and each gets its own wall clock).
+    # Keyed by source_id; each runs standalone and writes its own raw JSONL,
+    # which filter-pre-embed later globs together with every other source file.
+    _SUB_INGESTORS = {
+        "federalreserve": FederalReserveIngestor,
+        "fed_regional": FedRegionalIngestor,
+        "congressional": CongressionalIngestor,
+        "imf": IMFIngestor,
+        "bis": BISIngestor,
+        "treasury_ofr": TreasuryOFRIngestor,
+        "cea": CEAIngestor,
+        "voxeu": VoxEUIngestor,
+        "brookings": BrookingsIngestor,
+        "piie": PIIEIngestor,
+        "cbo": CBOIngestor,
+        "nber": NBERIngestor,
+    }
 
     cfg = ctx.obj["cfg"]
     root = project_root()
@@ -103,14 +137,15 @@ def ingest(
     def _make_ingestor(name: str, cp_path):
         if name == "institutional":
             return InstitutionalIngestor(checkpoint_path=cp_path)
-        if name == "imf":
-            return IMFIngestor()
+        if name in _SUB_INGESTORS:
+            return _SUB_INGESTORS[name]()
         raise ValueError(
-            f"Unknown source: '{name}'. Valid: 'institutional', 'imf' (standalone debug — ADR-014). "
+            f"Unknown source: '{name}'. Valid: 'institutional' (full composite), or any "
+            f"single basis-set source: {', '.join(sorted(_SUB_INGESTORS))}. "
             "AP News, Reuters, and MarketWatch have been removed from the semantic corpus (ADR-010)."
         )
 
-    valid_sources = {"institutional", "imf"}
+    valid_sources = {"institutional", *_SUB_INGESTORS}
 
     for name in [s.strip() for s in sources.split(",")]:
         if name not in valid_sources:
