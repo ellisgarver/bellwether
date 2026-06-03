@@ -2627,7 +2627,11 @@ class BrookingsIngestor(Ingestor):
             )
             if article:
                 yield article
-                time.sleep(1.0)
+                # Brookings is the corpus long-pole (~44k articles, one body
+                # fetch each). 1s/article was ~12h of pure sleep; 0.25s is
+                # ample politeness for a commercial-grade WP host and keeps
+                # the walk inside the SLURM wall-clock budget.
+                time.sleep(0.25)
 
 
 class PIIEIngestor(Ingestor):
