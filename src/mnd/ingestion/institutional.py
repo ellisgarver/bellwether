@@ -3879,29 +3879,45 @@ class NBERIngestor(Ingestor):
     }
 
     # Stop enumeration after this many consecutive 404s — indicates we've
-    # walked past the head of the series.
+    # walked past the head of the series. This is the REAL terminator for
+    # open-ended (to-present) runs: overshooting the true head is free
+    # because the walk stops 30 IDs past it, so the ceiling below only
+    # needs to be a generous backstop that never binds below the head.
     _STOP_AFTER_CONSECUTIVE_404S = 30
 
-    # NBER publishes ~1500 working papers per year. Per-year buffer beyond
-    # the latest calibrated floor that we'll probe before relying on the
-    # consecutive-404 termination signal to stop enumeration. Generous
-    # margin so a high-volume year doesn't run off the end of the table.
+    # NBER publishes ~1500 working papers per year. Per-year headroom used
+    # when projecting a ceiling past the latest calibrated year. Exceeds
+    # the true publication rate so a stale table can never bind the ceiling
+    # below the series head before the consecutive-404 stop fires.
     _ID_HEADROOM_PER_FORECAST_YEAR = 2500
 
-    def _compute_ceiling(self, end_year: int) -> int:
-        """Compute the upper paper-ID bound for an enumeration.
+    # Papers near a calendar boundary publish slightly out of ID order, so
+    # an end_year paper can carry an ID just above the next year's floor.
+    # Walk this far past a bounding floor so windowed runs don't clip them.
+    _BOUNDARY_BUFFER = 400
 
-        Prefer the calibrated next-year floor when present; otherwise
-        project forward from the latest calibrated year using a per-year
-        headroom. The consecutive-404 stop (line below) prevents wasted
-        requests once we walk past the head of the series, so the ceiling
-        only needs to be ``>=`` the true head.
+    def _compute_ceiling(self, end_year: int) -> int:
+        """Compute the upper paper-ID backstop for an enumeration.
+
+        Two regimes:
+
+        - Bounded window (``end_year`` is well inside the calibrated table):
+          use the next-year floor plus a small boundary buffer so we stop
+          enumerating once past the window without paying to walk to the
+          live series head.
+        - Open-ended / to-present (``end_year`` at or beyond the latest
+          calibrated year): project forward generously. Because the
+          consecutive-404 stop terminates the walk at the true head + 30,
+          a too-high ceiling costs nothing, while a too-low one silently
+          under-captures — so we deliberately overshoot.
         """
         if (next_year_floor := self._PAPER_FLOOR_BY_YEAR.get(end_year + 1)):
-            return next_year_floor
+            return next_year_floor + self._BOUNDARY_BUFFER
         latest_year = max(self._PAPER_FLOOR_BY_YEAR)
         latest_floor = self._PAPER_FLOOR_BY_YEAR[latest_year]
-        years_forward = max(1, end_year - latest_year + 1)
+        # +1 extra year of headroom guarantees the backstop stays above the
+        # head even if the calibrated table is a year or two stale.
+        years_forward = max(1, end_year - latest_year + 1) + 1
         return latest_floor + self._ID_HEADROOM_PER_FORECAST_YEAR * years_forward
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
