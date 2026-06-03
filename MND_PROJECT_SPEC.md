@@ -68,7 +68,19 @@ If SIR fits poorly across the validation set, fall back to logistic growth or no
 
 ## 4. Data Source Architecture — FINAL
 
-**This supersedes all prior corpus architecture. The following are permanently removed from active ingestion (historical AND Phase 6 live): AP News, MarketWatch, GDELT, Common Crawl, ProQuest, NewsAPI, arXiv, Jackson Hole papers as a separate source, NBER, SSRN. Media Cloud Premium Press is the journalism coverage layer (Layer 1B). Media Cloud broad outlets is the detection layer (Layer 2). JLN uncertainty indices are replaced by EPU. RavenPack is NOT used (ADR-016, 2026-05-18). Phase 6 = Tier 1/2 re-ingest + Media Cloud Premium only; nothing new added in live (ADR-017, 2026-05-18).**
+> **Authoritative corpus definition: ADR-020 (basis set).** The current Layer 1A
+> corpus is the twelve-source basis set defined in `docs/architecture_decisions.md`
+> ADR-020 — one ingestor per independent dimension of US macro discourse, no
+> pre-clustering topic filter. The tables in this section are the original Phase-0
+> plan, retained for narrative context; where they diverge from ADR-020 the ADR
+> wins. Deltas since this section was written: **NBER restored** (ADR-020, direct
+> URL enumeration — the ADR-017 "removed entirely" line below is obsolete); **CFR
+> dropped** (ADR-020, basis-set redundancy with PIIE); **CEA added** (ADR-020);
+> **NY Fed Staff Reports added** to the NY Fed source via RePEc/IDEAS (ADR-025).
+> SSRN remains removed. Retrieval mechanics for each source live in their ADRs,
+> not here.
+
+**The following are permanently removed from active ingestion (historical AND Phase 6 live): AP News, MarketWatch, GDELT, Common Crawl, ProQuest, NewsAPI, arXiv, Jackson Hole papers as a separate source, SSRN. Media Cloud Premium Press is the journalism coverage layer (Layer 1B). Media Cloud broad outlets is the detection layer (Layer 2). JLN uncertainty indices are replaced by EPU. RavenPack is NOT used (ADR-016, 2026-05-18). Phase 6 = basis-set re-ingest + Media Cloud Premium only; nothing new added in live (ADR-020, supersedes the ADR-017 Phase-6 framing).**
 
 The architecture maps directly onto Shiller's narrative propagation framework: narratives are characterized in analytical institutional discourse (Layer 1A text), propagate into financial journalism (Layer 1B Media Cloud Premium Press), and their emergence is detected via broad volume signals before institutional characterization begins (Layer 2). These layers are operationally separate — Media Cloud does not feed text embedding or clustering at either layer; both layers consume the same Media Cloud API with different outlet-collection scopes.
 
@@ -101,6 +113,7 @@ These are where macro narratives originate. Think tanks are downstream of this l
 
 **Regional Fed blogs — ingest all of the following explicitly:**
 - NY Fed Liberty Street Economics — `libertystreeteconomics.newyorkfed.org` — multiple posts/week; fastest institutional layer
+- NY Fed Staff Reports — flagship working-paper series, via RePEc/IDEAS `fip/fednsr` (ADR-025); the blog above starts 2011 and excludes these
 - SF Fed Economic Letters and blog — `frbsf.org`
 - Chicago Fed On the Economy — `chicagofed.org`
 - Atlanta Fed macroblog — `frbatlanta.org`
@@ -117,7 +130,8 @@ These are where macro narratives originate. Think tanks are downstream of this l
 | VoxEU / CEPR | Academic economists writing fast accessible policy commentary; often frames narratives before press | 800–2,500 words, ~1,000 macro-relevant/yr | voxeu.org RSS (back to 2007) |
 | Brookings Institution | High authority, fast response; Hutchins Center on Fiscal and Monetary Policy especially relevant | 500–5,000 words, ~500 macro-relevant/yr | brookings.edu RSS |
 | PIIE (Peterson Institute) | World-class international macro; best free source for dollar, trade, and global monetary narratives | 500–3,000 words, ~300/yr | piie.com RSS |
-| CFR (Council on Foreign Relations) | Geopolitical-financial narrative intersection; global macro policy | 500–3,000 words, ~200/yr | cfr.org RSS |
+| NBER working papers | Academic primary-work dimension; restored ADR-020 | citation_* meta, ~1,500/yr | nber.org/papers/wNNNNN direct enumeration |
+| ~~CFR (Council on Foreign Relations)~~ | **Dropped (ADR-020)** — basis-set redundancy with PIIE on the international-policy dimension | — | — |
 
 **Sources removed — archived, not deleted:**
 
@@ -130,8 +144,8 @@ These are where macro narratives originate. Think tanks are downstream of this l
 | ProQuest export script | removed (git history) | Superseded |
 | arXiv | Remove from any active scripts immediately | Cut from scope: 2017-only coverage, low macro volume, not in spec |
 | Jackson Hole (separate ingestor) | Remove from any active scripts immediately | Redundant: covered by Fed speeches ingestor |
-| NBER | Removed entirely (ADR-017) | Bulk retrieval failed; live RSS also dropped — no new sources in Phase 6 beyond Tier 1/2 re-ingest + Media Cloud Premium |
-| SSRN | Removed entirely (ADR-017) | Same as NBER |
+| NBER | **RESTORED (ADR-020)** — see Tier 2 table above | The ADR-017 removal was reversed: direct `/papers/wNNNNN` enumeration works (no search-API bot wall; citation_* meta give clean metadata) |
+| SSRN | Removed entirely (ADR-017) | No historical archive exposed; not reinstated |
 
 ---
 
@@ -464,7 +478,7 @@ Do not begin until Phase 3 NMI and ARI results are confirmed and pass kill crite
 
 ### Phase 6 — Live Updating
 
-Weekly cron job. Pulls past week's documents from all active Layer 1A sources (Tier 1 + Tier 2 institutional/academic). Also refreshes Layer 1B Media Cloud Premium Press volume series. Does NOT activate NBER, SSRN, or any other source not in the historical corpus (ADR-017). Embeds new documents. Assigns to existing clusters or flags candidate new clusters. Refits parameters on changed clusters. Writes static artifacts. Failure handling: display last-good state with "last updated" timestamp.
+Weekly cron job. Pulls past week's documents from all active basis-set sources (the 12 sub-ingestors of ADR-020, NBER included). Also refreshes Layer 1B Media Cloud Premium Press volume series. Does NOT add any source outside the ADR-020 basis set (e.g. SSRN, AP News RSS). Embeds new documents. Assigns to existing clusters or flags candidate new clusters. Refits parameters on changed clusters. Writes static artifacts. Failure handling: display last-good state with "last updated" timestamp.
 
 ### Phase 7 — Writeup and Reproducibility
 
