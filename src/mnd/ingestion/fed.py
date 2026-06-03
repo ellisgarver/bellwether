@@ -584,7 +584,14 @@ class FederalReserveIngestor(Ingestor):
         """Fetch Monetary Policy Reports (2x/yr, Feb and Jul).
 
         Index: federalreserve.gov/monetarypolicy/mpr_default.htm
-        HTML summary pattern: /monetarypolicy/YYYY-MM-mpr-summary.htm
+        URL patterns on the index, by era:
+          - 2017+ : /monetarypolicy/YYYY-MM-mpr-summary.htm
+          - 2007-2016 : /monetarypolicy/mpr_YYYYMMDD_part1.htm | _summary.htm
+            (underscore + 8 digits; the report is split into several parts —
+            we keep one page per issue, preferring the summary)
+        One MPR issue = one document on its release date; multiple legacy
+        parts are deduped to a single record per (year, month) so a split
+        report doesn't inflate that week's volume.
         """
         import re as _re
         index_url = "https://www.federalreserve.gov/monetarypolicy/mpr_default.htm"
@@ -594,7 +601,8 @@ class FederalReserveIngestor(Ingestor):
             log.error("Failed to fetch MPR index: %s", exc)
             return
         soup = BeautifulSoup(resp.text, "lxml")
-        seen: set[str] = set()
+        # Gather one candidate URL per (year, month), preferring a summary page.
+        candidates: dict[tuple[int, int], tuple[date, str, bool]] = {}
         for link in soup.find_all("a", href=True):
             href = link["href"]
             if "mpr" not in href.lower():
@@ -602,14 +610,22 @@ class FederalReserveIngestor(Ingestor):
             if href.lower().endswith(".pdf"):
                 continue
             pub_date: date | None = None
-            # Pattern: YYYY-MM-mpr (e.g. /monetarypolicy/2024-02-mpr-summary.htm)
+            # Modern: YYYY-MM-mpr (e.g. /monetarypolicy/2024-02-mpr-summary.htm)
             m = _re.search(r"(\d{4})-(\d{2})-mpr", href)
             if m:
                 try:
                     pub_date = date(int(m.group(1)), int(m.group(2)), 1)
                 except ValueError:
                     pass
-            # Pattern: mprYYYYMMDD or mprYYYYMM
+            # Legacy underscore: mpr_YYYYMMDD_part1.htm / _summary.htm (2007-2016)
+            if pub_date is None:
+                m = _re.search(r"mpr_(\d{4})(\d{2})(\d{2})", href)
+                if m:
+                    try:
+                        pub_date = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                    except ValueError:
+                        pass
+            # Other compact forms: mprYYYYMMDD or mprYYYYMM
             if pub_date is None:
                 m = _re.search(r"mpr(\d{4})(\d{2})(\d{2})", href)
                 if m:
@@ -629,9 +645,14 @@ class FederalReserveIngestor(Ingestor):
             if pub_date < start or pub_date > end:
                 continue
             full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
-            if full_url in seen:
-                continue
-            seen.add(full_url)
+            key = (pub_date.year, pub_date.month)
+            is_summary = "summary" in href.lower()
+            existing = candidates.get(key)
+            # Keep the first hit, but let a summary page override a part page.
+            if existing is None or (is_summary and not existing[2]):
+                candidates[key] = (pub_date, full_url, is_summary)
+
+        for pub_date, full_url, _is_summary in candidates.values():
             try:
                 page = _get(full_url)
             except Exception as exc:
@@ -659,11 +680,16 @@ class FederalReserveIngestor(Ingestor):
             )
 
     def _fetch_fsr(self, start: date, end: date) -> Iterator[Article]:
-        """Fetch Financial Stability Reports (2x/yr, May and Nov).
+        """Fetch Financial Stability Reports (2x/yr, May and Nov; since Nov 2018).
 
         Index: federalreserve.gov/publications/financial-stability-report.htm
-        HTML pattern: /publications/financial-stability-report-YYYYMM.htm
-                   or /publications/YYYY-mon-financial-stability-report.htm
+        URL patterns seen on the index (order of month/year varies by era):
+          - financial-stability-report-YYYYMM.htm
+          - YYYY-{month}-financial-stability-report... (year-first)
+          - {month}-YYYY-financial-stability-report... (month-first, 2024+)
+          - YYYY-financial-stability-report... (bare year — the Nov issue)
+        Month tokens may be abbreviated or full names. Deduped by
+        (year, month) so the same issue under two URL forms isn't doubled.
         """
         import re as _re
         index_url = "https://www.federalreserve.gov/publications/financial-stability-report.htm"
@@ -673,46 +699,68 @@ class FederalReserveIngestor(Ingestor):
             log.error("Failed to fetch FSR index: %s", exc)
             return
         soup = BeautifulSoup(resp.text, "lxml")
-        seen: set[str] = set()
         _MONTH_ABBR = {
             "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
             "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
         }
+        # Gather one candidate per (year, month), preferring a month-dated
+        # hit over a bare-year fallback for the same year.
+        candidates: dict[tuple[int, int], tuple[date, str, bool]] = {}
         for link in soup.find_all("a", href=True):
             href = link["href"]
-            if "financial-stability-report" not in href.lower():
+            low = href.lower()
+            if "financial-stability-report" not in low:
                 continue
-            if href.lower().endswith(".pdf"):
+            if low.endswith(".pdf"):
                 continue
-            # Skip the index page itself
             if href.rstrip("/").endswith("financial-stability-report"):
                 continue
             pub_date: date | None = None
-            # Pattern: financial-stability-report-YYYYMM
-            m = _re.search(r"financial-stability-report-(\d{4})(\d{2})", href)
+            is_bare_year = False
+            # financial-stability-report-YYYYMM
+            m = _re.search(r"financial-stability-report-(\d{4})(\d{2})", low)
             if m:
                 try:
                     pub_date = date(int(m.group(1)), int(m.group(2)), 1)
                 except ValueError:
                     pass
-            # Pattern: YYYY-mon-financial-stability-report (e.g. 2024-may-financial-stability-report)
+            # year-first: YYYY-{month}-financial-stability-report
             if pub_date is None:
-                m = _re.search(r"(\d{4})-([a-z]{3})-financial-stability-report", href.lower())
+                m = _re.search(r"(\d{4})-([a-z]+)-financial-stability-report", low)
+                if m and (month := _MONTH_ABBR.get(m.group(2)[:3])):
+                    try:
+                        pub_date = date(int(m.group(1)), month, 1)
+                    except ValueError:
+                        pass
+            # month-first: {month}-YYYY-financial-stability-report
+            if pub_date is None:
+                m = _re.search(r"([a-z]+)-(\d{4})-financial-stability-report", low)
+                if m and (month := _MONTH_ABBR.get(m.group(1)[:3])):
+                    try:
+                        pub_date = date(int(m.group(2)), month, 1)
+                    except ValueError:
+                        pass
+            # bare year: YYYY-financial-stability-report — the Nov year-end issue
+            if pub_date is None:
+                m = _re.search(r"(\d{4})-financial-stability-report", low)
                 if m:
-                    month = _MONTH_ABBR.get(m.group(2))
-                    if month:
-                        try:
-                            pub_date = date(int(m.group(1)), month, 1)
-                        except ValueError:
-                            pass
+                    try:
+                        pub_date = date(int(m.group(1)), 11, 1)
+                        is_bare_year = True
+                    except ValueError:
+                        pass
             if pub_date is None:
                 continue
             if pub_date < start or pub_date > end:
                 continue
             full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
-            if full_url in seen:
-                continue
-            seen.add(full_url)
+            key = (pub_date.year, pub_date.month)
+            existing = candidates.get(key)
+            # Prefer a precisely-dated hit over the bare-year guess.
+            if existing is None or (existing[2] and not is_bare_year):
+                candidates[key] = (pub_date, full_url, is_bare_year)
+
+        for pub_date, full_url, _bare in candidates.values():
             try:
                 page = _get(full_url)
             except Exception as exc:
