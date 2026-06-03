@@ -76,7 +76,7 @@ def cli(ctx: click.Context) -> None:
         "Congressional testimony, VoxEU, Brookings, PIIE, CFR (Tiers 1–2). 'imf' runs the "
         "IMFIngestor standalone — useful for small-window debug probes without paying for "
         "the full composite cycle (ADR-014). arXiv and Jackson Hole removed in ADR-012. "
-        "AP News, Reuters, and MarketWatch removed in ADR-010 — see scripts/archive/."
+        "AP News, Reuters, and MarketWatch removed in ADR-010 (code in git history)."
     ),
 )
 @click.option("--output-dir", default=None, help="Output directory for raw JSONL files (overrides config default)")
@@ -722,9 +722,8 @@ def sample_check(
     Institutional: fetches up to --max-per-source articles per sub-source for
     the given year (default 2024) and reports counts against minimum thresholds.
 
-    Journalism probes (apnews / marketwatch) were removed in ADR-010 — the
-    archived ingestors live under scripts/archive/ and are not part of the
-    semantic corpus.
+    Journalism probes (apnews / marketwatch) were removed in ADR-010 — those
+    ingestors are not part of the semantic corpus (code in git history).
     """
     from datetime import date as date_t
 
@@ -801,7 +800,7 @@ def _sample_check_institutional(
 
 
 # Journalism sample-check (apnews / marketwatch) was removed with the journalism
-# tier in ADR-010. See scripts/archive/ for the archived ingestor code.
+# tier in ADR-010 (archived ingestor code recoverable from git history).
 
 
 # ---------------------------------------------------------------------------

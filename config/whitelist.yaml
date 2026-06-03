@@ -49,8 +49,7 @@
 #   mnd.clustering.jel_classifier — clusters are labeled with their primary
 #   JEL code from cluster-representative documents, and non-macro clusters
 #   (primary JEL ∉ {E, F, G, H}) are excluded from dynamics analysis only.
-#   config/topic_filter_keywords.yaml archived to
-#   scripts/archive/topic_filter_keywords_archived_adr020.yaml.
+#   The JEL keyword config was removed in the ADR-024 cleanse (recoverable from git history).
 #
 # JOURNALISM TIER REMOVED (ADR-010):
 #   AP News, Reuters, MarketWatch — removed from semantic corpus. Their
@@ -185,9 +184,9 @@ tier_1_institutional_policy:
       - cost_estimate
       - blog_post
     notes: >
-      Full cbo.gov archive via Playwright + curl_cffi hybrid (ADR-017).
-      Playwright headless Chromium clears the DataDome JS challenge once,
-      curl_cffi-with-cookies handles the ~25,000-URL sitemap walk.
+      Full cbo.gov archive via Wayback CDX bounded-ID enumeration (ADR-023).
+      cbo.gov direct is DataDome-blocked; per-100-ID prefix CDX queries walk
+      /publication/{id} and the snapshot's page date is the authoritative pub date.
       govinfo.gov is NOT a viable replacement: GPO-deposit coverage is
       uneven over time (~40 records 2010, ~6 records 2024) and would
       introduce a non-random time-varying filter into the volume time
@@ -243,7 +242,7 @@ tier_2_academic_analytical:
 
   # arXiv removed in ADR-012 / MND_PROJECT_SPEC rev3 (2026-05-13):
   # 2017-only coverage, low macro volume, not in spec.
-  # Ingestor archived at scripts/archive/arxiv_ingestor.py.
+  # Ingestor removed in the ADR-024 cleanse (recoverable from git history).
 
   - id: voxeu
     name: "VoxEU / CEPR"
@@ -308,8 +307,8 @@ tier_2_policy_analytical:
 # JOURNALISM TIER REMOVED (ADR-010)
 # -----------------------------------------------------------------------------
 # AP News, Reuters, and MarketWatch have been removed from the semantic corpus.
-# Their journalism propagation signal is captured by the RavenPack dynamics
-# layer (Layer 1B via WRDS). Ingestors are archived in scripts/archive/.
+# Their journalism propagation signal is captured by the Media Cloud Premium
+# dynamics layer (Layer 1B, ADR-016). Ingestors removed in the ADR-024 cleanse.
 # Raw ingested JSONL from Phase 2 RCC ingestion remains in data/raw/articles/
 # but is excluded from embedding by scripts/filter_corpus_pre_embed.py.
 #
@@ -397,23 +396,22 @@ detection_layer:
 # The following were considered and rejected or removed:
 #
 # AP News      — Removed from semantic corpus (ADR-010, 2026-05-11). Wire journalism
-#                adds noise; journalism propagation captured by RavenPack dynamics
-#                layer. Raw JSONL from Phase 2 ingestion retained in data/raw/articles/.
-#                Ingestor archived in scripts/archive/apnews_ingestor.py.
+#                adds noise; journalism propagation captured by Media Cloud Premium
+#                dynamics layer (ADR-016). Raw JSONL from Phase 2 retained in data/raw/articles/.
+#                Ingestor removed in the ADR-024 cleanse (recoverable from git history).
 #                Phase 6 live RSS remains possible if needed.
 #
 # Reuters      — Removed from semantic corpus (ADR-010, 2026-05-11). Added 2026-05-07,
 #                removed same session. Same rationale as AP News.
-#                Ingestor archived in scripts/archive/reuters_ingestor.py.
+#                Ingestor removed in the ADR-024 cleanse (recoverable from git history).
 #
 # MarketWatch  — Removed from semantic corpus (ADR-010, 2026-05-11). Reinstated
 #                in ADR-009, removed again. Dow Jones / RavenPack provides the
 #                MarketWatch volume signal without scraping.
 #
-# CBO          — Active in the composite via the sitemap-enumeration path (ADR-013).
-#                cbo.gov/sitemap.xml is not bot-protected; publication detail pages
-#                are accessible from RCC (university IP) but 403 from residential
-#                IPs (DataDome). Legacy RSS/listing scrape retained as fallback.
+# CBO          — Active via Wayback CDX bounded-ID enumeration (ADR-023). cbo.gov
+#                direct is DataDome-blocked; per-100-ID prefix CDX queries walk
+#                /publication/{id} and the page date is the authoritative pub date.
 #
 # SSRN         — Exposes only 30–90 day RSS window; no public bulk API for
 #                historical archive. Phase 6 live-update pipeline only.
@@ -425,14 +423,14 @@ detection_layer:
 #                   EPU is text-based and directly comparable to this system.
 #
 # GDELT        — Replaced by RavenPack for dynamics layer (ADR-005/ADR-007).
-#                Archived at scripts/archive/gdelt_ingestor.py.
+#                Removed in the ADR-024 cleanse (recoverable from git history).
 #
 # Common Crawl — Coverage inconsistency across years; removed Phase 2.
 # ProQuest TDM — Paywalled text pipeline removed Phase 2.
-#                Archived at scripts/archive/proquest_ingestor.py.
+#                Removed in the ADR-024 cleanse (recoverable from git history).
 # Factiva      — License prohibits pipeline use.
 # NewsAPI      — Live-only, insufficient historical depth.
-#                Archived at scripts/archive/newsapi_ingestor.py.
+#                Removed in the ADR-024 cleanse (recoverable from git history).
 # Bloomberg    — Text paywalled.
 # WSJ, NYT, Economist, FT — ProQuest/Factiva not used.
 # CNBC         — Noisy, low analytical depth.
