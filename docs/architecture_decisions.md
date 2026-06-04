@@ -1786,6 +1786,87 @@ pages fails). `citation_publication_date` is full `YYYY/MM/DD` for ~sr659
 
 ---
 
+## ADR-026: PIIE via Wayback CDX enumeration; sitemap demoted to freshness supplement
+
+- **Status**: Accepted
+- **Date**: 2026-06-04
+
+### Context
+
+PIIE is the second ingestor on dimension 7 (US policy think-tank, ADR-020),
+paired with Brookings. The 2026-06-03 full re-ingest captured only 857 PIIE
+records, and a year histogram exposed the shape as wrong: coverage **starts at
+2016**, with no 2010–2015 content, and *declines* into recent years
+(2016: 255 → 2024: 38) — backwards for a healthy index. PIIE `COMPLETED` clean
+(no timeout), so this is silent under-capture, not a wall-clock failure.
+
+Root cause: PIIE migrated CMS around 2016. Pre-2016 publications live at
+flat-slug URLs (`/publications/policy-briefs/2008-oil-price-bubble`, often with
+a legacy `?ResearchID=NNNN`); 2016+ items use a `/YYYY/` segment
+(`/publications/policy-briefs/2016/...`). The ADR-021 discovery path walks the
+Drupal xmlsitemap (`sitemap.xml?page=N`), which lists **only the `/YYYY/` URLs**
+plus a thin recent slice of blogs — it structurally cannot reach the legacy
+flat-slug corpus, and the `_URL_PATTERNS` regex required a `/YYYY/` segment so
+even a discovered flat-slug URL would be rejected. Wayback CDX enumeration of
+the publication/blog prefixes (verified live 2026-06-04) shows the true size:
+
+| Type | distinct URLs | `/YYYY/` (in sitemap) | flat-slug (missing) |
+|---|---|---|---|
+| policy-briefs | 585 | 123 | 462 |
+| working-papers | 535 | 135 | 400 |
+| piie-briefings | 38 | 11 | 27 |
+| blog: realtime-economic-issues-watch | 1,971 | — | — |
+| blog: trade-and-investment-policy-watch | 446 | — | — |
+| blog: trade-investment-policy-watch (old slug) | 459 | — | — |
+| blog: china-economic-watch | 475 | — | — |
+
+So the complete PIIE corpus is ~4,500 URLs vs the 857 captured. Two additional
+sitemap-era defects surfaced: the trade blog exists under **two slug eras** (the
+`_URL_PATTERNS` regex matched only the no-`and-` form) and `china-economic-watch`
+(a macro-relevant blog) was never targeted at all.
+
+### Decision
+
+Replace sitemap-only discovery with **Wayback CDX enumeration ∪ the live sitemap
+walk**, deduped into one candidate set (`PIIEIngestor._cdx_enumerate`,
+`_cdx_query`, `_cdx_get`):
+
+1. **CDX is the workhorse.** One `collapse=urlkey&filter=statuscode:200&fl=original`
+   query per content prefix returns the distinct canonical URL set across both
+   URL schemes. Results are cleaned (drop asset extensions, strip query/fragment,
+   normalize host to `https://www.piie.com`, drop bare section and `/type/YYYY`
+   year-index pages) and deduped. CDX hits archive.org directly — no Cloudflare —
+   and `_cdx_get` retries transient 429/5xx/network with jittered backoff and
+   **raises on exhaustion** (under-capture must fail loud, per ADR-022/023).
+2. **Sitemap walk retained as a freshness supplement** — it catches brand-new
+   items Wayback has not yet archived. CDX-listed first so its `doc_type` wins on
+   collision; both merge on a canonical (https, no-trailing-slash, lowercased) key.
+3. **Bodies fetched from LIVE piie.com via curl_cffi** (`_piie_get`, unchanged) —
+   the legacy flat-slug URLs still resolve 200.
+4. **Date is page-authoritative.** Flat-slug URLs carry no path year, so every
+   CDX URL is fetched-then-date-checked against the window using the page's own
+   publication date (Methodology principle 1, ADR-022). The slug year is never
+   trusted (e.g. `2008-oil-price-bubble` is a brief *about* the 2008 oil price).
+5. Blog coverage expanded to both trade-blog slug eras and `china-economic-watch`;
+   `_URL_PATTERNS` (sitemap side) updated to match.
+
+PIIE SLURM budget bumped 3h → 6h to cover ~4,500 live body fetches.
+
+### Consequences
+
+- PIIE publication+blog capture roughly 5×'s and gains the full 2010–2015 history,
+  including the taper/China/Brexit anchor-era policy briefs. Dimension 7 is now
+  fully captured from both ingestors (Brookings via its full 2010–2026 re-ingest).
+- Overlap with the sitemap and with any earlier partial PIIE JSONL is harmless —
+  the downstream filter dedups by URL/content (no topical or volume limiting).
+- New runtime dependency on Wayback CDX availability for PIIE (already a CBO
+  dependency, ADR-023); the fail-loud `_cdx_get` ensures a CDX outage halts the
+  job rather than silently truncating.
+- `china-economic-watch` adds macro-China blog content not previously in the
+  corpus; this is completion of the source, decided here, not a corpus change.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```
