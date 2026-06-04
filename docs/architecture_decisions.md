@@ -1867,6 +1867,55 @@ PIIE SLURM budget bumped 3h → 6h to cover ~4,500 live body fetches.
 
 ---
 
+## ADR-027: Federal Reserve Board testimony added as a distinct document stream
+
+- **Status**: Accepted
+- **Date**: 2026-06-04
+
+### Context
+
+Dimension 1 of the basis set (US monetary authority, ADR-020) is the Federal
+Reserve Board. `FederalReserveIngestor` walked seven streams — FOMC statements,
+FOMC minutes, Beige Book, speeches, FEDS Notes, Monetary Policy Reports,
+Financial Stability Reports — but **not Board testimony**. The Chair's
+semiannual Humphrey-Hawkins testimony and governors' appearances before House
+and Senate committees are first-order monetary-policy discourse: the Fed
+explaining and defending its stance under direct questioning. Their absence is
+an under-capture of an already-decided source, parallel to the NY Fed Staff
+Reports gap (ADR-025) and directly analogous to `CongressionalIngestor`'s
+capture of Treasury-Secretary testimony.
+
+Verified live 2026-06-04: testimony is published on the identical CMS template
+as speeches — `/newsevents/testimony/{year}-testimony.htm` (2011+) with the
+same no-hyphen legacy filename pre-2011 (`{year}testimony.htm`), the same
+`.eventlist > div.row > (time, div.eventlist__event a, p.news__speaker)` markup,
+and a parallel RSS feed (`/feeds/testimony.xml`). Volume is ~9–24 items/year.
+
+### Decision
+
+1. Generalize the speech walk into a shared `_walk_eventlist_stream(...)` plus
+   `_fetch_eventlist_rss_year(...)`, parameterized by index/legacy URL template,
+   RSS url, `section`, and `document_type`. `_fetch_speeches` and the new
+   `_fetch_testimony` are thin wrappers; speech behavior is byte-for-byte
+   unchanged (same templates, same 200-word index / 50-word RSS thresholds, same
+   legacy-fallback and COVERAGE-GAP error logging).
+2. Wire `_fetch_testimony` into `fetch()`. Emitted under
+   `source_id="federalreserve"` with `section="testimony"` /
+   `document_type="testimony"` so corpus-composition QA can separate it from
+   speeches. Publication date is the index `time` (MM/DD/YYYY); page date is
+   authoritative, consistent with methodology principle 1 (ADR-022).
+
+### Consequences
+
+- The Fed dimension now includes its testimony stream back to 2010 (~200–400
+  documents across the window); capture of an already-decided source is
+  completed. Requires a federalreserve re-run to materialize.
+- The speech and testimony walks now share one code path, so future CMS markup
+  changes are fixed once. No new runtime dependency (same federalreserve.gov
+  fetch path and `_get` timeout normalization).
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

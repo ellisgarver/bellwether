@@ -1,8 +1,8 @@
 """Federal Reserve communications ingestion.
 
-Pulls FOMC statements, minutes, Beige Book reports, Board speeches, and
-Monetary Policy Reports. All public domain, all free, all directly from
-federalreserve.gov.
+Pulls FOMC statements, minutes, Beige Book reports, Board speeches and
+testimony, FEDS Notes, Monetary Policy Reports, and Financial Stability
+Reports. All public domain, all free, all directly from federalreserve.gov.
 
 This ingestor is structured around the Fed's calendar pages rather than a
 catalog API (the Fed does not publish one). We scrape the index pages and
@@ -41,6 +41,15 @@ SPEECHES_BASE = "https://www.federalreserve.gov/newsevents/speech"
 SPEECHES_INDEX = f"{SPEECHES_BASE}/{{year}}-speeches.htm"
 SPEECHES_INDEX_LEGACY = f"{SPEECHES_BASE}/{{year}}speech.htm"
 SPEECHES_RSS = "https://www.federalreserve.gov/feeds/speeches.xml"
+
+# Board testimony (Humphrey-Hawkins + governors before House/Senate committees)
+# shares the speech CMS template exactly: same .eventlist markup, same legacy
+# (no-hyphen) URL fallback for pre-2011. A distinct monetary-discourse stream
+# parallel to CongressionalIngestor's Treasury-Secretary testimony capture.
+TESTIMONY_BASE = "https://www.federalreserve.gov/newsevents/testimony"
+TESTIMONY_INDEX = f"{TESTIMONY_BASE}/{{year}}-testimony.htm"
+TESTIMONY_INDEX_LEGACY = f"{TESTIMONY_BASE}/{{year}}testimony.htm"
+TESTIMONY_RSS = "https://www.federalreserve.gov/feeds/testimony.xml"
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -101,6 +110,7 @@ class FederalReserveIngestor(Ingestor):
         yield from self._fetch_fomc_minutes(start, end)
         yield from self._fetch_speeches(start, end)
         yield from self._fetch_beige_books(start, end)
+        yield from self._fetch_testimony(start, end)
         yield from self._fetch_feds_notes(start, end)
         yield from self._fetch_mpr(start, end)
         yield from self._fetch_fsr(start, end)
@@ -399,66 +409,83 @@ class FederalReserveIngestor(Ingestor):
                     _time.sleep(0.2)
 
     def _fetch_speeches(self, start: date, end: date) -> Iterator[Article]:
-        """Walk Board speech indexes year by year; fall back to RSS on index failure.
+        yield from self._walk_eventlist_stream(
+            start, end, index_tmpl=SPEECHES_INDEX, legacy_tmpl=SPEECHES_INDEX_LEGACY,
+            rss_url=SPEECHES_RSS, section="speech", doc_type="speech", label="speech",
+        )
 
-        Page structure: div.eventlist > div.row > (div.eventlist__time > time,
+    def _fetch_testimony(self, start: date, end: date) -> Iterator[Article]:
+        yield from self._walk_eventlist_stream(
+            start, end, index_tmpl=TESTIMONY_INDEX, legacy_tmpl=TESTIMONY_INDEX_LEGACY,
+            rss_url=TESTIMONY_RSS, section="testimony", doc_type="testimony", label="testimony",
+        )
+
+    def _walk_eventlist_stream(
+        self, start: date, end: date, *, index_tmpl: str, legacy_tmpl: str,
+        rss_url: str, section: str, doc_type: str, label: str,
+    ) -> Iterator[Article]:
+        """Walk Board eventlist index pages year by year; RSS fallback on index failure.
+
+        Shared by speeches and testimony, which use the same CMS template:
+        div.eventlist > div.row > (div.eventlist__time > time,
         div.eventlist__event > p > a).  Date text is MM/DD/YYYY (no datetime attr).
+        Pre-2011 uses the no-hyphen legacy filename ({year}speech.htm /
+        {year}testimony.htm). RSS only holds recent content, so it is a fallback
+        for the current/last year only; an older-year index failure is logged as a
+        COVERAGE GAP rather than silently returning zero.
         """
         for year in range(start.year, end.year + 1):
-            index_url = SPEECHES_INDEX.format(year=year)
+            index_url = index_tmpl.format(year=year)
             resp = None
             try:
                 resp = _get(index_url)
             except Exception as exc_primary:
-                # Pre-2011 the Fed used /newsevents/speech/YYYYspeech.htm instead
-                # of the YYYY-speeches.htm pattern. Try the legacy URL once before
-                # giving up.
-                legacy_url = SPEECHES_INDEX_LEGACY.format(year=year)
+                legacy_url = legacy_tmpl.format(year=year)
                 try:
                     resp = _get(legacy_url)
-                    log.info("Speech index %d: primary URL failed; legacy URL succeeded (%s)",
-                             year, legacy_url)
+                    log.info("%s index %d: primary URL failed; legacy URL succeeded (%s)",
+                             label, year, legacy_url)
                     index_url = legacy_url
                 except Exception as exc_legacy:
                     current_year = date.today().year
                     if year >= current_year - 1:
-                        # RSS feed only holds recent content — useful for current/last year
                         log.warning(
-                            "Speech index %s failed: %s — trying RSS fallback",
-                            SPEECHES_INDEX.format(year=year), exc_primary,
+                            "%s index %s failed: %s — trying RSS fallback",
+                            label, index_tmpl.format(year=year), exc_primary,
                         )
-                        yield from self._fetch_speeches_rss_year(year, start, end)
+                        yield from self._fetch_eventlist_rss_year(
+                            year, start, end, rss_url=rss_url,
+                            section=section, doc_type=doc_type, label=label,
+                        )
                     else:
-                        # RSS has no historical content; RSS fallback would silently return 0
-                        # articles, creating an invisible coverage gap. Log error and skip.
                         log.error(
-                            "Speech index for %d failed on both URL patterns "
-                            "(primary: %s; legacy: %s) — COVERAGE GAP: speeches for %d "
+                            "%s index for %d failed on both URL patterns "
+                            "(primary: %s; legacy: %s) — COVERAGE GAP: %s for %d "
                             "will be missing from corpus",
-                            year, exc_primary, exc_legacy, year,
+                            label, year, exc_primary, exc_legacy, label, year,
                         )
                     continue
             soup = BeautifulSoup(resp.text, "lxml")
             eventlist = soup.select_one(".eventlist")
             if not eventlist:
                 log.error(
-                    "Speech index %s: .eventlist container not found — "
-                    "COVERAGE GAP: speeches for %d will be missing from corpus",
-                    index_url, year,
+                    "%s index %s: .eventlist container not found — "
+                    "COVERAGE GAP: %s for %d will be missing from corpus",
+                    label, index_url, label, year,
                 )
                 continue
             for entry in eventlist.select("div.row"):
                 date_node = entry.select_one("time")
-                # Speech link is inside div.eventlist__event; skip watch-live / other links
+                # Link is inside div.eventlist__event; skip watch-live / other links
                 link_node = entry.select_one("div.eventlist__event a[href]")
                 if not date_node or not link_node:
                     continue
                 try:
                     # Date text is M/D/YYYY (e.g. "1/10/2023"), no datetime attribute
-                    speech_date = datetime.strptime(date_node.get_text(strip=True), "%m/%d/%Y").date()
+                    item_date = datetime.strptime(date_node.get_text(strip=True), "%m/%d/%Y").date()
                 except Exception:
                     continue
-                if speech_date < start or speech_date > end:
+                if item_date < start or item_date > end:
                     continue
                 href = link_node["href"]
                 full_url = href if href.startswith("http") else f"https://www.federalreserve.gov{href}"
@@ -468,7 +495,7 @@ class FederalReserveIngestor(Ingestor):
                 try:
                     page = _get(full_url)
                 except Exception as exc:
-                    log.warning("Failed to fetch speech %s: %s", full_url, exc)
+                    log.warning("Failed to fetch %s %s: %s", label, full_url, exc)
                     continue
                 body = _extract_text(page.text)
                 if not body or len(body.split()) < 200:
@@ -477,18 +504,18 @@ class FederalReserveIngestor(Ingestor):
                     article_id=_stable_article_id(self.source_id, full_url),
                     source_id="federalreserve",
                     url=full_url,
-                    published_at=speech_date.isoformat() + "T15:00:00Z",
+                    published_at=item_date.isoformat() + "T15:00:00Z",
                     retrieved_at=_now_utc_iso(),
-                    title=title or "Federal Reserve speech",
+                    title=title or f"Federal Reserve {label}",
                     body=body,
                     author=speaker,
-                    section="speech",
+                    section=section,
                     language="en",
                     tier=1,
                     access="free",
                     retrieval="fed_site",
                     word_count=len(body.split()),
-                    raw_metadata={"document_type": "speech"},
+                    raw_metadata={"document_type": doc_type},
                 )
 
     def _fetch_feds_notes(self, start: date, end: date) -> Iterator[Article]:
@@ -787,13 +814,17 @@ class FederalReserveIngestor(Ingestor):
                 raw_metadata={"document_type": "financial_stability_report"},
             )
 
-    def _fetch_speeches_rss_year(self, year: int, start: date, end: date) -> Iterator[Article]:
-        """RSS fallback for Fed speeches when annual index pages are unreachable."""
-        log.info("Fed speech RSS fallback: fetching %s for year %d", SPEECHES_RSS, year)
+    def _fetch_eventlist_rss_year(
+        self, year: int, start: date, end: date, *,
+        rss_url: str, section: str, doc_type: str, label: str,
+    ) -> Iterator[Article]:
+        """RSS fallback for Fed eventlist streams (speeches/testimony) when annual
+        index pages are unreachable."""
+        log.info("Fed %s RSS fallback: fetching %s for year %d", label, rss_url, year)
         try:
-            feed = feedparser.parse(SPEECHES_RSS, request_headers={"User-Agent": USER_AGENT})
+            feed = feedparser.parse(rss_url, request_headers={"User-Agent": USER_AGENT})
         except Exception as exc:
-            log.error("Fed speech RSS fallback also failed for %d: %s", year, exc)
+            log.error("Fed %s RSS fallback also failed for %d: %s", label, year, exc)
             return
         year_start = date(year, 1, 1)
         year_end = date(year, 12, 31)
@@ -802,22 +833,22 @@ class FederalReserveIngestor(Ingestor):
             if not pub_parsed:
                 continue
             try:
-                speech_date = date(*pub_parsed[:3])
+                item_date = date(*pub_parsed[:3])
             except Exception:
                 continue
-            if not (year_start <= speech_date <= year_end):
+            if not (year_start <= item_date <= year_end):
                 continue
-            if speech_date < start or speech_date > end:
+            if item_date < start or item_date > end:
                 continue
             url = entry.get("link", "")
             if not url:
                 continue
-            title = entry.get("title", "Federal Reserve speech")
+            title = entry.get("title", f"Federal Reserve {label}")
             try:
                 page = _get(url)
                 body = _extract_text(page.text)
             except Exception as exc:
-                log.debug("RSS fallback speech fetch failed %s: %s", url, exc)
+                log.debug("RSS fallback %s fetch failed %s: %s", label, url, exc)
                 body = BeautifulSoup(entry.get("summary", ""), "lxml").get_text(strip=True)
             if not body or len(body.split()) < 50:
                 continue
@@ -825,16 +856,16 @@ class FederalReserveIngestor(Ingestor):
                 article_id=_stable_article_id(self.source_id, url),
                 source_id="federalreserve",
                 url=url,
-                published_at=speech_date.isoformat() + "T15:00:00Z",
+                published_at=item_date.isoformat() + "T15:00:00Z",
                 retrieved_at=_now_utc_iso(),
                 title=title,
                 body=body,
                 author=entry.get("author"),
-                section="speech",
+                section=section,
                 language="en",
                 tier=1,
                 access="free",
                 retrieval="fed_rss_fallback",
                 word_count=len(body.split()),
-                raw_metadata={"document_type": "speech", "retrieval_fallback": True},
+                raw_metadata={"document_type": doc_type, "retrieval_fallback": True},
             )
