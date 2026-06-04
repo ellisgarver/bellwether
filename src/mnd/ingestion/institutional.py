@@ -2644,12 +2644,16 @@ class PIIEIngestor(Ingestor):
     with ``impersonate='chrome131'`` clears the challenge; stdlib ``requests``
     gets HTTP 403 on the JA3/JA4 TLS fingerprint.
 
-    Discovery: ``piie.com/sitemap.xml``.  Drupal xmlsitemap exposes a
-    flat or index sitemap; the walker handles both.  Each URL is dispatched
-    by regex to one of five publication-section labels; URL paths for
-    policy-briefs / working-papers / piie-briefings encode the publication
-    year (e.g. ``/publications/policy-briefs/2023/pb23-22-...``), so we
-    year-filter URLs before fetching bodies.  Blog URLs lack the year
+    Discovery: ``piie.com/sitemap.xml?page=N`` (verified 2026-06-03).  The
+    bare ``/sitemap.xml`` and a sitemap *index* both 404 now — PIIE's Drupal
+    xmlsitemap serves only the **paginated** flat form: ``?page=1`` is the
+    first urlset, pages are 1-indexed and contiguous, and the first page past
+    the end returns 404 (``?page=0`` also 404s). The walker fetches pages
+    starting at 1 and stops at the first 404 (the clean end-of-pages signal).
+    Each URL is dispatched by regex to one of five publication-section labels;
+    URL paths for policy-briefs / working-papers / piie-briefings encode the
+    publication year (e.g. ``/publications/policy-briefs/2023/pb23-22-...``),
+    so we year-filter URLs before fetching bodies.  Blog URLs lack the year
     segment and are fetched-then-date-checked.
 
     Why sitemap, not ``?page=N`` listing pagination
@@ -2672,6 +2676,9 @@ class PIIEIngestor(Ingestor):
     source_id = "piie"
 
     _SITEMAP_URL = "https://www.piie.com/sitemap.xml"
+    # Generous backstop on the ?page=N walk; the walk self-terminates at the
+    # first 404 long before this. PIIE's full sitemap is well under 100 pages.
+    _SITEMAP_MAX_PAGES = 500
 
     # (regex, doc_type, year_group_index_or_None). When year_group_index is
     # not None, we pre-filter URLs whose URL-encoded year lies outside the
@@ -2791,51 +2798,76 @@ class PIIEIngestor(Ingestor):
             yielded, len(candidates), body_failed, no_date, out_of_window,
         )
 
+    def _fetch_sitemap_page(self, sm_url: str, attempts: int = 7):
+        """Fetch one ?page=N sitemap, fail-loud on transient errors.
+
+        Returns the response on HTTP 200, or ``None`` on HTTP 404 (the
+        end-of-pages signal). Retries 429/5xx/network with jittered backoff
+        and raises ``RuntimeError`` on exhaustion or a hard block (e.g. 403),
+        so a transient Cloudflare/Wayback-style hiccup can never be mistaken
+        for the end of the sitemap and silently truncate discovery.
+        """
+        last: str | None = None
+        for attempt in range(attempts):
+            try:
+                resp = self._piie_get(sm_url, timeout=60.0)
+            except Exception as exc:  # network-level
+                last = repr(exc)
+            else:
+                if resp.status_code == 200:
+                    return resp
+                if resp.status_code == 404:
+                    return None
+                if resp.status_code in (429, 500, 502, 503, 504):
+                    last = f"HTTP {resp.status_code}"
+                else:
+                    raise RuntimeError(
+                        f"PIIE sitemap {sm_url}: HTTP {resp.status_code} "
+                        "(hard block — Cloudflare may have tightened)"
+                    )
+            time.sleep(min(5.0 * (2 ** attempt), 320.0) + random.uniform(0, 1))
+        raise RuntimeError(
+            f"PIIE sitemap {sm_url}: exhausted {attempts} attempts ({last})"
+        )
+
     def _discover_sitemap_urls(
         self, start: date, end: date,
     ) -> list[tuple[str, str]]:
-        """Walk piie.com sitemap (index or flat) and return matching URLs.
+        """Walk piie.com's paginated sitemap and return matching URLs.
 
         Returns ``[(url, doc_type), ...]`` for URLs whose path matches one
         of ``_URL_PATTERNS``. For publication URLs that encode a year in
         the path, we pre-filter on year so out-of-window publications are
         never fetched. Blog URLs (no year in path) are returned unfiltered
         and date-checked after body fetch.
+
+        Discovery walks ``?page=1, 2, ...`` until the first 404 (see the
+        class docstring). A transient error mid-walk raises rather than
+        ending the walk early — under-capture must fail loud.
         """
         compiled = [(re.compile(p), d, y) for p, d, y in self._URL_PATTERNS]
         candidates: list[tuple[str, str]] = []
-
         ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-        to_walk: list[str] = [self._SITEMAP_URL]
-        walked: set[str] = set()
 
-        while to_walk:
-            sm_url = to_walk.pop()
-            if sm_url in walked:
-                continue
-            walked.add(sm_url)
+        page = 1
+        while page <= self._SITEMAP_MAX_PAGES:
+            sm_url = f"{self._SITEMAP_URL}?page={page}"
+            resp = self._fetch_sitemap_page(sm_url)
+            if resp is None:
+                break  # 404 → past the last page
 
             try:
-                resp = self._piie_get(sm_url, timeout=60.0)
-                if resp.status_code != 200:
-                    log.error(
-                        "PIIE sitemap %s: HTTP %d — Cloudflare may have "
-                        "tightened. Discovery will undercover.",
-                        sm_url, resp.status_code,
-                    )
-                    continue
                 tree = ET.fromstring(resp.content)
-            except Exception as exc:
-                log.error("PIIE sitemap %s: %s", sm_url, exc)
-                continue
+            except ET.ParseError as exc:
+                raise RuntimeError(
+                    f"PIIE sitemap {sm_url}: XML parse failed ({exc})"
+                ) from exc
 
-            # Sitemap-index references to child sitemaps
-            for child in tree.findall("s:sitemap/s:loc", ns):
-                if child.text:
-                    to_walk.append(child.text.strip())
+            url_els = tree.findall("s:url", ns)
+            if not url_els:
+                break  # empty urlset → defensive end-of-pages
 
-            # Flat sitemap entries
-            for url_el in tree.findall("s:url", ns):
+            for url_el in url_els:
                 loc_el = url_el.find("s:loc", ns)
                 if loc_el is None or not loc_el.text:
                     continue
@@ -2856,6 +2888,7 @@ class PIIEIngestor(Ingestor):
                     candidates.append((url, doc_type))
                     break
 
+            page += 1
             time.sleep(0.3)
 
         return candidates
