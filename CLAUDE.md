@@ -62,7 +62,7 @@ modify pilot code. Resume instructions below are retained for reference only.
 
 - [x] Phase 0 — scaffold, configs, anchor set, ingestors, embedding module
 - [x] Phase 1 — filtering, dedup, clustering, dynamics, stages, validation, CLI
-- [/] Phase 2 — first corpus built 2026-05-18 (21,289 articles, 63,600 chunks). Multiple coverage bugs since fixed across the ingestors. Awaiting the next FULL re-ingest (parallel fan-out, NUKE_PRIOR=1) with all fixes + the ADR-020 basis set baked in, then corpus-composition QA before ticking the box.
+- [/] Phase 2 — first corpus built 2026-05-18 (21,289 articles, 63,600 chunks). Multiple coverage bugs since fixed across the ingestors. Awaiting the next FULL re-ingest (parallel fan-out, NUKE_RAW=1) with all fixes + the ADR-020 basis set baked in, then corpus-composition QA before ticking the box.
 - [/] Phase 3 — first embedding + clustering 2026-05-18 (Qwen3 primary, BERTopic single-level, outlier 25.4%, stability NMI=0.880±0.003). Anchor recovery on that pre-fix corpus was 6/10 — the 4 misses were 2013-2020 events lost to corpus undercoverage in that era, which the re-ingest targets. Re-validation deferred until after the re-ingest.
 
 - [ ] Phase 4 — pre-registration finalized, full anchor + fizzled validation
@@ -85,7 +85,7 @@ section above lists only the live, load-bearing constraints.
    ```
    (CBO no longer needs Playwright — ADR-023 moved it to Wayback bounded-ID enumeration.)
 2. **Per-source ingestion integration tests on RCC (25-case battery, ADR-020).** `pytest tests/integration/test_source_coverage.py -m integration -v` — validates each of the 12 active sub-ingestors against a narrow window. Now includes NBER 2014 + 2023h2 historical-edge cases, CEA ERP 2014 + 2023 cases, plus 2010-window historical-edge cases for Brookings / IMF / BIS and 2016 for Treasury OFR. Catches silent-zero failures before the full re-ingest. CEA cases skip gracefully if `pypdf` is missing.
-3. **Full re-ingest via the parallel fan-out.** Submit `scripts/rcc/submit_parallel_ingest.sh` with `NUKE_PRIOR=1` (one SLURM job per source, per-source `--time` budgets, downstream filter→embed→cluster chained on afterok of every ingest job). This supersedes the single chained `submit_full_pipeline.sh`, where a long pole (CBO Wayback walk, NBER ID enumeration, Brookings ~44k articles) could starve the rest and risk the wall clock. Per-source runs don't touch the composite checkpoint, so a single source can fail and be re-run in isolation: `SOURCES="<src>" SKIP_DOWNSTREAM=1 SKIP_CLEANUP=1 bash scripts/rcc/submit_parallel_ingest.sh`.
+3. **Full re-ingest via the parallel fan-out.** Submit `scripts/rcc/submit_parallel_ingest.sh` with `NUKE_RAW=1` (archives — does not delete — prior raw+processed, then runs one SLURM job per source, per-source `--time` budgets, downstream filter→embed→cluster chained on afterok of every ingest job). This supersedes the single chained `submit_full_pipeline.sh`, where a long pole (CBO Wayback walk, NBER ID enumeration, Brookings ~44k articles) could starve the rest and risk the wall clock. Per-source runs don't touch the composite checkpoint, so a single source can fail and be re-run in isolation: `SOURCES="<src>" SKIP_DOWNSTREAM=1 SKIP_CLEANUP=1 bash scripts/rcc/submit_parallel_ingest.sh`.
 4. **Post-re-ingest validation:** filter → embed → cluster → JEL post-classify → dynamics. Report anchor recovery rate; no pass/fail threshold (ADR-019). Run `mnd.clustering.jel_classifier.classify_clusters` on the BERTopic output and confirm sensible scope labels (≥40% in-scope for E/F/G/H given basis-set composition). If recovery looks reasonable, tick Phase 2 and Phase 3 boxes.
 5. **Phase 4** — pre-registration finalize, citing METHODOLOGY.md and ADRs 015 / 016 / 017 / 018 / 019 / 020 as the methodology lock-in. Blocked by items 1-4.
 
@@ -191,7 +191,7 @@ Removed from prior version: FTX collapse, GameStop short squeeze (out of macro s
 # Full historical ingestion (2010-present) — parallel fan-out, one SLURM job
 # per source, downstream filter→embed→cluster chained on afterok of all 12.
 # Handles cleanup, per-source --time budgets, and the downstream chain itself.
-NUKE_PRIOR=1 bash scripts/rcc/submit_parallel_ingest.sh
+NUKE_RAW=1 bash scripts/rcc/submit_parallel_ingest.sh
 
 # Pre-embedding filter (excludes any archived journalism sources from raw JSONL)
 # Already chained by submit_parallel_ingest.sh; shown here for a manual re-run.
