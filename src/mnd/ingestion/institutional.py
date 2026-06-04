@@ -2644,27 +2644,31 @@ class PIIEIngestor(Ingestor):
     with ``impersonate='chrome131'`` clears the challenge; stdlib ``requests``
     gets HTTP 403 on the JA3/JA4 TLS fingerprint.
 
-    Discovery: ``piie.com/sitemap.xml?page=N`` (verified 2026-06-03).  The
-    bare ``/sitemap.xml`` and a sitemap *index* both 404 now — PIIE's Drupal
-    xmlsitemap serves only the **paginated** flat form: ``?page=1`` is the
-    first urlset, pages are 1-indexed and contiguous, and the first page past
-    the end returns 404 (``?page=0`` also 404s). The walker fetches pages
-    starting at 1 and stops at the first 404 (the clean end-of-pages signal).
-    Each URL is dispatched by regex to one of five publication-section labels;
-    URL paths for policy-briefs / working-papers / piie-briefings encode the
-    publication year (e.g. ``/publications/policy-briefs/2023/pb23-22-...``),
-    so we year-filter URLs before fetching bodies.  Blog URLs lack the year
-    segment and are fetched-then-date-checked.
+    Discovery (ADR-026): **Wayback CDX enumeration ∪ live sitemap walk.**
+    PIIE migrated CMS around 2016; pre-2016 publications live at flat-slug
+    URLs (``/publications/policy-briefs/2008-oil-price-bubble``) while 2016+
+    items use a ``/YYYY/`` segment (``/publications/policy-briefs/2016/...``).
+    The Drupal xmlsitemap (``?page=N``) lists ONLY the ``/YYYY/`` URLs plus a
+    thin recent slice of blogs — it structurally cannot reach the ~889 legacy
+    flat-slug publications or the bulk of the blog history (CDX shows ~1,971
+    realtime-blog URLs alone vs ~857 sitemap total). So CDX is now the
+    workhorse: one ``collapse=urlkey&filter=statuscode:200`` query per content
+    prefix surfaces both URL schemes; the sitemap walk is retained only to
+    catch brand-new items Wayback has not yet archived. Both feed one deduped
+    candidate set. Flat-slug URLs carry no path year, so every CDX URL is
+    fetched-then-date-checked against the window (the page's own publication
+    date is authoritative; the slug year is never trusted). Bodies are fetched
+    from LIVE piie.com via curl_cffi — the legacy URLs still resolve 200.
 
-    Why sitemap, not ``?page=N`` listing pagination
-    ----------------------------------------------
-    Listing pagination (the ADR-017 strategy) burns ~3 pages of post-window
-    2024+ content per section before reaching a 2023 window, and Cloudflare
-    tightens on deep page=N requests within a session — the 2026-05-21
-    integration test got HTTP 403 on page 3 of working-papers and pages 1+
-    of two blog sections, yielding 11 records vs the floor of 15. Sitemap
-    discovery uses one request per sitemap file (typically <10 total),
-    avoiding the deep-pagination tripwire entirely.
+    Why CDX, not ``?page=N`` listing pagination
+    -------------------------------------------
+    Listing pagination (the ADR-017 strategy) burns post-window pages per
+    section and Cloudflare tightens on deep page=N requests within a session
+    (the 2026-05-21 integration test got HTTP 403 on page 3 of working-papers,
+    yielding 11 records vs the floor of 15). Sitemap discovery (ADR-021)
+    avoided that tripwire but silently capped coverage at the 2016+ window.
+    CDX queries hit archive.org (no Cloudflare), return the full historical
+    URL set in one request per prefix, and fail loud on outage.
 
     Failure mode if curl_cffi missing
     ---------------------------------
@@ -2688,8 +2692,35 @@ class PIIEIngestor(Ingestor):
         (r"/publications/working-papers/(\d{4})/[^/]+$", "working_paper", 1),
         (r"/publications/piie-briefings/(\d{4})/[^/]+$", "piie_briefing", 1),
         (r"/blogs/realtime-economic-issues-watch/[^/]+$", "blog_post", None),
+        (r"/blogs/trade-and-investment-policy-watch/[^/]+$", "blog_post", None),
         (r"/blogs/trade-investment-policy-watch/[^/]+$", "blog_post", None),
+        (r"/blogs/china-economic-watch/[^/]+$", "blog_post", None),
     ]
+
+    # Wayback CDX enumeration (ADR-026). One prefix query per content type;
+    # collapse=urlkey + statuscode:200 yields the distinct canonical URL set,
+    # which includes BOTH the pre-2016 flat-slug URLs (absent from the sitemap)
+    # and the 2016+ /YYYY/ URLs. The trade blog appears under two slug eras
+    # (with and without "and-") and china-economic-watch is a macro blog the
+    # sitemap-era patterns never targeted — all are enumerated here for full
+    # capture. Flat-slug URLs carry no path year, so every CDX URL is
+    # fetched-then-date-checked against the window (the page date is
+    # authoritative; the slug year is not).
+    _CDX_BASE = "http://web.archive.org/cdx/search/cdx"
+    _CDX_PREFIXES: list[tuple[str, str]] = [
+        ("publications/policy-briefs", "policy_brief"),
+        ("publications/working-papers", "working_paper"),
+        ("publications/piie-briefings", "piie_briefing"),
+        ("blogs/realtime-economic-issues-watch", "blog_post"),
+        ("blogs/trade-and-investment-policy-watch", "blog_post"),
+        ("blogs/trade-investment-policy-watch", "blog_post"),
+        ("blogs/china-economic-watch", "blog_post"),
+    ]
+    _CDX_ASSET_RE = re.compile(
+        r"\.(?:js|css|png|jpe?g|gif|json|min|svg|ico|woff2?|ttf|pdf|xml)(?:\?|$)",
+        re.IGNORECASE,
+    )
+    _CDX_YEAR_INDEX_RE = re.compile(r"^20\d{2}$")
 
     # Same Chrome 131 header set used by VoxEUIngestor — paired with the
     # curl_cffi TLS impersonation, this presents Cloudflare with a
@@ -2741,10 +2772,24 @@ class PIIEIngestor(Ingestor):
             return requests.get(url, headers=cls._PIIE_HEADERS, **kwargs)
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
-        candidates = self._discover_sitemap_urls(start, end)
+        # Wayback CDX enumeration (full history, both URL schemes) unioned with
+        # the live sitemap walk (freshest items not yet archived). CDX is the
+        # workhorse — PIIE's Drupal sitemap lists only the 2016+ /YYYY/ URLs and
+        # a thin slice of recent blogs (ADR-026); CDX surfaces the pre-2016
+        # flat-slug publications and the full blog history the sitemap omits.
+        cdx_candidates = self._cdx_enumerate()
+        sitemap_candidates = self._discover_sitemap_urls(start, end)
+
+        # Dedup across both sources on a canonical (https, no trailing slash)
+        # key. CDX is listed first so its doc_type wins on collision.
+        merged: dict[str, tuple[str, str]] = {}
+        for url, doc_type in (*cdx_candidates, *sitemap_candidates):
+            key = re.sub(r"^https?://(www\.)?", "", url).rstrip("/").lower()
+            merged.setdefault(key, (url.rstrip("/"), doc_type))
+        candidates = list(merged.values())
         log.info(
-            "PIIE: %d candidate URLs after sitemap walk + URL-year pre-filter "
-            "[%s..%s]",
+            "PIIE: %d candidate URLs (cdx=%d, sitemap=%d, merged=%d) [%s..%s]",
+            len(candidates), len(cdx_candidates), len(sitemap_candidates),
             len(candidates), start, end,
         )
 
@@ -2892,6 +2937,86 @@ class PIIEIngestor(Ingestor):
             time.sleep(0.3)
 
         return candidates
+
+    def _cdx_enumerate(self) -> list[tuple[str, str]]:
+        """Enumerate PIIE's full publication+blog URL set from Wayback CDX.
+
+        Returns ``[(canonical_url, doc_type), ...]`` across all years for each
+        prefix in ``_CDX_PREFIXES``. Fail-loud: a CDX outage raises rather than
+        returning a short list that would be silently mistaken for a complete
+        corpus (under-capture is the only failure mode we chase here).
+        """
+        out: list[tuple[str, str]] = []
+        for prefix, doc_type in self._CDX_PREFIXES:
+            urls = self._cdx_query(prefix)
+            for u in urls:
+                out.append((u, doc_type))
+            log.info("PIIE CDX %s: %d distinct URLs", prefix, len(urls))
+        return out
+
+    def _cdx_query(self, prefix: str) -> list[str]:
+        """One CDX prefix query → cleaned, deduped canonical article URLs."""
+        # Build the query string literally; requests' param encoding would
+        # percent-encode the trailing ``*`` and break CDX prefix matching.
+        cdx_url = (
+            f"{self._CDX_BASE}?url=piie.com/{prefix}*"
+            "&collapse=urlkey&filter=statuscode:200&fl=original&output=text"
+        )
+        text = self._cdx_get(cdx_url)
+        base = f"piie.com/{prefix}/"
+        seen: set[str] = set()
+        urls: list[str] = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            stripped = line.split("#", 1)[0].split("?", 1)[0]
+            host_rel = re.sub(r"^https?://(www\.)?", "", stripped)
+            if not host_rel.startswith(base):
+                continue
+            if self._CDX_ASSET_RE.search(host_rel):
+                continue
+            slug = host_rel[len(base):].strip("/")
+            if not slug:
+                continue  # bare section index
+            last = slug.rsplit("/", 1)[-1]
+            if self._CDX_YEAR_INDEX_RE.match(last):
+                continue  # /type/2016 year-listing page, not an article
+            canon = f"https://www.{host_rel.rstrip('/')}"
+            key = canon.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            urls.append(canon)
+        return urls
+
+    def _cdx_get(self, cdx_url: str, attempts: int = 6) -> str:
+        """GET a CDX endpoint with fail-loud jittered backoff.
+
+        archive.org's CDX server 503s / times out under load. Retries
+        transient failures and raises on exhaustion or a hard status, so a
+        Wayback hiccup can never silently truncate enumeration. Uses a
+        (connect, read) tuple timeout per the project HTTP-timeout rule.
+        """
+        last: str | None = None
+        for attempt in range(attempts):
+            try:
+                resp = requests.get(cdx_url, timeout=(10, 120))
+            except Exception as exc:  # network-level
+                last = repr(exc)
+            else:
+                if resp.status_code == 200:
+                    return resp.text
+                if resp.status_code in (429, 500, 502, 503, 504):
+                    last = f"HTTP {resp.status_code}"
+                else:
+                    raise RuntimeError(
+                        f"PIIE CDX {cdx_url}: HTTP {resp.status_code} (hard)"
+                    )
+            time.sleep(min(5.0 * (2 ** attempt), 240.0) + random.uniform(0, 1))
+        raise RuntimeError(
+            f"PIIE CDX {cdx_url}: exhausted {attempts} attempts ({last})"
+        )
 
 
 class CFRIngestor(Ingestor):
