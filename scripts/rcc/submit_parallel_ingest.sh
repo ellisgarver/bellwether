@@ -51,19 +51,19 @@ COMPARATOR="${COMPARATOR:-0}"
 
 # All 12 basis-set sources, ordered longest-pole-first so they enter the queue
 # early. Override with SOURCES="..." to run a subset.
-SOURCES="${SOURCES:-cbo nber brookings voxeu imf congressional bis fed_regional federalreserve piie treasury_ofr cea}"
+SOURCES="${SOURCES:-cbo brookings nber voxeu bis imf congressional fed_regional federalreserve piie treasury_ofr cea}"
 
 # Per-source wall-clock budget (hours). Long poles get generous limits; quick
 # direct-fetch sources get short ones. CBO Wayback enumeration is the extreme
 # (ADR-023: ~15-22h for the full 2010-present walk).
 declare -A HOURS=(
     [cbo]=36
+    [brookings]=30
     [nber]=14
-    [brookings]=10
     [voxeu]=10
+    [bis]=10
     [imf]=6
     [congressional]=5
-    [bis]=4
     [fed_regional]=4
     [federalreserve]=4
     [piie]=3
