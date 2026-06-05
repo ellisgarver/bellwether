@@ -2003,9 +2003,10 @@ independent Wayback CDX inventory) surfaced two silent under-capture defects tha
    timestamp (`2016-03-02T20:43:26-05:00`) on the *entire* back-catalog; trafilatura
    reads that OpenGraph field, so every pre-2016 publication collapsed onto 2016.
    The true date survives in the page's `hero-banner-publication__date` <time>
-   element (e.g. a 2009 brief shows `datetime="2009-08-01"`). Blog pages were
-   unaffected — their `article:published_time` is correct — which is why only the
-   publication series collapsed. Confirmed by fetching archived raw HTML for a
+   element (e.g. a 2009 brief shows `datetime="2009-08-01"`). Blog *article*
+   pages carry a correct `article:published_time` — but see the 2026-06-05
+   addendum below: junk enumeration URLs do not, so blogs need the same
+   extract-or-drop treatment. Confirmed by fetching archived raw HTML for a
    policy brief and a working paper; sidebar "related" dates use a distinct
    `teaser__date` class and are explicitly not matched.
 
@@ -2028,6 +2029,7 @@ metadata date even when it returns `None` (a `None` means "no authoritative date
 the known-bad migration stamp). `_piie_publication_date_from_html` reads the
 `hero-banner-publication__date` <time datetime>, and PIIE passes it for the three
 publication doc types only. Blogs continue using the default trafilatura path.
+*(Superseded by the 2026-06-05 addendum — blogs now use `_piie_blog_date_from_html`.)*
 
 ### Consequences
 
@@ -2042,6 +2044,43 @@ publication doc types only. Blogs continue using the default trafilatura path.
   citation-block reader.
 - Found purely by the ADR-028 standard (shape pivot + independent CDX inventory),
   validating it as the standing pre-clear check.
+
+### Addendum (2026-06-05): blogs also need extract-or-drop dating
+
+Re-verifying the post-fix PIIE corpus surfaced a third defect the original ADR-029
+fix did not anticipate: `piie_blog_post` showed a 6.8x CLIFF at 2022 (726 vs ~170
+neighbours). Date-clustering proved it artifactual — **581 of the 726 blog records
+were stamped to the single date `2022-05-18`** (every other 2022 month had 6-23).
+None were unique real articles. They are **junk enumeration URLs**: Wayback CDX had
+recorded soft-hyphen-mangled slugs (`case-raising-in-flation-...`,
+`debt-stand-stills`), truncations (`arms-and-`), trailing-punctuation fragments
+(`...relief-plan[8`, `...europe;`), text-fragment links (`...%23:~:text=`) and JS
+placeholder paths (`blur.placeholder`, `beforeunload.placeholder`) harvested from
+in-body broken links on archived pages. Fetched live, they all resolve to a
+fallback page whose `article:published_time` is the `2022-05-18` RealTime-blog
+migration stamp — so trafilatura dated all 581 to that day. This refutes ADR-029's
+"blogs' `article:published_time` is correct" assumption: it holds for real article
+pages but not for the fallback page junk URLs land on.
+
+**Decision.** Blogs get the same extract-or-drop treatment as publications, via a
+new `_piie_blog_date_from_html`. The blog template nests its `<time datetime>` one
+wrapper deeper than publications — inside `<div class="field--name-field-blog-date">`
+— so `_PIIE_PUB_DATE_RE` (which wants `<time>` immediately after the hero block)
+misses it; the blog regex keys on `field--name-field-blog-date` instead. PIIE now
+routes `blog_post` → `_piie_blog_date_from_html` and the three publication types →
+`_piie_publication_date_from_html`. A junk URL's fallback page has no
+`field--name-field-blog-date`, so the extractor returns `None` and the record is
+dropped (methodology principle 1); real posts (old- and new-path alike, since
+bodies are fetched live in the current uniform Drupal theme) yield their true date.
+Verified the regex against archived live-template HTML for a 2020 old-path post
+(`2020-04-07`) and a 2022 new-path post (`2022-07-28`).
+
+**Consequence.** No URL-shape allowlist was added — the corrupted slugs are not
+reliably distinguishable from valid ones by shape (`case-raising-in-flation-...`
+looks valid), and a shape filter risks dropping real articles with unusual slugs,
+which violates the under-capture-is-the-only-failure-mode rule. The date-drop is
+the robust backstop; the only cost is wasted live fetches on the junk URLs, a
+performance nit within PIIE's 6h budget. Requires a PIIE re-run to materialize.
 
 ---
 
