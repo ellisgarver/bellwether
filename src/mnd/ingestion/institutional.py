@@ -913,6 +913,13 @@ class BISIngestor(Ingestor):
 
     Prior code matched only the working-paper pattern, capturing ~70/yr while
     the BIS QR + Bulletins + speeches added ~hundreds more per year.
+
+    Pre-2014 the sitemap lists each ``/review/`` speech only as ``…\\.pdf`` (the
+    ``.htm`` landing page exists at the same stem but is not in the sitemap), so
+    the ``.htm`` speech pattern matched ~0 speeches in 2010-2012 vs ~765 in 2014
+    — a flat 10x undercapture of the early years. ``_fetch_year`` now rewrites
+    ``/review/rNNN….pdf`` → ``.htm`` before pattern-matching; the ``seen`` set
+    collapses the rewritten form against any direct ``.htm`` sibling.
     """
 
     source_id = "bis"
@@ -998,6 +1005,15 @@ class BISIngestor(Ingestor):
             if loc_el is None:
                 continue
             url = loc_el.text or ""
+
+            # Pre-2014 BIS lists only the PDF of each /review/ speech in the
+            # sitemap (the .htm landing page exists at the same stem but is not
+            # listed); the .htm jumps from ~0 to ~765 at 2014. Rewrite pdf→htm so
+            # the speech pattern matches, trafilatura can parse the page, and the
+            # seen-set collapses the pdf-form against any direct .htm sibling.
+            # Recovers ~900 speeches/yr in 2010-2013 and ~160/yr of pdf-only
+            # speeches that persist in later years.
+            url = re.sub(r"(/review/r\d+[a-z]?)\.pdf$", r"\1.htm", url)
 
             section = None
             doc_type = None
