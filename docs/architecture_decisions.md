@@ -1916,6 +1916,69 @@ and a parallel RSS feed (`/feeds/testimony.xml`). Volume is ~9–24 items/year.
 
 ---
 
+## ADR-028: Coverage-verification standard (shape + independent inventory); BIS pre-2014 review-speech recovery as the trigger
+
+- **Status**: Accepted
+- **Date**: 2026-06-04
+
+### Context
+
+The 2026-06-04 full re-ingest cleared BIS as "fixed" on two signals: the SLURM
+job did not fail/timeout, and a year histogram showed all years 2010-2026
+present. Both were misleading. BIS was undercapturing the early years by a flat
+**~10x** (2010: 96 records captured vs ~1,000 actually published). Root cause:
+pre-2014 the BIS sitemap lists each `/review/` speech only as a `…\.pdf` URL
+(the `.htm` landing page exists at the same stem but is not in the sitemap), and
+`BISIngestor._URL_PATTERNS` required `.htm`. So the `speech` series ran from ~0
+in 2010-2012 to 765 in 2014 — invisible in a year-TOTAL view because the other
+series filled the gap, and invisible to "did it run" because nothing errored.
+
+This is a general verification failure, not a one-off: "no failure" and "all
+years present" do not evidence full capture, and any source whose URL/format
+scheme changed mid-window is exposed to the same silent loss.
+
+### Decision
+
+**1. BIS fix (the trigger).** `BISIngestor._fetch_year` rewrites
+`/review/rNNN….pdf` → `.htm` before pattern-matching. The existing trafilatura
+fetch path parses the HTML landing page; the `seen` set collapses the rewritten
+form against any direct `.htm` sibling (2014+). Recovers ~900 review speeches/yr
+for 2010-2013 and ~160/yr of PDF-only speeches that persist in later years. No
+PDF extraction needed; working papers were already captured as `.htm` pre-2014,
+so the rewrite is scoped to `/review/` only.
+
+**2. Verification standard (the go-forward rule).** Before any source is cleared
+as fully captured, two checks are mandatory:
+   - **Independent ground-truth, by series × year.** Enumerate what the source
+     itself exposes — sitemap URLs per series counting *all* format variants
+     (`.pdf` and `.htm`), CDX distinct-URL counts, listing-page totals — and diff
+     against captured. The gap is the signal; captured counts are never trusted
+     in isolation.
+   - **Shape, not presence.** Pivot captured records by (year × document_type),
+     never year-total alone, and hunt bug signatures: a 5-10x **cliff** between
+     adjacent years in one series (format/URL-scheme change), an implausible
+     **spike** (dedup bug — see PIIE 2016 dual flat-slug + `/YYYY/` URLs), a
+     series at **zero** inside its own active span.
+   - Tooling: `scripts/verify_coverage.py <source>` prints the year ×
+     document_type pivot, the flat-vs-`/YYYY/` URL split, and auto-flags
+     CLIFF/GAP/DUP. It is the standing captured-side check (check #2); a clean
+     run is necessary, not sufficient — check #1 (independent inventory) still
+     governs whether a source is cleared.
+
+### Consequences
+
+- BIS early-year speech volume rises from ~90/yr to ~1,000/yr, matching the
+  2014+ baseline. Requires a BIS re-run to materialize.
+- The integration battery (`tests/integration/test_source_coverage.py`) asserts
+  per-window floors, which is a weak "lack of failure" check (it would not have
+  caught BIS's 10x gap above the floor). Floors should migrate toward
+  inventory-relative expectations over time; tracked as follow-up, not blocking.
+- The standard adds a verification step per source but is the only defense
+  against silent under-capture, which is the project's sole ingest failure mode
+  (the corpus is content-neutral by ADR-020; relevance is decided downstream).
+
+---
+
 ## ADR template (copy for new entries)
 
 ```
