@@ -3105,13 +3105,19 @@ class PIIEIngestor(Ingestor):
             urls.append(canon)
         return urls
 
-    def _cdx_get(self, cdx_url: str, attempts: int = 6) -> str:
+    def _cdx_get(self, cdx_url: str, attempts: int = 10) -> str:
         """GET a CDX endpoint with fail-loud jittered backoff.
 
-        archive.org's CDX server 503s / times out under load. Retries
-        transient failures and raises on exhaustion or a hard status, so a
+        archive.org's CDX server 503s / times out *in multi-minute bursts*
+        under load (observed repeatedly 2026-06-05). Retries transient
+        failures and raises only on sustained outage or a hard status, so a
         Wayback hiccup can never silently truncate enumeration. Uses a
         (connect, read) tuple timeout per the project HTTP-timeout rule.
+
+        10 attempts with the 5·2^n backoff (capped 240s) spans ~20 min of
+        patience per query — enough to ride out a typical 503 burst. PIIE
+        fires one query per prefix (8 of them); the prior 6-attempt / ~5-min
+        ceiling let a single unlucky prefix kill a 2-hour job (job 50493138).
         """
         last: str | None = None
         for attempt in range(attempts):
@@ -3128,7 +3134,8 @@ class PIIEIngestor(Ingestor):
                     raise RuntimeError(
                         f"PIIE CDX {cdx_url}: HTTP {resp.status_code} (hard)"
                     )
-            time.sleep(min(5.0 * (2 ** attempt), 240.0) + random.uniform(0, 1))
+            if attempt < attempts - 1:  # no wasted sleep after the last try
+                time.sleep(min(5.0 * (2 ** attempt), 240.0) + random.uniform(0, 1))
         raise RuntimeError(
             f"PIIE CDX {cdx_url}: exhausted {attempts} attempts ({last})"
         )
