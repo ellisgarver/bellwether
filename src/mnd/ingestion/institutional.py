@@ -3070,11 +3070,20 @@ class PIIEIngestor(Ingestor):
         return out
 
     def _cdx_query(self, prefix: str) -> list[str]:
-        """One CDX prefix query → cleaned, deduped canonical article URLs."""
-        # Build the query string literally; requests' param encoding would
-        # percent-encode the trailing ``*`` and break CDX prefix matching.
+        """One CDX prefix query → cleaned, deduped canonical article URLs.
+
+        Uses ``matchType=prefix`` rather than the ``url=…*`` bulk-wildcard
+        form. Both prefix-match the same URL set, but ADR-023 found the bulk
+        wildcard non-deterministic under load (0/849/6575 rows across three
+        runs of one query) and 503-prone — exactly the burst that killed job
+        50493138. The ``matchType=prefix`` endpoint returns deterministically
+        and is what CBO's ``_cdx_block`` already relies on. The trailing
+        ``/`` base filter below still discards any sibling that shares the
+        prefix string (e.g. realtime-economics vs realtime-economic-…).
+        """
+        # Built literally so requests doesn't percent-encode the filter colon.
         cdx_url = (
-            f"{self._CDX_BASE}?url=piie.com/{prefix}*"
+            f"{self._CDX_BASE}?url=piie.com/{prefix}&matchType=prefix"
             "&collapse=urlkey&filter=statuscode:200&fl=original&output=text"
         )
         text = self._cdx_get(cdx_url)
