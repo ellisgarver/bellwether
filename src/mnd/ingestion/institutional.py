@@ -218,6 +218,35 @@ def _parse_date_flexible(text: str) -> date | None:
     return None
 
 
+# PIIE publication pages (policy-briefs / working-papers / piie-briefings)
+# render the canonical publication date in a dedicated hero-banner block:
+#   <div class="hero-banner-publication__date"><time datetime="2009-08-01T...">
+# This is the date to trust. ``article:published_time`` on the same pages is
+# the 2016-03-02 Drupal-migration timestamp, which trafilatura reads and which
+# collapsed the entire pre-2016 back-catalog into 2016 (ADR-029). The sidebar
+# "related publications" use ``teaser__date`` <time> elements — explicitly NOT
+# matched here so we never pick up a neighbouring paper's date.
+_PIIE_PUB_DATE_RE = re.compile(
+    r'class="hero-banner-publication__date"[^>]*>\s*<time[^>]*\bdatetime="([^"]+)"',
+    re.IGNORECASE,
+)
+
+
+def _piie_publication_date_from_html(html: str) -> date | None:
+    """Authoritative publication date for a PIIE publication page.
+
+    Returns ``None`` when the hero-banner date block is absent — the caller
+    then drops the record rather than falling back to the unreliable
+    ``article:published_time`` migration stamp (see ``_extract_from_html``).
+    """
+    if not html:
+        return None
+    m = _PIIE_PUB_DATE_RE.search(html)
+    if not m:
+        return None
+    return _parse_date_flexible(m.group(1)[:10])
+
+
 _MONTH_NAME_TO_NUM = {
     "january": 1, "february": 2, "march": 3, "april": 4, "may": 5,
     "june": 6, "july": 7, "august": 8, "september": 9, "october": 10,
@@ -304,13 +333,27 @@ def _chicago_fed_date_from_body(body: str, expected_year: int) -> date | None:
 
 
 def _extract_from_html(
-    html: str, *, min_words: int = 30,
+    html: str, *, min_words: int = 30, date_extractor=None,
 ) -> tuple[str, str, str | None, date | None]:
     """Extract (body_text, title, author, pub_date) from a raw HTML string.
 
     Body extraction via trafilatura, with a BS4 ``<main>/<article>/<body>``
     fallback when trafilatura returns nothing or a sub-``min_words`` stub.
     Author/date come from trafilatura's metadata extractor.
+
+    ``date_extractor`` (optional ``Callable[[str], date | None]``) is a
+    source-specific date reader run against the raw HTML. When provided it
+    is AUTHORITATIVE: its result REPLACES trafilatura's metadata date even
+    when it returns ``None``. This exists because some CMSes stamp a
+    site-migration date into ``article:published_time`` (which trafilatura
+    trusts) while the true publication date lives in a structured element —
+    e.g. PIIE's 2016 Drupal migration set ``article:published_time`` to
+    2016-03-02 on the entire back-catalog, but the real date survives in the
+    ``hero-banner-publication__date`` block (see
+    ``_piie_publication_date_from_html``). Falling back to the metadata date
+    on a None result would silently re-introduce the migration-date bug, so
+    we don't — a None here means "no authoritative date", and the caller
+    drops the record (methodology principle 1: never fabricate a date).
 
     Separated from ``_fetch_page_full`` so callers that already hold the
     page HTML (e.g. ``FedRegionalIngestor._fetch_chicago_fed_letter``, which
@@ -325,7 +368,9 @@ def _extract_from_html(
     title = (meta.title or "") if meta else ""
     author = (meta.author or None) if meta else None
     pub_date: date | None = None
-    if meta and meta.date:
+    if date_extractor is not None:
+        pub_date = date_extractor(html)
+    elif meta and meta.date:
         pub_date = _parse_date_flexible(str(meta.date))
     if not body or len(body.split()) < min_words:
         soup = BeautifulSoup(html, "lxml")
@@ -338,13 +383,16 @@ def _extract_from_html(
 
 
 def _fetch_page_full(
-    url: str, *, min_words: int = 30, getter=None,
+    url: str, *, min_words: int = 30, getter=None, date_extractor=None,
 ) -> tuple[str, str, str | None, date | None]:
     """Fetch url; return (body_text, title, author, pub_date). Empty/None on failure.
 
     ``getter`` defaults to module-level _get (stdlib requests + retries). Pass a
     custom callable for sources behind TLS-fingerprint bot protection (e.g.
     CBO behind DataDome — see CBOIngestor._cbo_get).
+
+    ``date_extractor`` is forwarded to ``_extract_from_html`` as the
+    authoritative source-specific date reader (see that docstring).
     """
     fetch = getter if getter is not None else _get
     try:
@@ -352,7 +400,9 @@ def _fetch_page_full(
     except Exception as exc:
         log.debug("Fetch failed %s: %s", url, exc)
         return "", "", None, None
-    return _extract_from_html(resp.text, min_words=min_words)
+    return _extract_from_html(
+        resp.text, min_words=min_words, date_extractor=date_extractor,
+    )
 
 
 def _wp_rest_fetch(
@@ -2676,6 +2726,22 @@ class PIIEIngestor(Ingestor):
     date is authoritative; the slug year is never trusted). Bodies are fetched
     from LIVE piie.com via curl_cffi — the legacy URLs still resolve 200.
 
+    Publication dates (ADR-029): publication pages stamp
+    ``article:published_time`` with the 2016-03-02 Drupal-migration timestamp,
+    which trafilatura trusts — that silently collapsed the entire pre-2016
+    policy-brief / working-paper / piie-briefing back-catalog into 2016. The
+    true date survives in the ``hero-banner-publication__date`` block, read by
+    ``_piie_publication_date_from_html`` and passed as the authoritative
+    ``date_extractor`` for those doc types. Blog pages carry a correct
+    ``article:published_time`` and use the default extraction path.
+
+    RealTime blog two-era paths (ADR-029): the blog's new posts moved from the
+    legacy ``/blogs/realtime-economic-issues-watch/<slug>`` scheme to
+    ``/blogs/realtime-economics/<YYYY>/<slug>`` ~2022, which the prior prefix
+    set did not follow — the blog hard-zeroed after 2022. Both prefixes are now
+    enumerated and the ~199 posts present under both are collapsed by a
+    trailing-slug dedup in ``fetch``.
+
     Why CDX, not ``?page=N`` listing pagination
     -------------------------------------------
     Listing pagination (the ADR-017 strategy) burns post-window pages per
@@ -2707,6 +2773,7 @@ class PIIEIngestor(Ingestor):
         (r"/publications/policy-briefs/(\d{4})/[^/]+$", "policy_brief", 1),
         (r"/publications/working-papers/(\d{4})/[^/]+$", "working_paper", 1),
         (r"/publications/piie-briefings/(\d{4})/[^/]+$", "piie_briefing", 1),
+        (r"/blogs/realtime-economics/\d{4}/[^/]+$", "blog_post", None),
         (r"/blogs/realtime-economic-issues-watch/[^/]+$", "blog_post", None),
         (r"/blogs/trade-and-investment-policy-watch/[^/]+$", "blog_post", None),
         (r"/blogs/trade-investment-policy-watch/[^/]+$", "blog_post", None),
@@ -2722,11 +2789,21 @@ class PIIEIngestor(Ingestor):
     # capture. Flat-slug URLs carry no path year, so every CDX URL is
     # fetched-then-date-checked against the window (the page date is
     # authoritative; the slug year is not).
+    #
+    # The RealTime blog lives under TWO path eras: the 2016-vintage flat-slug
+    # ``realtime-economic-issues-watch`` (1,972 distinct posts, but new posts
+    # stopped landing there ~2022 — the hard-zero blog tail we were missing)
+    # and the current ``realtime-economics/{YYYY}/`` scheme (carries the
+    # post-2022 posts plus a migrated 2008-2021 back-catalog). ~199 posts
+    # exist under both; the trailing-slug dedup in fetch() collapses them.
+    # realtime-economics is listed FIRST so its current /YYYY/ canonical URL
+    # wins that dedup (more likely to resolve live than the legacy slug).
     _CDX_BASE = "http://web.archive.org/cdx/search/cdx"
     _CDX_PREFIXES: list[tuple[str, str]] = [
         ("publications/policy-briefs", "policy_brief"),
         ("publications/working-papers", "working_paper"),
         ("publications/piie-briefings", "piie_briefing"),
+        ("blogs/realtime-economics", "blog_post"),
         ("blogs/realtime-economic-issues-watch", "blog_post"),
         ("blogs/trade-and-investment-policy-watch", "blog_post"),
         ("blogs/trade-investment-policy-watch", "blog_post"),
@@ -2796,11 +2873,23 @@ class PIIEIngestor(Ingestor):
         cdx_candidates = self._cdx_enumerate()
         sitemap_candidates = self._discover_sitemap_urls(start, end)
 
-        # Dedup across both sources on a canonical (https, no trailing slash)
-        # key. CDX is listed first so its doc_type wins on collision.
+        # Dedup across both sources. CDX candidates are listed first (and
+        # realtime-economics precedes realtime-economic-issues-watch within
+        # them), so the first-seen URL wins on collision.
+        #
+        # Publications key on the full canonical path. Blog posts key on the
+        # trailing slug alone: the RealTime blog's ~199 migrated posts appear
+        # at both /blogs/realtime-economic-issues-watch/<slug> and
+        # /blogs/realtime-economics/<YYYY>/<slug>, which a full-path key would
+        # treat as distinct and double-count. Blog slugs are long topic
+        # phrases, so a cross-blog slug collision is effectively impossible.
         merged: dict[str, tuple[str, str]] = {}
         for url, doc_type in (*cdx_candidates, *sitemap_candidates):
-            key = re.sub(r"^https?://(www\.)?", "", url).rstrip("/").lower()
+            norm = re.sub(r"^https?://(www\.)?", "", url).rstrip("/").lower()
+            if doc_type == "blog_post":
+                key = "blog:" + norm.rsplit("/", 1)[-1]
+            else:
+                key = norm
             merged.setdefault(key, (url.rstrip("/"), doc_type))
         candidates = list(merged.values())
         log.info(
@@ -2820,8 +2909,18 @@ class PIIEIngestor(Ingestor):
                 continue
             seen.add(url)
 
+            # Publications carry the 2016 CMS-migration stamp in
+            # article:published_time; read the hero-banner date instead.
+            # Blogs' article:published_time is correct, so they use the
+            # default trafilatura path (ADR-029).
+            date_extractor = (
+                _piie_publication_date_from_html
+                if doc_type in ("policy_brief", "working_paper", "piie_briefing")
+                else None
+            )
             body, fetched_title, author, page_date = _fetch_page_full(
                 url, min_words=50, getter=self._piie_get,
+                date_extractor=date_extractor,
             )
             if not body or len(body.split()) < 50:
                 body_failed += 1

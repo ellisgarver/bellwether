@@ -1979,6 +1979,72 @@ as fully captured, two checks are mandatory:
 
 ---
 
+## ADR-029: PIIE two coverage defects found by the ADR-028 standard (blog tail; 2016-misdated publications)
+
+- **Status**: Accepted
+- **Date**: 2026-06-05
+
+### Context
+
+Applying the ADR-028 verification standard to PIIE (year × document_type pivot +
+independent Wayback CDX inventory) surfaced two silent under-capture defects that
+"no failure + all years present" had hidden:
+
+1. **Blog tail hard-zeros after 2022.** `piie_blog_post` ran 2010→2022 then dropped
+   to zero for 2023-2026. The RealTime blog's new posts had migrated from the
+   legacy flat-slug path `/blogs/realtime-economic-issues-watch/<slug>` (the only
+   realtime prefix we enumerated) to `/blogs/realtime-economics/<YYYY>/<slug>`
+   ~2022. CDX confirms ~423 posts that exist *only* under the new path (the missing
+   2018-2026 tail) plus ~199 back-catalog posts present under *both* paths.
+
+2. **Pre-2016 publications all misdated to 2016.** `policy_brief` / `working_paper`
+   / `piie_briefing` were zero for 2010-2015 then spiked at 2016 (464 / 390 / 35).
+   PIIE's 2016 Drupal migration stamped `article:published_time` with the migration
+   timestamp (`2016-03-02T20:43:26-05:00`) on the *entire* back-catalog; trafilatura
+   reads that OpenGraph field, so every pre-2016 publication collapsed onto 2016.
+   The true date survives in the page's `hero-banner-publication__date` <time>
+   element (e.g. a 2009 brief shows `datetime="2009-08-01"`). Blog pages were
+   unaffected — their `article:published_time` is correct — which is why only the
+   publication series collapsed. Confirmed by fetching archived raw HTML for a
+   policy brief and a working paper; sidebar "related" dates use a distinct
+   `teaser__date` class and are explicitly not matched.
+
+### Decision
+
+**1. Blog tail.** Add `blogs/realtime-economics` to `PIIEIngestor._CDX_PREFIXES`
+(listed before `realtime-economic-issues-watch`) and a matching
+`/blogs/realtime-economics/\d{4}/[^/]+$` entry to `_URL_PATTERNS`. To avoid
+double-counting the ~199 posts under both schemes — which a full-path dedup key
+would treat as distinct — blog-post candidates dedup on their **trailing slug**
+in `fetch()` (publications keep the full-path key). The new `/YYYY/` canonical URL
+wins the collision because it is listed first and is more likely to resolve live.
+This also collapses the pre-existing trade-blog dual-era duplication
+(`trade-and-investment-policy-watch` vs `trade-investment-policy-watch`).
+
+**2. Publication dates.** Add an optional authoritative `date_extractor` hook to
+`_extract_from_html` / `_fetch_page_full`. When supplied it *replaces* trafilatura's
+metadata date even when it returns `None` (a `None` means "no authoritative date"
+→ caller drops the record per methodology principle 1; it must never fall back to
+the known-bad migration stamp). `_piie_publication_date_from_html` reads the
+`hero-banner-publication__date` <time datetime>, and PIIE passes it for the three
+publication doc types only. Blogs continue using the default trafilatura path.
+
+### Consequences
+
+- The RealTime blog series extends through 2026 (~423 recovered posts), and the
+  pre-2016 publication back-catalog redistributes onto its true years instead of a
+  spurious 2016 spike. Both require a PIIE re-run to materialize.
+- Publication pages lacking a hero-banner date block are now dropped rather than
+  dated to 2016. The block is standard PIIE publication chrome, so loss should be
+  negligible; the `no_date` counter in the fetch summary surfaces it if not.
+- The `date_extractor` hook is generic and available to any future source whose CMS
+  poisons `article:published_time`; it is the structured analogue of the Chicago Fed
+  citation-block reader.
+- Found purely by the ADR-028 standard (shape pivot + independent CDX inventory),
+  validating it as the standing pre-clear check.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```
