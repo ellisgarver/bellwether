@@ -247,6 +247,37 @@ def _piie_publication_date_from_html(html: str) -> date | None:
     return _parse_date_flexible(m.group(1)[:10])
 
 
+# Blog posts render the canonical date in a dedicated Drupal field rather than
+# the publication hero-banner's direct <time>: the <time datetime> sits inside
+#   <div class="field field--name-field-blog-date ...">...<time datetime="...">
+# i.e. one wrapper deeper than publications, so _PIIE_PUB_DATE_RE (which wants
+# <time> immediately after the hero block) misses it. Keying on the blog-date
+# field is also what lets us drop the CDX enumeration's junk URLs (soft-hyphen-
+# mangled slugs, JS placeholder paths, text-fragment links): those resolve live
+# to a fallback page with no field-blog-date, so the extractor returns None and
+# the caller drops them instead of stamping the 2022-05-18 migration date that
+# trafilatura's article:published_time carries on that page (ADR-029).
+_PIIE_BLOG_DATE_RE = re.compile(
+    r'field--name-field-blog-date\b.*?<time[^>]*\bdatetime="([^"]+)"',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _piie_blog_date_from_html(html: str) -> date | None:
+    """Authoritative publication date for a PIIE blog page.
+
+    Returns ``None`` when the blog-date field is absent (e.g. an enumeration
+    junk URL that resolved to a non-article fallback page) so the caller drops
+    the record rather than trusting ``article:published_time``.
+    """
+    if not html:
+        return None
+    m = _PIIE_BLOG_DATE_RE.search(html)
+    if not m:
+        return None
+    return _parse_date_flexible(m.group(1)[:10])
+
+
 _MONTH_NAME_TO_NUM = {
     "january": 1, "february": 2, "march": 3, "april": 4, "may": 5,
     "june": 6, "july": 7, "august": 8, "september": 9, "october": 10,
@@ -2909,15 +2940,17 @@ class PIIEIngestor(Ingestor):
                 continue
             seen.add(url)
 
-            # Publications carry the 2016 CMS-migration stamp in
-            # article:published_time; read the hero-banner date instead.
-            # Blogs' article:published_time is correct, so they use the
-            # default trafilatura path (ADR-029).
-            date_extractor = (
-                _piie_publication_date_from_html
-                if doc_type in ("policy_brief", "working_paper", "piie_briefing")
-                else None
-            )
+            # article:published_time is unreliable on PIIE: publications carry
+            # the 2016 CMS-migration stamp, and blog pages reached via junk
+            # enumeration URLs carry a 2022-05-18 fallback stamp. Read the page
+            # template's authoritative date element per doc type instead, and
+            # drop when it is absent (ADR-029).
+            if doc_type in ("policy_brief", "working_paper", "piie_briefing"):
+                date_extractor = _piie_publication_date_from_html
+            elif doc_type == "blog_post":
+                date_extractor = _piie_blog_date_from_html
+            else:
+                date_extractor = None
             body, fetched_title, author, page_date = _fetch_page_full(
                 url, min_words=50, getter=self._piie_get,
                 date_extractor=date_extractor,
