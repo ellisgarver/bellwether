@@ -758,6 +758,10 @@ class IMFIngestor(Ingestor):
                 time.sleep(0.5)
             log.info("IMF series=%s yielded %d articles", series_id, yielded)
 
+        # Legacy F&D articles (pre-2018) are not in the Coveo prefix index;
+        # walk the canonical /external/pubs/ft/fandd/ HTML site directly.
+        yield from self._fetch_legacy_fandd(start, end)
+
     def _fetch_build_id(self) -> str | None:
         try:
             resp = self._imf_get(
@@ -973,6 +977,108 @@ class IMFIngestor(Ingestor):
         except Exception as exc:
             log.debug("IMF HTML body %s: %s", full_url, exc)
         return None
+
+    # ------------------------------------------------------------------
+    # Legacy F&D article-level walker (ADR-014 addendum, 2026-06-05)
+    # ------------------------------------------------------------------
+    #
+    # Coveo indexes pre-2018 Finance & Development ONLY as whole-issue PDFs
+    # (en/spa/fre language variants of one /external/pubs/ft/fandd/*.pdf per
+    # issue), so the @uri="/en/publications/fandd/issues/" prefix query in
+    # _COVEO_SERIES misses every legacy F&D *article*. That produced a 16x
+    # cliff at the 2017→2018 boundary (imf_fandd 2017=5 vs 2018=81). The
+    # legacy site still serves per-article HTML at the canonical issue path
+    # below, so we walk it directly. Article-level granularity is preserved
+    # (recovering issue-level PDFs would create a volume discontinuity at the
+    # 2017/2018 seam — itself a defect). Bodies must go through _imf_get:
+    # plain stdlib requests 403s at Akamai (verified 2026-06-05).
+
+    # Legacy issues live at /external/pubs/ft/fandd/{year}/{mm}/index.htm with
+    # relative same-directory article slugs (e.g. blackden.htm). 2018+ F&D is
+    # the Next.js /en/publications/fandd/ site handled by the Coveo prefix.
+    _LEGACY_FANDD_FIRST_YEAR = 2010
+    _LEGACY_FANDD_LAST_YEAR = 2017
+    _LEGACY_FANDD_BASE = "https://www.imf.org/external/pubs/ft/fandd"
+    # Same-directory .htm hrefs only (no slash → in the issue dir), lowercase
+    # slug. Excludes index.htm in the consumer. 404s (nav pages like
+    # basics/people/picture) self-skip on fetch.
+    _LEGACY_FANDD_SLUG_RE = re.compile(
+        r'href="([a-z0-9][a-z0-9_-]*\.htm)"', re.IGNORECASE
+    )
+
+    def _fetch_legacy_fandd(self, start: date, end: date) -> Iterator[Article]:
+        lo = max(start.year, self._LEGACY_FANDD_FIRST_YEAR)
+        hi = min(end.year, self._LEGACY_FANDD_LAST_YEAR)
+        if lo > hi:
+            return
+        seen: set[str] = set()
+        yielded = 0
+        log.info("IMF legacy F&D walk years=%d..%d", lo, hi)
+        for year in range(lo, hi + 1):
+            for month in range(1, 13):
+                issue_date = date(year, month, 1)
+                if issue_date < start or issue_date > end:
+                    continue
+                issue_dir = f"{self._LEGACY_FANDD_BASE}/{year}/{month:02d}"
+                index_url = f"{issue_dir}/index.htm"
+                try:
+                    resp = self._imf_get(index_url, timeout=30.0)
+                except Exception as exc:
+                    log.debug("IMF legacy F&D index %s: %s", index_url, exc)
+                    continue
+                if resp.status_code != 200:
+                    continue
+                slugs = {
+                    m.group(1).lower()
+                    for m in self._LEGACY_FANDD_SLUG_RE.finditer(resp.text)
+                    if m.group(1).lower() != "index.htm"
+                }
+                for slug in sorted(slugs):
+                    art_url = f"{issue_dir}/{slug}"
+                    if art_url in seen:
+                        continue
+                    seen.add(art_url)
+                    try:
+                        body, title = self._fetch_legacy_fandd_body(art_url)
+                    except Exception as exc:
+                        log.debug("IMF legacy F&D body %s: %s", art_url, exc)
+                        continue
+                    if not body or len(body.split()) < 50:
+                        continue
+                    yield _make_article(
+                        source_id=self.source_id,
+                        url=art_url,
+                        published_at=issue_date.isoformat() + "T00:00:00Z",
+                        title=title or f"Finance & Development {year}/{month:02d}",
+                        body=body,
+                        author="IMF",
+                        section="imf_fandd",
+                        tier=1,
+                        document_type="imf_fandd",
+                    )
+                    yielded += 1
+                    time.sleep(0.3)
+        log.info("IMF legacy F&D yielded %d articles", yielded)
+
+    def _fetch_legacy_fandd_body(self, url: str) -> tuple[str | None, str | None]:
+        resp = self._imf_get(url, timeout=30.0)
+        if resp.status_code != 200:
+            return None, None
+        title = None
+        soup = BeautifulSoup(resp.text, "lxml")
+        if soup.title and soup.title.string:
+            title = soup.title.string.strip()
+        body = trafilatura.extract(
+            resp.text, include_comments=False, include_tables=False,
+        )
+        if body:
+            return body, title
+        for tag in soup.find_all(["nav", "footer", "script", "style", "header"]):
+            tag.decompose()
+        content = soup.find("main") or soup.find("article") or soup.find("body")
+        if content:
+            return content.get_text(separator=" ", strip=True), title
+        return None, title
 
 
 class BISIngestor(Ingestor):

@@ -777,6 +777,19 @@ Separately, the Next.js `__NEXT_DATA__` walker that ADR-013 retained as a "fully
 - Small-window run (`date(2024,9,1)` … `date(2024,10,31)`) yields 80 articles: 1 WEO, 1 GFSR, 24 F&D, 39 WP, 15 Blog, all with body word-count ≥ 50. ✓
 - WEO Oct 2024 issue specifically present in output with 254 words of executive-summary text. ✓
 
+### Addendum (2026-06-05): legacy F&D article-level walker for pre-2018 coverage
+
+**Problem.** The 2026-06-04 ADR-028 shape audit (`verify_coverage.py imf`, year × document_type pivot) surfaced a 16x cliff at the `imf_fandd` 2017→2018 boundary (2017=5 vs 2018=81). Probing Coveo for the legacy years showed the `@uri="/en/publications/fandd/issues/"` prefix query returns only whole-*issue* PDFs for pre-2018 F&D — one record per issue in each of en/spa/fre language variants, never the individual *articles*. F&D pre-2018 lived at a different, non-Next.js path that the Coveo prefix never matches, so every legacy F&D article was silently missing from the corpus.
+
+**Why not accept the issue PDFs.** Adding the whole-issue PDFs would trade one cliff for another: the corpus would jump from ~10-15 article-granularity records per issue (2018+) to 1 issue-granularity record per issue (pre-2018), creating a volume discontinuity at the 2017/2018 seam. Per the corpus-correctness principle (no documented limitations), the fix must preserve article-level granularity across the scheme change.
+
+**Decision.** Add `IMFIngestor._fetch_legacy_fandd(start, end)`, wired into `fetch()` after the Coveo series loop. For years in `[max(start.year, 2010), min(end.year, 2017)]` it walks the canonical legacy issue path `https://www.imf.org/external/pubs/ft/fandd/{year}/{mm}/index.htm` (all 12 months tried; non-issue months 404 and self-skip), regex-extracts same-directory `[a-z0-9_-]+\.htm` article slugs (excluding `index.htm`), fetches each article body via `_imf_get` (curl_cffi — verified 2026-06-05 that plain stdlib `requests` 403s at Akamai on the legacy path too), and dates each article from the **issue path** (year/month, first-of-month) — authoritative issue date, never a slug or snapshot guess. The ≥50-word floor applies; nav pages (basics/people/picture) either 404 or fall under the floor and self-drop. Yielded as `document_type="imf_fandd"`, identical to the 2018+ Coveo path, so content-dedup collapses any boundary overlap. 2018+ remains the Coveo `fandd` prefix; the walker is hard-gated to ≤2017 so the two paths do not double-walk.
+
+**Verification.**
+- Slug regex against the Wayback copy of `2013/06/index.htm` extracts 19 candidate slugs (real articles + nav pages); nav pages self-drop on 404/word-floor. ✓
+- Live legacy article fetch returns 403 to plain `curl` (Akamai), confirming the curl_cffi requirement. ✓
+- Post-re-ingest check (pending): `verify_coverage.py imf` must show the `imf_fandd` 2017→2018 cliff gone (legacy years populated to plausible ~40-60 articles/year).
+
 ---
 
 ## ADR-015: JEL-anchored canonical filter; eliminate inline Stage 1 filters
