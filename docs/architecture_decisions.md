@@ -1711,6 +1711,23 @@ All changes in two files:
 
 No changes to `_sub_ingestors`, the pipeline, the config, or the test contracts (the existing `cbo_2023_wayback` case validates the rewrite unchanged).
 
+### Addendum (2026-06-06): fetch the LATEST snapshot per publication, not the earliest
+
+The ADR-023 body-fetch used `collapse=urlkey` on the CDX query, which returns the **earliest** snapshot per URL, and fetched the body/title/date from that capture. For pre-~2013 publications the earliest capture is a degraded early-migration **stub**: a truncated body, a junk `"CBO"` `<title>`, and a less-accurate page date.
+
+**Trigger.** A 2010 coverage audit showed CBO 2010 at only 28 records, almost all titled `"CBO"`, January-clustered, with bodies of ~60-130 words — implausibly thin against 2011's 127 records. Probing `pub/41813` across its snapshot history isolated the cause:
+
+| snapshot | body words | title | page date |
+|---|---|---|---|
+| 2012-04-28 (earliest) | 22 | `CBO` | 2010-01-01 |
+| 2019-03-04 (later) | 162 | `Policies for Increasing Economic Growth…` | 2010-01-14 |
+
+The earliest capture predates CBO's site re-platforming, so Wayback holds only a thin migration placeholder. The page's own metadata carries the true publication date regardless of snapshot age, so a later capture is **strictly higher-fidelity** for body, title, and date — and some stubs had no extractable date at all and were being dropped entirely (suppressing the count).
+
+**Fix.** `CBOIngestor.fetch()` now fetches the **latest** snapshot for body/title/date via the far-future-timestamp trick — `web/29991231000000id_/{url}` 302-redirects to the most recent capture — with a fallback to the earliest `ts` only when the latest is unusable (e.g. the page was later removed and the latest capture is a 404/redirect stub). The earliest `ts` is retained solely as the cheap crawl-date pre-filter (a publication's first crawl is at/after its publication, so an out-of-window earliest snapshot rules the publication out before any fetch). The strict page-date window gate and the ≥50-word floor (ADR-022) are unchanged; the snapshot timestamp is still never used as the publication date.
+
+**Scope.** One method body in `src/mnd/ingestion/institutional.py` (`CBOIngestor.fetch`) plus this addendum. No CDX-query, config, or test-contract change. Verification: re-run `SOURCES="cbo"` ingest, then `scripts/verify_coverage.py cbo` — expect the 2010 count to rise and the per-year median body word-count to rise off the ~110-word stub floor.
+
 ---
 
 ## ADR-024: Repo cleanse + single-source-of-truth doc governance + document-and-push-per-task workflow
