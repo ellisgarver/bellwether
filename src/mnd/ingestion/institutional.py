@@ -2088,10 +2088,29 @@ class CBOIngestor(Ingestor):
                 if snap_date is None or snap_date < start or snap_date > window_end_with_lag:
                     continue
                 original_url = f"https://www.cbo.gov/publication/{pid}"
-                snap_url = self._SNAP_PREFIX.format(ts=ts, url=original_url)
-                body, fetched_title, _author, page_date = _fetch_page_full(
-                    snap_url, min_words=50, getter=self._wayback_get,
+                # Fetch the LATEST snapshot, not the earliest. For pre-~2013
+                # content the earliest capture (which `collapse=urlkey` returns
+                # and `ts` points at) is a degraded early-migration stub: a
+                # truncated body, a junk "CBO" title, and a less-accurate date
+                # (e.g. pub/41813 earliest=22w/"CBO"/2010-01-01 vs latest=
+                # 162w/real-title/2010-01-14). The page's own metadata carries
+                # the true publication date regardless of snapshot age, so a
+                # later capture is strictly higher-fidelity. `ts` is retained
+                # only as the crawl-date pre-filter above. A far-future
+                # timestamp 302-redirects to the most recent capture.
+                latest_snap = self._SNAP_PREFIX.format(
+                    ts="29991231000000", url=original_url,
                 )
+                body, fetched_title, _author, page_date = _fetch_page_full(
+                    latest_snap, min_words=50, getter=self._wayback_get,
+                )
+                # Fall back to the earliest capture only if the latest is
+                # unusable (page later removed → latest is a 404/redirect stub).
+                if not body or page_date is None:
+                    snap_url = self._SNAP_PREFIX.format(ts=ts, url=original_url)
+                    body, fetched_title, _author, page_date = _fetch_page_full(
+                        snap_url, min_words=50, getter=self._wayback_get,
+                    )
                 time.sleep(0.3)
                 # Strict date policy (no Wayback-timestamp fallback): the
                 # snapshot timestamp is a crawl date, not the publication
