@@ -42,7 +42,7 @@ clean:  ## Remove caches and build artifacts
 
 # ----------------------------------------------------------------------------
 # Pipeline targets — local entry points. Full historical runs go on RCC via
-# scripts/rcc/submit_full_pipeline.sh; these targets are for spot-runs.
+# scripts/rcc/submit_parallel_ingest.sh; these targets are for spot-runs.
 # ----------------------------------------------------------------------------
 
 ingest:  ## Run institutional ingest for a date range. Use START=YYYY-MM-DD END=YYYY-MM-DD

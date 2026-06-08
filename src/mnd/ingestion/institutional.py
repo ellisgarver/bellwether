@@ -33,11 +33,9 @@ dropped from the embedded corpus.
 
 Removed (ADR-020):
   CFRIngestor — basis-set redundancy with PIIE on the international-policy
-                dimension. ~80% of CFR output is foreign-policy non-macro;
-                the macro subset overlaps PIIE almost completely. Class
-                retained in this file (unwired from InstitutionalIngestor)
-                so existing data files can be re-read for QA; not run
-                in any new ingest.
+                dimension (~80% of CFR output is foreign-policy non-macro,
+                and the macro subset overlaps PIIE). Class deleted in the
+                second repo cleanse.
 
 Restored (ADR-020):
   NBERIngestor — academic primary-work dimension. Direct URL enumeration
@@ -112,16 +110,6 @@ def _get(url: str, *, timeout=30.0) -> requests.Response:
     resp = requests.get(url, headers=_HEADERS, timeout=timeout)
     resp.raise_for_status()
     return resp
-
-
-def _parse_rss(feed_url: str) -> list[feedparser.FeedParserDict]:
-    """Fetch and parse an RSS/Atom feed. Returns list of entries."""
-    try:
-        feed = feedparser.parse(feed_url, request_headers={"User-Agent": USER_AGENT})
-        return feed.entries
-    except Exception as exc:
-        log.warning("RSS parse failed for %s: %s", feed_url, exc)
-        return []
 
 
 def _extract_body(url: str, *, min_words: int = 50) -> str | None:
@@ -3353,169 +3341,6 @@ class PIIEIngestor(Ingestor):
         raise RuntimeError(
             f"PIIE CDX {cdx_url}: exhausted {attempts} attempts ({last})"
         )
-
-
-class CFRIngestor(Ingestor):
-    """Council on Foreign Relations: sitemap-based historical retrieval.
-
-    CFR publishes reports, backgrounders, and expert briefs on global macro-
-    financial topics: dollar dynamics, sovereign debt, global monetary policy,
-    trade, and geopolitical-financial intersections. Tier 2 per ADR-010.
-
-    Pre-fix bug (2026-05-13 dry run, 0 articles): the RSS feed at
-    cfr.org/feed exposes only the most recent ~24 items, giving zero
-    coverage for any historical window. Fixed by switching to sitemap-based
-    enumeration of /articles, /backgrounders, /reports — each sitemap is
-    public and lists every URL with a `<lastmod>` date.
-
-    Coverage: sitemaps return ~22,000 articles + ~1,000 backgrounders +
-    ~700 reports as of 2026-05. URL-slug pre-filter on macro keywords
-    avoids fetching every irrelevant article. RSS is retained as a final
-    fallback.
-    """
-
-    source_id = "cfr"
-
-    _SITEMAP_INDEX = "https://www.cfr.org/sitemap.xml"
-    # CFR-content sitemap sections we ingest. Skipping experts/, events/,
-    # podcasts/, custom-links/, interactive/, explainer-videos/ — these are
-    # not the long-form policy text we embed.
-    _RELEVANT_SECTIONS = ("articles", "backgrounders", "reports")
-    _RSS_URL = "https://www.cfr.org/feed"
-
-    def fetch(self, start: date, end: date) -> Iterator[Article]:
-        seen: set[str] = set()
-        candidates = list(self._enumerate_sitemap_candidates(start, end))
-        log.info("CFR: sitemap enumeration returned %d in-window candidates "
-                 "(structural section filter only; no topic pre-filter)",
-                 len(candidates))
-        yielded = 0
-        for url, pub_date in candidates:
-            if url in seen:
-                continue
-            seen.add(url)
-            body, fetched_title, author, page_date = _fetch_page_full(
-                url, min_words=50
-            )
-            published = page_date or pub_date
-            if not published or published < start or published > end:
-                continue
-            title = fetched_title or ""
-            # ADR-016: no Stage 1 topic filter — content-neutral ingest.
-            if not body or len(body.split()) < 50:
-                continue
-            yield _make_article(
-                source_id=self.source_id,
-                url=url,
-                published_at=published.isoformat() + "T00:00:00Z",
-                title=title or "CFR publication",
-                body=body,
-                author=author,
-                section="cfr_publication",
-                tier=2,
-                document_type="cfr_brief",
-            )
-            yielded += 1
-            time.sleep(0.5)
-
-        if yielded == 0:
-            log.info("CFR: 0 articles from sitemap path — falling back to RSS")
-            yield from self._fetch_rss(start, end, seen)
-
-    def _enumerate_sitemap_candidates(
-        self, start: date, end: date
-    ) -> Iterator[tuple[str, date | None]]:
-        """Walk the CFR sitemap index, yielding (url, lastmod) for URLs in
-        relevant sections with a macro-keyword in the slug and lastmod in
-        the requested window.
-        """
-        try:
-            resp = requests.get(self._SITEMAP_INDEX, headers=_HEADERS, timeout=30.0)
-            resp.raise_for_status()
-        except Exception as exc:
-            log.warning("CFR sitemap index fetch failed: %s", exc)
-            return
-
-        try:
-            index_xml = re.sub(r' xmlns="[^"]+"', "", resp.text, count=1)
-            root = ET.fromstring(index_xml)
-        except ET.ParseError as exc:
-            log.warning("CFR sitemap index parse failed: %s", exc)
-            return
-
-        sub_sitemaps = [sm.findtext("loc", "").strip() for sm in root.findall("sitemap")]
-        relevant = [
-            s for s in sub_sitemaps
-            if any(f"/{section}/" in s for section in self._RELEVANT_SECTIONS)
-        ]
-        log.info("CFR sitemap index lists %d sub-sitemaps; %d relevant",
-                 len(sub_sitemaps), len(relevant))
-
-        for sm_url in relevant:
-            try:
-                sm_resp = requests.get(sm_url, headers=_HEADERS, timeout=30.0)
-                sm_resp.raise_for_status()
-            except Exception as exc:
-                log.debug("CFR sub-sitemap %s: %s", sm_url, exc)
-                continue
-            try:
-                sm_xml = re.sub(r' xmlns="[^"]+"', "", sm_resp.text, count=1)
-                sm_root = ET.fromstring(sm_xml)
-            except ET.ParseError as exc:
-                log.debug("CFR sub-sitemap %s parse: %s", sm_url, exc)
-                continue
-            section_count = 0
-            section_yielded = 0
-            for url_el in sm_root.findall("url"):
-                section_count += 1
-                loc = (url_el.findtext("loc") or "").strip()
-                if not loc:
-                    continue
-                # NOTE: CFR's sitemap lastmod is the sitemap-build date (all
-                # 2026-XX-XX as of 2026-05) — not the publication date. We
-                # drop the lastmod window check and rely on the page-level
-                # date extracted by _fetch_page_full to filter into window.
-                # ADR-016: no URL-slug topic pre-filter either — section-level
-                # filter (_RELEVANT_SECTIONS) is the only structural gate;
-                # topic relevance is decided at Stage 2 over title+body.
-                section_yielded += 1
-                yield loc, None
-            log.info("CFR sitemap %s: %d urls in section (no topic pre-filter)",
-                     sm_url.rsplit("/", 2)[-2], section_count)
-            time.sleep(0.3)
-
-    def _fetch_rss(
-        self, start: date, end: date, seen: set[str]
-    ) -> Iterator[Article]:
-        for entry in _parse_rss(self._RSS_URL):
-            pub_date = _entry_date(entry)
-            if not pub_date or pub_date < start or pub_date > end:
-                continue
-            url = entry.get("link", "")
-            if not url or url in seen:
-                continue
-            title = entry.get("title", "")
-            # ADR-016: no Stage 1 topic filter.
-            seen.add(url)
-
-            body = _extract_body(url) or BeautifulSoup(
-                entry.get("summary", ""), "lxml"
-            ).get_text(strip=True)
-            if not body or len(body.split()) < 50:
-                continue
-
-            yield _make_article(
-                source_id=self.source_id,
-                url=url,
-                published_at=pub_date.isoformat() + "T00:00:00Z",
-                title=title,
-                body=body,
-                author=entry.get("author"),
-                section="cfr_publication",
-                tier=2,
-                document_type="cfr_brief",
-            )
-            time.sleep(1.0)
 
 
 # ---------------------------------------------------------------------------

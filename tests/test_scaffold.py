@@ -164,14 +164,6 @@ def test_ingestors_importable():
     assert a.tier == 1
 
 
-def test_cfr_ingestor_importable():
-    """ADR-010: CFR reinstated as Tier 2 source."""
-    from mnd.ingestion.institutional import CFRIngestor
-    from mnd.ingestion.base import Ingestor
-    assert issubclass(CFRIngestor, Ingestor)
-    assert CFRIngestor.source_id == "cfr"
-
-
 def test_mediacloud_detector_importable():
     """ADR-010: Media Cloud detection layer added."""
     from mnd.detection.mediacloud import MediaCloudDetector

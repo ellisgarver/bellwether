@@ -1,12 +1,20 @@
 # Macro Narrative Dynamics — Full Project Specification
 
-> ## ⚠️ Document status (as of 2026-05-19)
+> ## ⚠️ Document status — historical planning artifact
 >
-> **The canonical methodology reference is now `docs/METHODOLOGY.md`** — a plain-English walkthrough of every pipeline stage and the field-accepted citation behind each methodological choice.
+> This is the **original project specification**, kept for scope, anchor
+> narratives, phase structure, and project framing. It is **not** the live
+> reference for methodology or corpus composition. When this document disagrees
+> with the live docs, the live docs win:
+> - **`docs/METHODOLOGY.md`** — canonical methodology (every stage + its citation).
+> - **`CLAUDE.md`** + **`docs/architecture_decisions.md` ADR-020** — canonical
+>   corpus definition: the source list, tiers, and pre-clustering filter described
+>   in this spec's sections 7-8 are **superseded by the ADR-020 basis set**
+>   (12 sub-ingestors → 8 dimensions; CFR/AP/RavenPack removed; no pre-cluster
+>   topic filter — scope decided post-cluster by the JEL classifier).
 >
-> This spec remains the operational reference for **scope, source list, anchor narratives, phase structure, and project framing** (sections 1-2, 4-5, 7-8). The methodology subsections of section 3 are PARTIALLY SUPERSEDED by subsequent ADRs (012, 015, 016, 017, 018, 019). Where this document and METHODOLOGY.md disagree on methodology, METHODOLOGY.md is canonical.
->
-> Specifically superseded:
+> The methodology subsections of section 3 are also PARTIALLY SUPERSEDED by ADRs
+> 012/015/016/017/018/019. Specifically superseded:
 > - Stage 3 Embedding — the **comparator (mpnet) look-ahead sensitivity check** is removed (ADR-019). The comparator architecture is a sensitivity-check apparatus that the new methodology principle (anchored-or-removed) excludes. Qwen3-Embedding-0.6B is the sole embedder.
 > - Stage 3 Embedding — chunking is **512 Qwen3 tokens with ~64-token overlap** (BEIR convention; Thakur et al. 2021), not 600 cl100k tokens with 100-token overlap. The chunker uses Qwen3's own SentencePiece tokenizer.
 > - Stage 4 Clustering — **single granularity** (BERTopic library-default HDBSCAN output, Grootendorst 2022). The three-tier "fine/medium/coarse" hierarchy with silhouette thresholds 0.30/0.45/0.60 is removed (ADR-019).

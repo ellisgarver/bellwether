@@ -12,7 +12,7 @@
 #                              ▼
 #         filter-pre-embed → filter → embed (primary) → cluster
 #
-# Why parallel instead of the single chained composite (submit_full_pipeline.sh):
+# Why parallel instead of a single chained composite job:
 # the composite runs all 12 sources sequentially in one job, so a long pole
 # (CBO Wayback enumeration, NBER ID walk, Brookings ~44k articles) can starve
 # the rest and risk the wall-clock limit. Here each source gets its own job and
@@ -83,7 +83,7 @@ echo "Started:  $(date)"
 echo "=========================================="
 
 # ---------------------------------------------------------------------------
-# 1. Clear / archive prior output (mirrors submit_full_pipeline.sh)
+# 1. Clear / archive prior output
 # ---------------------------------------------------------------------------
 if [[ "$SKIP_CLEANUP" == "1" ]]; then
     echo ">> SKIP_CLEANUP=1 — leaving prior data in place"
