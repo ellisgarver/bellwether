@@ -2055,11 +2055,6 @@ class CBOIngestor(Ingestor):
     # CBO node ids below this are pre-2010 back-catalog / non-publication
     # nodes, out of the 2010+ corpus scope.
     _MIN_PUBLICATION_ID = 40000
-    # First-snapshot discovery lag: Wayback usually crawls a new cbo.gov URL
-    # within weeks, occasionally up to ~90 days. We pass candidates whose
-    # earliest snapshot is in [start, end + lag] to the body-fetch stage;
-    # the authoritative page-date filter is the real window gate.
-    _WAYBACK_DISCOVERY_LAG_DAYS = 90
 
     _PUBLICATION_RE = re.compile(r"/publication/(\d+)\b")
 
@@ -2070,9 +2065,6 @@ class CBOIngestor(Ingestor):
             "(%d 100-id blocks)",
             id_lo, id_hi, start, end, (id_hi // 100) - (id_lo // 100) + 1,
         )
-        window_end_with_lag = min(
-            end + timedelta(days=self._WAYBACK_DISCOVERY_LAG_DAYS), date.today()
-        )
         seen_pids: set[int] = set()
         yielded = 0
         for prefix in range(id_lo // 100, id_hi // 100 + 1):
@@ -2081,10 +2073,17 @@ class CBOIngestor(Ingestor):
                     continue
                 seen_pids.add(pid)
                 snap_date = self._ts_to_date(earliest_ts)
-                # Cheap pre-filter: earliest snapshot ≈ first crawl, which is
-                # at or after publication. If it falls outside the window
-                # (+lag) the publication can't be in-window — skip the fetch.
-                if snap_date is None or snap_date < start or snap_date > window_end_with_lag:
+                # Cheap lower-bound pre-filter ONLY. A snapshot can never
+                # predate publication, so an earliest capture before the
+                # window start proves the publication is pre-window — skip it.
+                # We must NOT impose an upper bound on the snapshot date: CBO's
+                # /publication/{id} URLs only came into existence with the 2012
+                # site migration, so the earliest archived capture of a
+                # 2010-dated publication is ~2012 (verified: the entire 415xx–
+                # 428xx band first appears 2012-04+). Crawl date lags
+                # publication arbitrarily for migrated content; the
+                # authoritative window gate is the post-fetch page_date below.
+                if snap_date is not None and snap_date < start:
                     continue
                 original_url = f"https://www.cbo.gov/publication/{pid}"
                 # Fetch the LATEST *real* capture (max ts from the block query),
