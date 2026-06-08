@@ -70,14 +70,20 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree as ET
 
 import feedparser
 import requests
 import trafilatura
 from bs4 import BeautifulSoup
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random_exponential
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_random_exponential,
+)
 
 from mnd.ingestion.base import Article, Ingestor, _now_utc_iso, _stable_article_id
 from mnd.ingestion.fed import FederalReserveIngestor
@@ -609,8 +615,18 @@ def _wp_post_to_article(
     start: date,
     end: date,
     fetch_full_body: bool = True,
+    expected_host: str | None = None,
 ) -> Article | None:
-    """Convert a WP REST API post dict to an Article. Returns None if out of range."""
+    """Convert a WP REST API post dict to an Article. Returns None if out of range.
+
+    ``expected_host`` is the WP source's own canonical host (e.g.
+    ``www.brookings.edu``). When set, a body-fetch failure on a *cross-domain*
+    ``link`` (a syndicated post whose canonical URL lives on a third-party
+    domain we don't control) is treated as one genuinely-absent record — the
+    article is kept on its excerpt rather than raising. A failure on the
+    source's OWN host still raises (ADR-030: a real outage must fail the
+    source, never silently truncate). When unset, every failure raises.
+    """
     post_date_str = post.get("date", "")
     try:
         pub_date = datetime.fromisoformat(post_date_str.replace("Z", "+00:00")).date()
@@ -643,7 +659,19 @@ def _wp_post_to_article(
     if api_content and len(api_content.split()) >= 50:
         body = api_content
     elif fetch_full_body:
-        body, fetched_title, author, _ = _fetch_page_full(url, min_words=50)
+        fetched_title = ""
+        try:
+            body, fetched_title, author, _ = _fetch_page_full(url, min_words=50)
+        except (RetryError, RuntimeError, OSError, requests.exceptions.RequestException):
+            host = urlparse(url).netloc.lower()
+            if expected_host and host and host != expected_host.lower():
+                log.warning(
+                    "Cross-domain body fetch failed (%s ≠ %s); keeping %s on excerpt",
+                    host, expected_host, url,
+                )
+                body, author = excerpt, None
+            else:
+                raise
         if not body or len(body.split()) < 50:
             body = excerpt
         if fetched_title and not title:
@@ -1520,6 +1548,7 @@ class FedRegionalIngestor(Ingestor):
                 start=start,
                 end=end,
                 fetch_full_body=True,
+                expected_host=urlparse(base).netloc,
             )
             if article:
                 yield article
@@ -1739,6 +1768,7 @@ class FedRegionalIngestor(Ingestor):
                 start=start,
                 end=end,
                 fetch_full_body=True,
+                expected_host=urlparse(base).netloc,
             )
             if article:
                 yield article
@@ -3053,6 +3083,7 @@ class BrookingsIngestor(Ingestor):
                 start=start,
                 end=end,
                 fetch_full_body=True,
+                expected_host=urlparse(self._API_BASE).netloc,
             )
             if article:
                 yield article

@@ -2267,6 +2267,24 @@ fetch+parse (~16 born-digital reports — a fetch/parse failure raises rather
 than dropping a whole year), and the CEA package-list safety bail (raises on
 contract drift, matching the Congressional 1000-page bound).
 
+**Per-record refinement — cross-domain body fetches (2026-06-08).** The third
+integration battery surfaced the contract's one over-aggressive edge: a
+WordPress source's `link` is normally same-domain, but a syndicated post can
+carry a *canonical link on a third-party domain* (the trigger case: a Brookings
+`article` whose link was `www.chinafile.com/...`, presenting a TLS cert invalid
+for that host). The finding-2 raise in `_fetch_page_full` then propagated up and
+failed the *entire* Brookings source over one unfetchable cross-domain record.
+That is genuine absence of a single record on a host we do not control — not a
+Brookings outage — so failing the source is wrong. `_wp_post_to_article` now
+takes `expected_host` (the WP source's own canonical host); a body-fetch failure
+(`RetryError`/`RuntimeError`/`OSError`/`requests` error) on a link whose host
+differs is logged and the record kept on its excerpt, while a failure on the
+source's **own** host still raises. This preserves the no-silent-truncation
+contract: a real source outage hits same-domain pages and still fails loud; only
+scattered third-party syndication links degrade to excerpt, which cannot truncate
+a source's tail. Threaded to all three WP-REST callers (Brookings, Liberty Street
+Economics, FRBSF).
+
 ### Consequences
 
 - A persistent failure anywhere in the basis set now aborts the run loudly
