@@ -2259,6 +2259,18 @@ the result is non-retryable or attempts are exhausted. This gives the curl_cffi
 paths the same transient cushion as `_get`. curl_cffi accepts the same tuple
 timeout form as `requests`.
 
+The same gap existed on CBO's Wayback **snapshot** getter `_wayback_get`
+(added 2026-06-08): the CDX *enumeration* path (`_cdx_block`) already retried
+429/5xx + network errors 7× with backoff, but the body-snapshot getter was a
+bare `requests.get`, so a single Wayback flap on the thousands-of-snapshots
+walk would raise through `_fetch_page_full` and fail the whole CBO source.
+Wayback resolves to a single edge IP (no pool, no IPv6) that refuses/resets
+connections during recovery and under burst — observed live while clearing
+the pre-launch gate. `_wayback_get` now carries the identical 7-attempt
+backoff (retry on 429/5xx + raw network errors; genuine 4xx returns for the
+caller to skip; exhaustion raises), giving the snapshot path the same
+soundness as the CDX path.
+
 **Additional same-class boundaries hardened (found in review).** Beyond the
 seven audited findings, the same two defect classes were closed wherever else
 they appeared: the Treasury Secretary-remarks paginated listing (404 = end of
