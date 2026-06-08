@@ -97,6 +97,61 @@ def _is_retryable(exc: Exception) -> bool:
     return True
 
 
+def _normalize_timeout(kwargs: dict) -> None:
+    """In-place: coerce a scalar ``timeout`` kwarg to a (connect, read) tuple.
+
+    A single-float timeout only bounds total time once bytes start flowing; a
+    half-open TCP connection (SYN sent, no SYN-ACK) can stall far longer than
+    the nominal value. Splitting into (connect, read) — matching ``_get`` and
+    ``fed.py`` — caps the connect phase at 10s so a stalled handshake fails
+    fast. curl_cffi accepts the same tuple form as ``requests``.
+    """
+    t = kwargs.get("timeout")
+    if isinstance(t, (int, float)):
+        kwargs["timeout"] = (10.0, float(t))
+
+
+def _cffi_get_retry(do_get, url: str):
+    """Retry a curl_cffi-style GET on transient failures and return the response.
+
+    The impersonating getters (``_imf_get``/``_atlanta_get``/``_cepr_get``/
+    ``_piie_get``) deliberately do NOT call ``raise_for_status`` — callers
+    classify the status themselves. That means a 5xx arrives as a normal
+    response, not an exception, so ``_get``'s tenacity decorator can't see it.
+    This wrapper gives those getters the same transient-failure cushion ``_get``
+    has: it retries on network errors and on 429 / 5xx *status codes* with
+    exponential backoff, and only returns once the result is non-retryable
+    (any <500 status, which the caller then classifies as success vs 4xx-skip)
+    or the attempts are exhausted. Without this cushion the fail-loud raises on
+    these paths would fire on a single transient blip and nuke a multi-hour
+    source; with it, only a *persistent* failure fails the source.
+
+    ``do_get`` is a zero-arg callable performing one GET and returning a
+    response. A network exception on the final attempt propagates (systemic);
+    a 5xx/429 on the final attempt is returned so the caller's own status
+    classification raises with a precise message.
+    """
+    backoff = 1.0
+    for attempt in range(5):
+        last = attempt == 4
+        try:
+            resp = do_get()
+        except Exception as exc:
+            if last:
+                raise
+            log.debug("cffi GET %s attempt %d failed: %s", url, attempt + 1, exc)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+            continue
+        status = getattr(resp, "status_code", 200)
+        if not last and (status == 429 or status >= 500):
+            log.debug("cffi GET %s attempt %d → HTTP %d", url, attempt + 1, status)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+            continue
+        return resp
+
+
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_random_exponential(multiplier=1, max=30),
@@ -113,28 +168,38 @@ def _get(url: str, *, timeout=30.0) -> requests.Response:
 
 
 def _extract_body(url: str, *, min_words: int = 50) -> str | None:
-    """Fetch URL and extract article text with trafilatura. Returns None on failure."""
+    """Fetch URL and extract article text with trafilatura.
+
+    Returns None for a genuine absence (HTTP 4xx) or a real-but-too-short page.
+    A transient/systemic fetch failure (HTTP 5xx surviving ``_get``'s retries, a
+    connection error, or a timeout) RAISES instead of returning None, so it
+    can't masquerade as an empty article and silently under-capture (finding #2).
+    """
     try:
         resp = _get(url, timeout=30.0)
-        text = trafilatura.extract(
-            resp.text,
-            include_comments=False,
-            include_tables=False,
-            no_fallback=False,
-        )
-        if text and len(text.split()) >= min_words:
+    except requests.exceptions.HTTPError as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status is not None and 400 <= status < 500:
+            log.debug("Body fetch %s → HTTP %s; genuine absence", url, status)
+            return None
+        raise
+    text = trafilatura.extract(
+        resp.text,
+        include_comments=False,
+        include_tables=False,
+        no_fallback=False,
+    )
+    if text and len(text.split()) >= min_words:
+        return text
+    # Fallback: BeautifulSoup paragraph extraction
+    soup = BeautifulSoup(resp.text, "lxml")
+    for tag in soup.find_all(["nav", "footer", "script", "style", "header"]):
+        tag.decompose()
+    content = soup.find("main") or soup.find("article") or soup.find("body")
+    if content:
+        text = content.get_text(separator=" ", strip=True)
+        if len(text.split()) >= min_words:
             return text
-        # Fallback: BeautifulSoup paragraph extraction
-        soup = BeautifulSoup(resp.text, "lxml")
-        for tag in soup.find_all(["nav", "footer", "script", "style", "header"]):
-            tag.decompose()
-        content = soup.find("main") or soup.find("article") or soup.find("body")
-        if content:
-            text = content.get_text(separator=" ", strip=True)
-            if len(text.split()) >= min_words:
-                return text
-    except Exception as exc:
-        log.debug("Body extraction failed for %s: %s", url, exc)
     return None
 
 
@@ -412,13 +477,37 @@ def _fetch_page_full(
 
     ``date_extractor`` is forwarded to ``_extract_from_html`` as the
     authoritative source-specific date reader (see that docstring).
+
+    Fetch-failure vs. empty-page (the masquerade): a *genuine absence* — HTTP
+    4xx (page gone/forbidden) — returns the empty tuple so the caller skips the
+    candidate, indistinguishable from a legitimate <min_words drop. But a
+    *transient/systemic* failure — HTTP 5xx surviving the getter's retries, or a
+    connection/timeout error — RAISES, so it can never masquerade as an empty
+    article and silently under-capture (the failure mode the project forbids).
+    The retry-decorated ``_get`` already absorbs blips; reaching here means the
+    failure persisted, which is the right signal to fail the source loudly.
     """
     fetch = getter if getter is not None else _get
     try:
         resp = fetch(url, timeout=30.0)
-    except Exception as exc:
-        log.debug("Fetch failed %s: %s", url, exc)
-        return "", "", None, None
+    except requests.exceptions.HTTPError as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status is not None and 400 <= status < 500:
+            log.debug("Fetch %s → HTTP %s; genuine absence, skipping", url, status)
+            return "", "", None, None
+        raise
+    # Getters behind bot-protection (curl_cffi impersonators) do NOT call
+    # raise_for_status — they return the response at any status. Classify it
+    # here so a 5xx error page can't be parsed into a short body and dropped
+    # as if it were an empty article.
+    status = getattr(resp, "status_code", 200)
+    if status >= 400:
+        if status < 500:
+            log.debug("Fetch %s → HTTP %s; genuine absence, skipping", url, status)
+            return "", "", None, None
+        raise RuntimeError(
+            f"Fetch {url} → HTTP {status} (server error; refusing to mask as empty)"
+        )
     return _extract_from_html(
         resp.text, min_words=min_words, date_extractor=date_extractor,
     )
@@ -664,17 +753,18 @@ class IMFIngestor(Ingestor):
         will reliably 403 — this is intentional so the failure surfaces loudly
         rather than silently degrading. See ADR-014 / requirements.txt.
         """
+        _normalize_timeout(kwargs)
         try:
             from curl_cffi import requests as cffi_requests
             kwargs.setdefault("impersonate", "chrome131")
             kwargs.setdefault("headers", cls._IMF_HEADERS)
-            return cffi_requests.get(url, **kwargs)
+            return _cffi_get_retry(lambda: cffi_requests.get(url, **kwargs), url)
         except ImportError:
             log.error(
                 "curl_cffi not installed; IMF fetches will 403. "
                 "Install with `pip install curl_cffi` (see requirements.txt / ADR-014)."
             )
-            return requests.get(url, **kwargs)
+            return _cffi_get_retry(lambda: requests.get(url, **kwargs), url)
 
     # ------------------------------------------------------------------
     # Coveo Search API — listing path (ADR-014, 2026-05-17)
@@ -722,13 +812,9 @@ class IMFIngestor(Ingestor):
                 url = hit["url"]
                 pub_date = hit["date"]
                 title = hit["title"]
-                try:
-                    body = self._fetch_publication_body(
-                        url, build_id, self._IMF_HEADERS
-                    )
-                except Exception as exc:
-                    log.debug("IMF body fetch %s: %s", url, exc)
-                    body = None
+                body = self._fetch_publication_body(
+                    url, build_id, self._IMF_HEADERS
+                )
                 if not body or len(body.split()) < 50:
                     continue
                 yield _make_article(
@@ -771,17 +857,12 @@ class IMFIngestor(Ingestor):
         self, url_prefix: str, start: date, end: date,
     ) -> Iterator[dict]:
         resp = self._coveo_post(url_prefix, start, end, first=0, num=100)
-        if resp.status_code != 200:
-            log.warning(
-                "IMF Coveo HTTP %d for %s [%s..%s]: %s",
-                resp.status_code, url_prefix, start, end, resp.text[:300],
-            )
-            return
         try:
             j = resp.json()
         except Exception as exc:
-            log.warning("IMF Coveo JSON parse for %s: %s", url_prefix, exc)
-            return
+            raise RuntimeError(
+                f"IMF Coveo JSON parse for {url_prefix} [{start}..{end}]: {exc}"
+            ) from exc
 
         total = j.get("totalCount", 0)
         if total == 0:
@@ -804,17 +885,12 @@ class IMFIngestor(Ingestor):
             resp = self._coveo_post(
                 url_prefix, start, end, first=first, num=page_size,
             )
-            if resp.status_code != 200:
-                log.warning(
-                    "IMF Coveo page first=%d HTTP %d for %s",
-                    first, resp.status_code, url_prefix,
-                )
-                break
             try:
                 j = resp.json()
             except Exception as exc:
-                log.warning("IMF Coveo page first=%d JSON parse: %s", first, exc)
-                break
+                raise RuntimeError(
+                    f"IMF Coveo page first={first} JSON parse for {url_prefix}: {exc}"
+                ) from exc
             results = j.get("results", [])
             if not results:
                 break
@@ -850,21 +926,52 @@ class IMFIngestor(Ingestor):
         }
         try:
             from curl_cffi import requests as cffi_requests
-            return cffi_requests.post(
-                endpoint,
-                impersonate="chrome131",
-                json=body,
-                headers=headers,
-                timeout=30.0,
-            )
+
+            def _post():
+                return cffi_requests.post(
+                    endpoint, impersonate="chrome131", json=body,
+                    headers=headers, timeout=(10.0, 30.0),
+                )
         except ImportError:
             log.error(
                 "curl_cffi not installed; Coveo POST will likely 401 / 403. "
                 "Install with `pip install curl_cffi==0.15.0` (see requirements.txt)."
             )
-            return requests.post(
-                endpoint, json=body, headers=headers, timeout=30.0,
+
+            def _post():
+                return requests.post(
+                    endpoint, json=body, headers=headers, timeout=(10.0, 30.0),
+                )
+
+        # Fail-loud retry: a transient 429/5xx/network error is retried with
+        # backoff; a non-retryable HTTP status or exhausted retries RAISES so the
+        # caller cannot silently truncate a series (the prior code returned the
+        # bad response and the caller did `return`/`break`, dropping the tail).
+        backoff = 2.0
+        last_err: str | None = None
+        for _attempt in range(5):
+            try:
+                resp = _post()
+            except Exception as exc:
+                last_err = str(exc)
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            if resp.status_code == 200:
+                return resp
+            if resp.status_code == 429 or resp.status_code >= 500:
+                last_err = f"HTTP {resp.status_code}"
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            raise RuntimeError(
+                f"IMF Coveo POST {url_prefix} [{start}..{end}] first={first}: "
+                f"HTTP {resp.status_code}: {resp.text[:300]}"
             )
+        raise RuntimeError(
+            f"IMF Coveo POST {url_prefix} [{start}..{end}] first={first} failed "
+            f"after 5 attempts (last error: {last_err}) — refusing to truncate silently"
+        )
 
     @staticmethod
     def _coveo_items(results: list, seen: set[str]) -> Iterator[dict]:
@@ -941,10 +1048,20 @@ class IMFIngestor(Ingestor):
             except Exception as exc:
                 log.debug("IMF _next/data %s: %s", ssg_url, exc)
 
-        try:
-            resp = self._imf_get(full_url, headers=headers, timeout=30.0)
-            if resp.status_code != 200:
+        # Authoritative body fetch. _imf_get has already absorbed transient
+        # 5xx/429/network via _cffi_get_retry, so classify the FINAL status:
+        # 4xx → genuine absence (drop this record); 5xx → systemic, raise so
+        # the source fails loud rather than silently shipping a body-less hole.
+        resp = self._imf_get(full_url, headers=headers, timeout=30.0)
+        status = getattr(resp, "status_code", 200)
+        if status >= 400:
+            if status < 500:
                 return None
+            raise RuntimeError(
+                f"IMF body fetch {full_url} → HTTP {status} (server error after "
+                f"retries; refusing to mask as an empty article)"
+            )
+        try:
             body = trafilatura.extract(
                 resp.text, include_comments=False, include_tables=False,
             )
@@ -963,7 +1080,7 @@ class IMFIngestor(Ingestor):
             if content:
                 return content.get_text(separator=" ", strip=True)
         except Exception as exc:
-            log.debug("IMF HTML body %s: %s", full_url, exc)
+            log.debug("IMF HTML body parse %s: %s", full_url, exc)
         return None
 
     # ------------------------------------------------------------------
@@ -1012,9 +1129,18 @@ class IMFIngestor(Ingestor):
                 try:
                     resp = self._imf_get(index_url, timeout=30.0)
                 except Exception as exc:
-                    log.debug("IMF legacy F&D index %s: %s", index_url, exc)
-                    continue
-                if resp.status_code != 200:
+                    raise RuntimeError(
+                        f"IMF legacy F&D index {index_url} failed after retries — "
+                        f"refusing to silently drop a whole issue"
+                    ) from exc
+                status = getattr(resp, "status_code", 200)
+                if status >= 500:
+                    raise RuntimeError(
+                        f"IMF legacy F&D index {index_url} → HTTP {status} (server "
+                        f"error after retries; refusing to silently drop the issue)"
+                    )
+                if status != 200:
+                    # 404 etc. — a month with no published issue; genuine absence.
                     continue
                 slugs = {
                     m.group(1).lower()
@@ -1026,11 +1152,7 @@ class IMFIngestor(Ingestor):
                     if art_url in seen:
                         continue
                     seen.add(art_url)
-                    try:
-                        body, title = self._fetch_legacy_fandd_body(art_url)
-                    except Exception as exc:
-                        log.debug("IMF legacy F&D body %s: %s", art_url, exc)
-                        continue
+                    body, title = self._fetch_legacy_fandd_body(art_url)
                     if not body or len(body.split()) < 50:
                         continue
                     yield _make_article(
@@ -1050,7 +1172,14 @@ class IMFIngestor(Ingestor):
 
     def _fetch_legacy_fandd_body(self, url: str) -> tuple[str | None, str | None]:
         resp = self._imf_get(url, timeout=30.0)
-        if resp.status_code != 200:
+        status = getattr(resp, "status_code", 200)
+        if status >= 500:
+            raise RuntimeError(
+                f"IMF legacy F&D body {url} → HTTP {status} (server error after "
+                f"retries; refusing to mask as an empty article)"
+            )
+        if status != 200:
+            # 404 nav page (basics/people/picture) — genuine absence, self-skip.
             return None, None
         title = None
         soup = BeautifulSoup(resp.text, "lxml")
@@ -1347,18 +1476,19 @@ class FedRegionalIngestor(Ingestor):
         Falls back to stdlib `requests` if curl_cffi is missing (will likely
         403) — intentional so missing-dependency failures surface loudly.
         """
+        _normalize_timeout(kwargs)
         try:
             from curl_cffi import requests as cffi_requests
             kwargs.setdefault("impersonate", "chrome131")
             kwargs.setdefault("headers", cls._ATLANTA_HEADERS)
-            return cffi_requests.get(url, **kwargs)
+            return _cffi_get_retry(lambda: cffi_requests.get(url, **kwargs), url)
         except ImportError:
             log.error(
                 "curl_cffi not installed; Atlanta Fed fetches will likely 403. "
                 "Install with `pip install curl_cffi` (see requirements.txt)."
             )
             kwargs.setdefault("headers", cls._ATLANTA_HEADERS)
-            return requests.get(url, **kwargs)
+            return _cffi_get_retry(lambda: requests.get(url, **kwargs), url)
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
@@ -1467,13 +1597,19 @@ class FedRegionalIngestor(Ingestor):
             url = self._NYSR_LISTING_TEMPLATE.format(page=page)
             try:
                 resp = _get(url, timeout=30.0)
+            except requests.exceptions.HTTPError as exc:
+                if getattr(exc.response, "status_code", None) == 404:
+                    break  # walked past the last listing page (genuine end)
+                raise RuntimeError(
+                    f"NY Staff Reports listing {url}: HTTP "
+                    f"{getattr(exc.response, 'status_code', None)} after retries — "
+                    f"refusing to truncate the series silently"
+                ) from exc
             except Exception as exc:
-                if isinstance(exc, requests.exceptions.HTTPError) and getattr(
-                    exc.response, "status_code", None
-                ) == 404:
-                    break  # walked past the last listing page
-                log.warning("NY Staff Reports listing %s failed: %s", url, exc)
-                break
+                raise RuntimeError(
+                    f"NY Staff Reports listing {url} failed after retries: {exc} — "
+                    f"refusing to truncate the series silently"
+                ) from exc
             current_year: int | None = None
             page_rows = 0
             stop = False
@@ -1506,9 +1642,20 @@ class FedRegionalIngestor(Ingestor):
             item_url = self._NYSR_ITEM_TEMPLATE.format(rid=rid)
             try:
                 resp = _get(item_url, timeout=30.0)
+            except requests.exceptions.HTTPError as exc:
+                status = getattr(exc.response, "status_code", None)
+                if status == 404:
+                    log.debug("NY Staff Report sr%d (%s): 404, skipping", number, rid)
+                    continue
+                raise RuntimeError(
+                    f"NY Staff Report sr{number} ({item_url}): HTTP {status} after "
+                    f"retries — refusing to silently drop the report"
+                ) from exc
             except Exception as exc:
-                log.debug("NY Staff Report sr%d (%s) fetch failed: %s", number, rid, exc)
-                continue
+                raise RuntimeError(
+                    f"NY Staff Report sr{number} ({item_url}) failed after retries: "
+                    f"{exc} — refusing to silently drop the report"
+                ) from exc
             page_html = resp.text
             m_date = self._NYSR_DATE_RE.search(page_html)
             if not m_date:
@@ -1630,12 +1777,16 @@ class FedRegionalIngestor(Ingestor):
         """
         sitemap_url = "https://www.chicagofed.org/sitemap.xml"
         try:
-            resp = requests.get(sitemap_url, headers=_HEADERS, timeout=30.0)
-            resp.raise_for_status()
+            resp = _get(sitemap_url, timeout=30.0)
             tree = ET.fromstring(resp.content)
         except Exception as exc:
-            log.warning("Chicago Fed sitemap failed: %s", exc)
-            return
+            # The sitemap is the sole discovery surface for Chicago Fed; a
+            # failure here yields an empty Chicago Fed corpus. Fail loud rather
+            # than silently returning nothing.
+            raise RuntimeError(
+                f"Chicago Fed sitemap {sitemap_url} failed: {exc} — "
+                f"refusing to yield an empty Chicago Fed corpus"
+            ) from exc
 
         ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
         compiled = [(re.compile(p), s) for p, s in self._CHICAGO_URL_PATTERNS]
@@ -1669,9 +1820,20 @@ class FedRegionalIngestor(Ingestor):
             # CSS classes), which trafilatura strips. Fetch once, extract twice.
             try:
                 resp = _get(url, timeout=30.0)
+            except requests.exceptions.HTTPError as exc:
+                status = getattr(exc.response, "status_code", None)
+                if status == 404:
+                    log.debug("Chicago Fed %s: 404, skipping", url)
+                    continue
+                raise RuntimeError(
+                    f"Chicago Fed {url}: HTTP {status} after retries — "
+                    f"refusing to silently drop the page"
+                ) from exc
             except Exception as exc:
-                log.debug("Chicago Fed fetch failed %s: %s", url, exc)
-                continue
+                raise RuntimeError(
+                    f"Chicago Fed {url} failed after retries: {exc} — "
+                    f"refusing to silently drop the page"
+                ) from exc
             page_html = resp.text
             body, title, author, meta_date = _extract_from_html(
                 page_html, min_words=50,
@@ -1792,51 +1954,49 @@ class FedRegionalIngestor(Ingestor):
                     "StartDateRange": api_start,
                     "EndDateRange": api_end,
                 }
+                # A request/HTTP/parse failure mid-pagination is NOT
+                # end-of-pagination — `break`-ing here truncated the section and
+                # the all-series total-zero guard below never noticed. Fail loud.
+                # Genuine end-of-pagination is an empty body, zero items, or a
+                # short page (handled with `break` further down).
                 try:
                     resp = self._atlanta_get(
                         self._ATLANTA_API, params=params, timeout=30.0
                     )
-                    status_code = getattr(resp, "status_code", 200)
-                    if status_code >= 400:
-                        # API errors are loud — these aren't end-of-pagination,
-                        # they're upstream failures that should surface in logs.
-                        log.error(
-                            "Atlanta API %s page=%d HTTP %d (DataSourceId=%s) — "
-                            "section will be undercovered",
-                            section, page_num, status_code, ds_id,
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Atlanta API {section} page={page_num} "
+                        f"(DataSourceId={ds_id}) request failed: {exc} — "
+                        f"refusing to truncate the section silently"
+                    ) from exc
+                status_code = getattr(resp, "status_code", 200)
+                if status_code >= 400:
+                    raise RuntimeError(
+                        f"Atlanta API {section} page={page_num} HTTP {status_code} "
+                        f"(DataSourceId={ds_id}) — refusing to truncate the "
+                        f"section silently"
+                    )
+                text = resp.text or ""
+                if not text.strip():
+                    # Empty body is end-of-pagination for a real query; on page 1
+                    # it means no rows match the window (legitimate when asking
+                    # working-papers for a year before the series existed).
+                    if page_num == 1:
+                        page_zero_status = "empty_response_page_1"
+                        log.info(
+                            "Atlanta API %s: empty response on page 1 "
+                            "(no rows in window %s..%s)",
+                            section, api_start, api_end,
                         )
-                        break
-                    text = resp.text or ""
-                    if not text.strip():
-                        # Empty body is end-of-pagination for a real
-                        # query; on page 1 it means no rows match the
-                        # window (legitimate when asking working-papers
-                        # for a year before the series existed).
-                        if page_num == 1:
-                            page_zero_status = "empty_response_page_1"
-                            log.info(
-                                "Atlanta API %s: empty response on page 1 "
-                                "(no rows in window %s..%s)",
-                                section, api_start, api_end,
-                            )
-                        break
-                    payload = json.loads(text)
-                except Exception as exc:
-                    log.error(
-                        "Atlanta API %s page=%d raised %s: %s",
-                        section, page_num, type(exc).__name__, exc,
-                    )
                     break
-
-                items_raw = payload.get("FilteredFeedItemsJson") or "[]"
                 try:
-                    items = json.loads(items_raw)
+                    payload = json.loads(text)
+                    items = json.loads(payload.get("FilteredFeedItemsJson") or "[]")
                 except Exception as exc:
-                    log.error(
-                        "Atlanta API %s page=%d JSON parse failed: %s",
-                        section, page_num, exc,
-                    )
-                    break
+                    raise RuntimeError(
+                        f"Atlanta API {section} page={page_num} JSON parse failed: "
+                        f"{exc} — refusing to truncate the section silently"
+                    ) from exc
 
                 if not items:
                     if page_num == 1:
@@ -1902,15 +2062,15 @@ class FedRegionalIngestor(Ingestor):
             if url in seen:
                 continue
             seen.add(url)
-            try:
-                body, fetched_title, author, meta_date = _fetch_page_full(
-                    url,
-                    min_words=50,
-                    getter=lambda u, **kw: self._atlanta_get(u, **kw),
-                )
-            except Exception as exc:
-                log.debug("Atlanta page %s fetch failed: %s", url, exc)
-                continue
+            # No try/except here: _fetch_page_full returns empty for a genuine
+            # 404 (caught by the <50-word drop below) but RAISES on a transient/
+            # systemic fetch failure (finding #2). Re-swallowing that raise would
+            # silently drop the page — exactly the masquerade we are removing.
+            body, fetched_title, author, meta_date = _fetch_page_full(
+                url,
+                min_words=50,
+                getter=lambda u, **kw: self._atlanta_get(u, **kw),
+            )
             # Body must come from the article page itself. Listing-API
             # teasers are 1-2 sentence summaries that would feed boilerplate
             # into the embedding step; if the article body extraction failed
@@ -2367,8 +2527,10 @@ class TreasuryOFRIngestor(Ingestor):
         try:
             resp = _get(index_url)
         except Exception as exc:
-            log.warning("OFR index fetch failed %s: %s", index_url, exc)
-            return
+            raise RuntimeError(
+                f"OFR index fetch failed {index_url} after retries — "
+                f"refusing to yield an empty {doc_type} series silently"
+            ) from exc
         soup = BeautifulSoup(resp.text, "lxml")
         seen: set[str] = set()
         for link in soup.find_all("a", href=True):
@@ -2484,8 +2646,10 @@ class TreasuryOFRIngestor(Ingestor):
         try:
             cur_pdfs = self._page_pdf_urls(self._FSOC_ANNUAL_INDEX)
         except Exception as exc:
-            log.error("FSOC index fetch failed %s: %s", self._FSOC_ANNUAL_INDEX, exc)
-            cur_pdfs = []
+            raise RuntimeError(
+                f"FSOC index fetch failed {self._FSOC_ANNUAL_INDEX} after retries — "
+                f"refusing to silently drop the most-recent annual report"
+            ) from exc
         for year in sorted(self._annual_years(cur_pdfs)):
             yield from self._emit_fsoc_year(year, cur_pdfs, start, end, seen)
 
@@ -2493,8 +2657,10 @@ class TreasuryOFRIngestor(Ingestor):
         try:
             resp = _get(self._FSOC_ARCHIVE, timeout=30.0)
         except Exception as exc:
-            log.error("FSOC archive fetch failed %s: %s", self._FSOC_ARCHIVE, exc)
-            return
+            raise RuntimeError(
+                f"FSOC archive fetch failed {self._FSOC_ARCHIVE} after retries — "
+                f"refusing to silently drop all prior-year reports"
+            ) from exc
         soup = BeautifulSoup(resp.text, "lxml")
         landing: dict[int, str] = {}
         for link in soup.find_all("a", href=True):
@@ -2513,10 +2679,10 @@ class TreasuryOFRIngestor(Ingestor):
             try:
                 pdfs = self._page_pdf_urls(landing[year])
             except Exception as exc:
-                log.warning(
-                    "FSOC %d landing fetch failed %s: %s", year, landing[year], exc
-                )
-                continue
+                raise RuntimeError(
+                    f"FSOC {year} landing fetch failed {landing[year]} after retries — "
+                    f"refusing to silently drop the {year} annual report"
+                ) from exc
             yield from self._emit_fsoc_year(year, pdfs, start, end, seen)
 
     def _emit_fsoc_year(
@@ -2563,24 +2729,31 @@ class TreasuryOFRIngestor(Ingestor):
     def _extract_pdf_text(pdf_url: str) -> str:
         """Fetch a PDF and return its full extracted text.
 
-        Raises ImportError if pypdf is unavailable. A transient fetch or
-        parse error returns "" so the caller drops the record but the
-        rest of the FSOC walk continues.
+        Raises ImportError if pypdf is unavailable. FSOC publishes ~16
+        born-digital text PDFs (one annual report per year); a fetch failure
+        (after _get's retries) or a parse failure on one of them is systemic,
+        not a transient miss, so we RAISE rather than return "" — silently
+        dropping a whole year's report is exactly the under-capture failure
+        mode the basis set forbids.
         """
         from pypdf import PdfReader
         from io import BytesIO
         try:
             resp = _get(pdf_url, timeout=120.0)
         except Exception as exc:
-            log.warning("FSOC PDF fetch %s failed: %s", pdf_url, exc)
-            return ""
+            raise RuntimeError(
+                f"FSOC PDF fetch {pdf_url} failed after retries — refusing to "
+                f"silently drop a whole annual report"
+            ) from exc
         try:
             reader = PdfReader(BytesIO(resp.content))
             pages = [page.extract_text() or "" for page in reader.pages]
             return "\n".join(p.strip() for p in pages if p.strip())
         except Exception as exc:
-            log.warning("FSOC PDF parse %s failed: %s", pdf_url, exc)
-            return ""
+            raise RuntimeError(
+                f"FSOC PDF parse {pdf_url} failed — refusing to silently drop "
+                f"a whole annual report"
+            ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -2685,18 +2858,21 @@ class VoxEUIngestor(Ingestor):
         which will reliably 403 — intentional so the failure surfaces loudly
         rather than silently degrading. See ADR-014 for the IMF analogue.
         """
+        _normalize_timeout(kwargs)
         try:
             from curl_cffi import requests as cffi_requests
             kwargs.setdefault("impersonate", "chrome131")
             kwargs.setdefault("headers", cls._CEPR_HEADERS)
-            return cffi_requests.get(url, **kwargs)
+            return _cffi_get_retry(lambda: cffi_requests.get(url, **kwargs), url)
         except ImportError:
             log.error(
                 "curl_cffi not installed; VoxEU fetches will 403. "
                 "Install with `pip install curl_cffi==0.15.0` "
                 "(see requirements.txt / ADR-014)."
             )
-            return requests.get(url, headers=cls._CEPR_HEADERS, **kwargs)
+            return _cffi_get_retry(
+                lambda: requests.get(url, headers=cls._CEPR_HEADERS, **kwargs), url
+            )
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         seen: set[str] = set()
@@ -2742,17 +2918,14 @@ class VoxEUIngestor(Ingestor):
                 if resp.status_code != 200:
                     raise RuntimeError(f"HTTP {resp.status_code}")
             except Exception as exc:
-                # First-page failure of a shard means the shard contributes
-                # zero records — surface as ERROR so a regression doesn't
-                # hide behind a multi-year aggregate. Subsequent-page
-                # failures still log ERROR but leave already-collected
-                # cards in the yielded set.
-                log.error(
-                    "VoxEU shard %s..%s page %d: %s — shard truncated at "
-                    "%d pages",
-                    start, end, page, exc, page,
-                )
-                return
+                # A page fetch that fails after retries means the shard would
+                # be truncated (page 0 → zero records; later page → partial).
+                # Fail loud so a regression can't hide behind a multi-year
+                # aggregate; under-capture is the failure mode we refuse.
+                raise RuntimeError(
+                    f"VoxEU shard {start}..{end} page {page} failed after "
+                    f"retries — refusing to silently truncate the shard"
+                ) from exc
 
             soup = BeautifulSoup(resp.text, "lxml")
             articles = soup.select("article.c-card")
@@ -3041,18 +3214,21 @@ class PIIEIngestor(Ingestor):
         which will reliably 403 — loud failure rather than silent zero-yield.
         See VoxEUIngestor._cepr_get for the equivalent pattern.
         """
+        _normalize_timeout(kwargs)
         try:
             from curl_cffi import requests as cffi_requests
             kwargs.setdefault("impersonate", "chrome131")
             kwargs.setdefault("headers", cls._PIIE_HEADERS)
-            return cffi_requests.get(url, **kwargs)
+            return _cffi_get_retry(lambda: cffi_requests.get(url, **kwargs), url)
         except ImportError:
             log.error(
                 "curl_cffi not installed; PIIE fetches will 403. "
                 "Install with `pip install curl_cffi==0.15.0` "
                 "(see requirements.txt / ADR-014)."
             )
-            return requests.get(url, headers=cls._PIIE_HEADERS, **kwargs)
+            return _cffi_get_retry(
+                lambda: requests.get(url, headers=cls._PIIE_HEADERS, **kwargs), url
+            )
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         # Wayback CDX enumeration (full history, both URL schemes) unioned with
@@ -3504,15 +3680,24 @@ class CongressionalIngestor(Ingestor):
                     self._LISTING_URL,
                     params=params,
                     headers=_HEADERS,
-                    timeout=30.0,
+                    timeout=(10.0, 30.0),
                 )
-                if resp.status_code in (403, 404):
-                    log.error("Treasury listing page %d: HTTP %d — aborting", page, resp.status_code)
-                    return
+                if resp.status_code == 404:
+                    if page == 0:
+                        raise RuntimeError(
+                            f"Treasury listing page 0 → HTTP 404 ({self._LISTING_URL}) "
+                            f"— listing URL is gone; refusing to yield an empty series"
+                        )
+                    log.info("Treasury listing page %d → 404; end of pagination", page)
+                    break
                 resp.raise_for_status()
+            except RuntimeError:
+                raise
             except Exception as exc:
-                log.error("Treasury listing page %d: %s — aborting", page, exc)
-                return
+                raise RuntimeError(
+                    f"Treasury listing page {page} failed: {exc} — refusing to "
+                    f"silently truncate the Secretary-remarks series"
+                ) from exc
 
             soup = BeautifulSoup(resp.text, "lxml")
             release_links = [
@@ -3846,8 +4031,10 @@ class CongressionalIngestor(Ingestor):
                 resp = _get(paged_url, timeout=60.0)
                 data = resp.json()
             except Exception as exc:
-                log.warning("Congressional CHRG package list (page %d): %s", page, exc)
-                return
+                raise RuntimeError(
+                    f"Congressional CHRG package list failed on page {page} after "
+                    f"retries — refusing to silently truncate the hearing series"
+                ) from exc
             packages = data.get("packages", [])
             if not packages:
                 return
@@ -3862,8 +4049,10 @@ class CongressionalIngestor(Ingestor):
             # packages at pageSize=100 = ~480 pages. Bail at 1000 to avoid
             # an infinite loop if the API contract drifts.
             if page > 1000:
-                log.warning("Congressional CHRG package list exceeded 1000 pages — bailing")
-                return
+                raise RuntimeError(
+                    "Congressional CHRG package list exceeded 1000 pages — API "
+                    "contract likely drifted; refusing to truncate silently"
+                )
 
     def _chrg_build_article(
         self,
@@ -4150,8 +4339,10 @@ class CEAIngestor(Ingestor):
             # one or two pages. Bail at 10 pages to avoid an infinite loop
             # if the API contract drifts.
             if page > 10:
-                log.warning("CEA package list exceeded 10 pages — bailing")
-                return
+                raise RuntimeError(
+                    "CEA package list exceeded 10 pages — API contract likely "
+                    "drifted; refusing to truncate silently"
+                )
 
     def _fetch_granules(
         self, api_key: str, package_id: str, issued: date,
@@ -4451,11 +4642,20 @@ class NBERIngestor(Ingestor):
                         )
                         break
                     continue
-                log.debug("NBER %s HTTP %s: %s", paper_id, status, exc)
-                continue
+                # A non-404 HTTP error that survived _get's 5 retries is not a
+                # gap in the ID sequence — it's systemic (NBER 5xx outage, or
+                # 403/429 bot-blocking). Skipping it would silently drop this
+                # paper and likely many more across the ~30k-ID walk, so fail loud.
+                raise RuntimeError(
+                    f"NBER {paper_id} ({url}): HTTP {status} after retries — "
+                    f"failing loud rather than silently skipping"
+                ) from exc
             except Exception as exc:
-                log.debug("NBER %s fetch failed: %s", paper_id, exc)
-                continue
+                # Connection/timeout that survived retries — systemic, not a gap.
+                raise RuntimeError(
+                    f"NBER {paper_id} ({url}): {exc} after retries — "
+                    f"failing loud rather than silently skipping"
+                ) from exc
             consecutive_404 = 0
             examined += 1
 
@@ -4657,6 +4857,7 @@ class InstitutionalIngestor(Ingestor):
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         checkpoint = self._load_checkpoint()
+        failures: list[tuple[str, str]] = []
         for ingestor in self._sub_ingestors:
             sid = ingestor.source_id
             if checkpoint.get(sid, {}).get("status") == "completed":
@@ -4677,10 +4878,25 @@ class InstitutionalIngestor(Ingestor):
                     checkpoint[sid] = {"status": "failed", "error": "returned 0 articles"}
                     self._save_checkpoint(checkpoint)
                     log.warning("Checkpoint: %s returned 0 articles; marked failed for retry", sid)
+                    failures.append((sid, "0 articles"))
             except Exception as exc:
+                # Record and keep going so ONE run surfaces every broken source
+                # (not whack-a-mole), and the sources that DO work still get
+                # written + checkpointed. But a fail-loud raise must not let the
+                # composite complete clean — re-raise an aggregate below so the
+                # process exits non-zero and the afterok downstream chain holds.
                 log.error("Sub-ingestor %s failed: %s", sid, exc)
                 checkpoint[sid] = {"status": "failed", "error": str(exc)}
                 self._save_checkpoint(checkpoint)
+                failures.append((sid, str(exc)))
+        if failures:
+            raise RuntimeError(
+                "InstitutionalIngestor: %d/%d sub-ingestor(s) failed; refusing to "
+                "complete clean so the downstream chain halts: %s" % (
+                    len(failures), len(self._sub_ingestors),
+                    ", ".join(f"{s} ({e})" for s, e in failures),
+                )
+            )
 
 
 # ---------------------------------------------------------------------------
