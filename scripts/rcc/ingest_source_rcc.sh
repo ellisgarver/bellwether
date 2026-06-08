@@ -21,7 +21,7 @@
 #
 # Single-source runs do NOT use the composite .institutional_checkpoint.json:
 # re-running a source overwrites its own JSONL from scratch (mode "w"), so the
-# stale-checkpoint pitfall (see submit_full_pipeline.sh) does not apply here.
+# stale-checkpoint pitfall (see submit_parallel_ingest.sh) does not apply here.
 #
 # IMF requires curl_cffi==0.15.0 in the mnd conda env (ADR-014).
 # All data output under /scratch/midway3/ehgarver/ — never PI project storage.

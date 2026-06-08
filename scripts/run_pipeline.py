@@ -1,10 +1,10 @@
 """Pipeline orchestration CLI.
 
 Dispatches pipeline stages:
-  ingest              — fetch raw articles from institutional/academic sources
-  filter-pre-embed    — filter raw JSONL to exclude archived journalism sources
-  filter              — topic filter + near-duplicate removal
-  embed               — encode articles to embeddings (all-mpnet-base-v2)
+  ingest              — fetch raw articles from the basis-set sources (ADR-020)
+  filter-pre-embed    — drop archived journalism sources from raw JSONL (ADR-010)
+  filter              — date-range filter + near-duplicate removal (NO topic filter, ADR-020)
+  embed               — encode articles (primary: Qwen3-Embedding-0.6B; comparator: mpnet)
   cluster             — BERTopic single-granularity clustering (ADR-019)
   stability           — bootstrap stability diagnostic (mean NMI reported, not gated)
   validate            — anchor narrative recovery (reported as rate, not gated)
@@ -12,23 +12,17 @@ Dispatches pipeline stages:
 
 All paths default to config.paths.*. Override with --input / --output flags.
 
-Phase 2 full-corpus ingestion (ADR-010; run on RCC via SLURM scripts):
+Full-corpus runs go on RCC via the parallel fan-out, which chains the downstream
+stages automatically: NUKE_RAW=1 bash scripts/rcc/submit_parallel_ingest.sh
+The per-stage commands below are for local spot-runs / manual re-runs:
   python scripts/run_pipeline.py ingest --start 2010-01-01 --end 2025-12-31 --sources institutional
-  python scripts/run_pipeline.py filter-pre-embed   # excludes archived journalism sources
+  python scripts/run_pipeline.py filter-pre-embed
   python scripts/run_pipeline.py filter
   python scripts/run_pipeline.py embed --role primary
   python scripts/run_pipeline.py cluster
   python scripts/run_pipeline.py stability
   python scripts/run_pipeline.py validate --anchors all
-
-Phase 2 corpus QA (after full ingestion):
   python scripts/run_pipeline.py corpus-composition
-  python scripts/run_pipeline.py corpus-composition --by-tier --output data/processed/corpus_composition.csv
-
-Note: AP News, Reuters, and MarketWatch have been removed from the semantic corpus
-(ADR-010). Their raw JSONL is retained in data/raw/articles/ but excluded from
-embedding by the filter-pre-embed step. Media Cloud Premium provides the journalism
-dynamics signal (Layer 1B, cross-validation); see src/mnd/detection/mediacloud.py.
 """
 from __future__ import annotations
 
@@ -706,136 +700,6 @@ def corpus_composition(
         pivot.to_csv(out_path)
         log.info("Wrote corpus composition CSV → %s", out_path)
 
-
-# ---------------------------------------------------------------------------
-# sample-check
-# ---------------------------------------------------------------------------
-
-# Minimum article count per institutional sub-source when sampling up to
-# --max-per-source articles from a full calendar year.  These are conservative
-# floors; hitting zero for any source with min > 0 indicates a fetch failure.
-# NBER and SSRN are not in the historical composite (Phase 6 live RSS only)
-# and are therefore not probed here. AP News / MarketWatch / Reuters and arXiv
-# / Jackson Hole are removed per ADR-010 / ADR-012.
-_INST_MIN_COUNTS: dict[str, int] = {
-    "federalreserve": 5,
-    "fed_regional":   3,
-    "congressional":  0,   # sparse; best-effort
-    "imf":            2,   # Coveo + curl_cffi path (ADR-014); WEO/GFSR are 2x/yr
-    "bis":            3,
-    "cbo":            0,   # sitemap path (ADR-013); publication pages 403 on residential IPs
-    "treasury_ofr":   0,   # sparse; best-effort
-    "voxeu":          5,
-    "brookings":      2,
-    "piie":           2,
-    "cfr":            2,
-}
-
-
-@cli.command("sample-check")
-@click.option(
-    "--source", required=True,
-    type=click.Choice(["institutional"]),
-    help="Which source to probe (only 'institutional' is active per ADR-010/012)",
-)
-@click.option("--start", default=None, help="Override start date (YYYY-MM-DD)")
-@click.option("--end", default=None, help="Override end date (YYYY-MM-DD)")
-@click.option(
-    "--max-per-source", default=20, show_default=True,
-    help="Max articles fetched per institutional sub-source (limits runtime)",
-)
-@click.pass_context
-def sample_check(
-    ctx: click.Context,
-    source: str,
-    start: str | None,
-    end: str | None,
-    max_per_source: int,
-) -> None:
-    """Connectivity and content-quality probe — run before any RCC submission.
-
-    Institutional: fetches up to --max-per-source articles per sub-source for
-    the given year (default 2024) and reports counts against minimum thresholds.
-
-    Journalism probes (apnews / marketwatch) were removed in ADR-010 — those
-    ingestors are not part of the semantic corpus (code in git history).
-    """
-    from datetime import date as date_t
-
-    # only 'institutional' is accepted; click already validates the choice
-    start_d = date_t.fromisoformat(start) if start else date_t(2024, 1, 1)
-    end_d = date_t.fromisoformat(end) if end else date_t(2024, 12, 31)
-    _sample_check_institutional(start_d, end_d, max_per_source)
-
-
-def _sample_check_institutional(
-    start, end, max_per_source: int
-) -> None:
-    from mnd.ingestion.institutional import (
-        BISIngestor, BrookingsIngestor, CBOIngestor, CFRIngestor,
-        CongressionalIngestor, FedRegionalIngestor, IMFIngestor,
-        PIIEIngestor, TreasuryOFRIngestor, VoxEUIngestor,
-    )
-    from mnd.ingestion.fed import FederalReserveIngestor
-
-    # Mirror InstitutionalIngestor._sub_ingestors exactly. IMF re-enabled in
-    # ADR-014 via Coveo Search + curl_cffi Chrome impersonation.
-    # NBER and SSRN are Phase-6 live RSS only.
-    sub_ingestors = [
-        FederalReserveIngestor(),
-        FedRegionalIngestor(),
-        CongressionalIngestor(),
-        IMFIngestor(),
-        BISIngestor(),
-        TreasuryOFRIngestor(),
-        CBOIngestor(),
-        VoxEUIngestor(),
-        BrookingsIngestor(),
-        PIIEIngestor(),
-        CFRIngestor(),
-    ]
-
-    click.echo(f"\n=== Institutional sample-check ({start} → {end}, cap {max_per_source}/source) ===\n")
-    failures = []
-    for ingestor in sub_ingestors:
-        sid = ingestor.source_id
-        min_expected = _INST_MIN_COUNTS.get(sid, 0)
-        articles = []
-        try:
-            for art in ingestor.fetch(start, end):
-                articles.append(art)
-                if len(articles) >= max_per_source:
-                    break
-        except Exception as exc:
-            click.echo(f"  {sid:20s}  ERROR: {exc}", err=True)
-            failures.append(sid)
-            continue
-
-        count = len(articles)
-        status = "OK" if count >= min_expected else ("WARN (0 articles)" if count == 0 else "WARN (below min)")
-        mark = "✓" if count >= min_expected else "✗"
-        click.echo(f"  {mark} {sid:20s}  {count:3d} articles (min expected: {min_expected}) [{status}]")
-
-        if articles:
-            for art in articles[:3]:
-                snippet = (art.body or "")[:120].replace("\n", " ")
-                click.echo(f"      title: {art.title}")
-                click.echo(f"      body:  {snippet}…")
-        click.echo()
-
-        if count < min_expected:
-            failures.append(sid)
-
-    click.echo("─" * 60)
-    if failures:
-        click.echo(f"FAIL — {len(failures)} source(s) below threshold: {', '.join(failures)}", err=True)
-        sys.exit(1)
-    else:
-        click.echo("PASS — all sources at or above minimum expected counts")
-
-
-# Journalism sample-check (apnews / marketwatch) was removed with the journalism
-# tier in ADR-010 (archived ingestor code recoverable from git history).
 
 
 # ---------------------------------------------------------------------------

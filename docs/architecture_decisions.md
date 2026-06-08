@@ -6,6 +6,45 @@ a context, the decision, and the consequences. Once an ADR is `Accepted`, it
 is **not edited**. If the decision is reversed, a new ADR is added that
 references and supersedes the old one.
 
+## Status index
+
+ADRs are append-only history. This index is the fast path: it shows which
+decisions are still live. The **current methodology lock-in is ADR-019 +
+ADR-020** (cite these, plus the per-source ADRs they reference, for
+pre-registration). Bodies below are preserved verbatim for that defense.
+
+| ADR | Decision | Status |
+|---|---|---|
+| 001 | Two-model embedding (Qwen3 primary + mpnet comparator) | Live (as amended by 011) |
+| 002 | Logistic growth as MVP fallback for SIR | Live |
+| 003 | Streamlit for the dashboard | Live (Phase 5) |
+| 004 | GDELT as discovery layer only | Superseded by 005 |
+| 005 | Wayback CDX replaces GDELT discovery | Superseded by 010/020 (basis-set ingestors) |
+| 006 | `max_seq_len` 512 for local MPS | Live |
+| 007 | ProQuest via TDM export | Superseded by 010 (ProQuest removed) |
+| 008 | Phase 2 overhaul — AP News + RavenPack dynamics | Superseded by 010/016/020 |
+| 009 | MarketWatch reinstatement | Superseded by 010 (removed) |
+| 010 | Corpus architecture + embedding model + detection layer | Live (amended by 016/019/020) |
+| 011 | Revert primary embedding to Qwen3; formalize look-ahead check | Live |
+| 012 | Remove arXiv + separate Jackson Hole; drop Stage-2 topic filter | Live |
+| 013 | Post-dry-run ingestor repairs; IMF re-enable; embed OOM fix | Live (IMF portion superseded by 014) |
+| 014 | IMF via curl_cffi Chrome impersonation + Coveo | Live |
+| 015 | JEL-anchored canonical filter | Superseded by 020 (pre-cluster keyword filter removed) |
+| 016 | Single-stage topic filter + Media Cloud Premium as dynamics layer | Live (topic-filter portion superseded by 020) |
+| 017 | Coverage-gap closures + Phase 6 scope freeze | Live (CBO Playwright portion superseded by 023) |
+| 018 | Remove `named_events` keyword category (anchor circularity) | Live |
+| 019 | **Methodology lock-in to field-accepted anchors** | Live |
+| 020 | **Basis-set corpus; NBER restored, CFR dropped, CEA added; no pre-cluster filter** | Live |
+| 021 | Post-020 upstream patches (VoxEU CF, Atlanta API, Congressional CHRG) | Live (CBO wildcard portion superseded by 023) |
+| 022 | Methodology-principle-1 enforcement across ingestors | Live |
+| 023 | CBO via bounded publication-ID enumeration; fail-loud hardening | Live (see addendum: latest-real-capture fetch) |
+| 024 | Repo cleanse + single-source-of-truth doc governance | Live |
+| 025 | NY Fed Staff Reports via RePEc/IDEAS | Live |
+| 026 | PIIE via Wayback CDX enumeration | Live |
+| 027 | Fed Board testimony as a distinct document stream | Live |
+| 028 | Coverage-verification standard (shape + independent inventory) | Live |
+| 029 | PIIE two coverage defects (blog tail; 2016 misdating) | Live |
+
 ---
 
 ## ADR-001: Two-model embedding strategy (primary + comparator)

@@ -14,9 +14,9 @@
 #                    anchor narrative sub-corpora. Not used for production clustering.
 #                    Output: data/processed/embeddings_comparator.npy
 #
-# Canonical chain (use scripts/rcc/submit_full_pipeline.sh):
+# Canonical chain (use scripts/rcc/submit_parallel_ingest.sh):
 #   ingest → filter-pre-embed → filter → embed (primary) → cluster
-#   submit_full_pipeline.sh also submits embed --role comparator in parallel
+#   The fan-out also submits embed --role comparator in parallel
 #   with the primary embed when COMPARATOR=1 (default).
 #
 # Resource spec:

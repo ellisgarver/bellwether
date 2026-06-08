@@ -54,10 +54,6 @@ beautifulsoup4==4.12.3
 lxml==5.3.0
 lxml_html_clean==0.4.1    # Required by trafilatura/justext with lxml>=5.0 (lxml.html.clean split out)
 tenacity==9.0.0           # Retry logic for flaky scraping
-playwright==1.48.0        # DORMANT FALLBACK ONLY. CBO ingests via Wayback CDX bounded-ID enumeration
-                          # (ADR-023); the ADR-017 Playwright+cookie path was defeated by DataDome (ADR-021).
-                          # Retained per ADR-023 in case DataDome relaxes. If reactivating, run
-                          # `python -m playwright install chromium` once per env. See scripts/install_playwright_for_cbo.sh.
 
 # Layer 1B journalism dynamics is now Media Cloud Premium (ADR-016).
 # The prior RavenPack-via-WRDS plan was abandoned; no WRDS dependencies needed.

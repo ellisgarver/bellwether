@@ -299,9 +299,7 @@ tier_2_policy_analytical:
 # CFR removed by ADR-020 (basis-set redundancy with PIIE on the
 # international-policy dimension; ~80% of CFR output is foreign-policy
 # non-macro; the macro subset overlaps PIIE almost completely).
-# CFRIngestor class retained in src/mnd/ingestion/institutional.py for
-# backwards-compatible reads of pre-ADR-020 data files; not wired into
-# InstitutionalIngestor and not run in any new ingest.
+# The CFRIngestor class was deleted in the second repo cleanse.
 
 # -----------------------------------------------------------------------------
 # JOURNALISM TIER REMOVED (ADR-010)

@@ -19,7 +19,7 @@
 #   RAM:       16 GB
 #   Time:      1 h
 #
-# Canonical chain (use scripts/rcc/submit_full_pipeline.sh):
+# Canonical chain (use scripts/rcc/submit_parallel_ingest.sh):
 #   ingest → filter-pre-embed → filter → embed (primary) → cluster
 #
 # All data output in /scratch/midway3/ehgarver/ — never in PI project folder.

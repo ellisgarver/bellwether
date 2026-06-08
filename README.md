@@ -4,7 +4,7 @@ A quantitative measurement framework for tracking how macro-financial
 narratives form, propagate, peak, and decay in U.S. financial discourse from
 2010 to the present. The system embeds institutional and academic documents
 with a transformer encoder, clusters them into coherent narratives with
-BERTopic, fits epidemiological growth models (SIR/logistic/Gompertz) to each
+BERTopic, fits epidemiological growth models (SIR / logistic) to each
 narrative's life-cycle, and surfaces the analysis through a public web
 dashboard updated weekly.
 
@@ -15,23 +15,27 @@ This is a **descriptive, educational, historical, and analytical measurement sys
 ## Status
 
 - **Phase 0–1 complete.** Scaffold, configs, anchor set, ingestors, pilot clustering.
-- **Phase 2 in progress.** Full 2010–present institutional ingestion on UChicago RCC via SLURM (`scripts/rcc/submit_full_pipeline.sh`). Methodology lock-in (ADR-019) pending before final re-ingest.
-- **Phase 3+ ahead.** Re-embedding + clustering with ADR-019 methodology, then anchor validation reporting, dashboard build (Phase 5), and weekly cron updates (Phase 6).
+- **Phase 2 in progress.** Full 2010–present basis-set ingestion on UChicago RCC via the parallel fan-out (`scripts/rcc/submit_parallel_ingest.sh`). Awaiting one clean re-ingest with all coverage fixes baked in.
+- **Phase 3+ ahead.** Re-embedding + clustering (ADR-019 methodology), anchor validation reporting, dashboard build (Phase 5), and weekly updates (Phase 6).
 
-## Corpus architecture (ADR-010 / ADR-014 / ADR-015 / ADR-016, current)
+## Corpus architecture (ADR-020 basis set)
+
+The semantic corpus is a **basis set**: the minimum set of sources spanning the
+eight independent dimensions of US macro discourse, with no redundancy. Twelve
+sub-ingestors map 1:1 to those dimensions — the dimension table and per-source
+retrieval mechanics live in `docs/architecture_decisions.md` ADR-020.
 
 | Layer | Role | Sources |
 |---|---|---|
-| 1A — Semantic text corpus | Embedding + clustering | Fed Board (FOMC, speeches incl. Jackson Hole, Beige Book, FEDS Notes, MPR, FSR), Regional Feds (NY/SF/Chicago/Atlanta/Dallas/StL/Cleveland), IMF (WEO/GFSR/F&D/WPs/Blog via Coveo + curl_cffi), BIS, CBO, Treasury/OFR/FSOC, Congressional testimony, VoxEU/CEPR, Brookings, PIIE, CFR |
-| 1B — Dynamics layer | Volume time series for SIR/logistic fitting (no text) | Media Cloud premium-press collection (WSJ, Bloomberg, FT, Reuters, NYT, Barron's, Dow Jones, MarketWatch, AP Business, etc.) — ADR-016 |
+| Semantic text corpus | Embedding + clustering | Fed Board, 4 Regional Feds (NY/SF/Chicago/Atlanta), IMF, BIS, CBO, CEA, Treasury/OFR, Brookings, PIIE, NBER, VoxEU, Congressional Treasury-Sec testimony |
+| 1B — Dynamics layer | Volume time series, cross-validation trace (no text) | Media Cloud premium-press collection — ADR-016/019 |
 | 2 — Detection layer | Story-count anomaly flagging (no text) | Media Cloud API, broad outlet collection |
-| 3 — Validation supplements | Outcome correlation, business-cycle context | FRED, EPU (Baker-Bloom-Davis), NBER Business Cycle Dating |
+| 3 — Validation supplements | Outcome correlation, business-cycle context | FRED, NBER Business Cycle Dating |
 
-Permanently removed from the semantic corpus (do not reinstate without a new
-ADR): AP News, Reuters, MarketWatch (ADR-010); arXiv, separate Jackson Hole
-ingestor (ADR-012); ProQuest TDM, NewsAPI, GDELT, Common Crawl (ADR-010).
-Removed-source ingestor code was deleted in the ADR-024 cleanse and is
-recoverable from git history.
+Removed from the semantic corpus (do not reinstate without a new ADR): AP News,
+Reuters, MarketWatch (ADR-010); arXiv and the separate Jackson Hole ingestor
+(ADR-012); CFR (ADR-020); ProQuest TDM, GDELT, Common Crawl (ADR-010). RavenPack
+/ WRDS is not used (ADR-016). Removed-ingestor code is recoverable from git history.
 
 ## Quick start
 
@@ -66,7 +70,7 @@ Every parameter below is either a published library default or a citation from p
 | Embedding model | `Qwen/Qwen3-Embedding-0.6B` (1024-d, instruction-aware) | MTEB benchmark; Apache 2.0 |
 | Embedding context | 1024 tokens (RCC) / 512 tokens (local MPS) | Hardware constraint |
 | Document chunking | 512 Qwen3 tokens, ~64-token overlap | Thakur et al. 2021 *BEIR* (NeurIPS) |
-| Filter | JEL-anchored keyword list (213 keywords, 11 categories), ≥2 matches | AEA JEL Classification System |
+| Scope filter | None pre-clustering; post-cluster JEL scope classification (drop JEL ∉ {E,F,G,H} from dynamics only) | AEA JEL Classification System (ADR-020) |
 | Clustering | BERTopic with library defaults (UMAP + HDBSCAN + c-TF-IDF) | Grootendorst 2022 |
 | Granularity | Single-level HDBSCAN output (no merging tiers) | Bybee/Kelly/Manela/Xiu 2024; Hansen/McMahon/Prat 2018 |
 | Dynamics models | SIR and logistic | Kermack & McKendrick 1927; Verhulst 1838 |
@@ -84,14 +88,14 @@ Every parameter below is either a published library default or a citation from p
 ## Repository layout
 
 ```
-config/                YAML configuration (locked params, whitelist, keywords)
+config/                YAML configuration (locked params + outlet whitelist)
 data/anchors/          Validation ground truth (10 anchor narratives + fizzled seed)
 data/raw/              Ingested articles (gitignored except .gitkeep)
 data/processed/        Pipeline artifacts (gitignored except .gitkeep)
 src/mnd/               Python package
   ingestion/             InstitutionalIngestor composite + Fed + FRED
   processing/            Document chunker (Qwen3 SentencePiece, 512 tokens per ADR-019)
-  filtering/             JEL-anchored canonical topic filter + MinHash dedup
+  filtering/             Date-range filter + MinHash dedup (no topic filter, ADR-020)
   embedding/             Qwen3-Embedding-0.6B (sole embedder, ADR-019)
   clustering/            BERTopic with library-default UMAP/HDBSCAN/c-TF-IDF (Grootendorst 2022)
   dynamics/              SIR + logistic fitting; 7-day MA smoothing; calendar annotation
@@ -112,22 +116,22 @@ tests/                 pytest suite
 ## Running pieces locally
 
 ```bash
-# Probe institutional sources for a short window (catches broken ingestors fast)
-python scripts/run_pipeline.py sample-check --source institutional \
-    --start 2024-09-01 --end 2024-10-31 --max-per-source 5
+# Per-source coverage probe for a short window (catches broken ingestors fast)
+pytest tests/integration/test_source_coverage.py -m integration -v
 
-# IMF-only debug probe (Coveo + curl_cffi path; ADR-014)
+# Single-source ingest for a short window (e.g. IMF; Coveo + curl_cffi, ADR-014)
 python scripts/run_pipeline.py ingest --sources imf \
     --start 2024-09-01 --end 2024-10-31
 
+# Captured-side coverage check (year × document_type pivot; flags cliffs/gaps)
+python scripts/verify_coverage.py <source>
+
 # Corpus composition report from raw JSONL
-python scripts/run_pipeline.py corpus-composition --by-tier \
+python scripts/run_pipeline.py corpus-composition \
     --output data/processed/corpus_composition.csv
 
-# Pre-embedding archived-source exclusion (writes corpus_for_embedding.jsonl)
+# Pre-embedding archived-source exclusion, then date-range filter + MinHash dedup
 python scripts/run_pipeline.py filter-pre-embed
-
-# Date-range filter + MinHash dedup (writes articles.parquet)
 python scripts/run_pipeline.py filter
 ```
 
@@ -135,19 +139,21 @@ python scripts/run_pipeline.py filter
 
 ```bash
 cd /scratch/midway3/ehgarver/macro-narrative-dynamics
-bash scripts/rcc/submit_full_pipeline.sh                # 2010-today, archives prior outputs
-START=2010-01-01 END=2025-12-31 \
-    bash scripts/rcc/submit_full_pipeline.sh            # custom window
-NUKE_RAW=1 bash scripts/rcc/submit_full_pipeline.sh     # required on re-submit (see CLAUDE.md)
+git pull                                                # SLURM runs the on-disk code at queue-start
+NUKE_RAW=1 bash scripts/rcc/submit_parallel_ingest.sh   # archives prior outputs, then rebuilds
+SOURCES="<src>" SKIP_DOWNSTREAM=1 SKIP_CLEANUP=1 \
+    bash scripts/rcc/submit_parallel_ingest.sh          # re-run a single source in isolation
 ```
 
-The script chains four SLURM jobs (`afterok:`):
+The fan-out submits one SLURM job per source (per-source `--time` budgets so no
+long pole starves the rest), then chains the downstream stages on `afterok` of
+every ingest job:
 
 ```
-ingest_institutional → filter → embed → cluster
+[ingest source_1 … source_N] → filter-pre-embed → filter → embed → cluster
 ```
 
-`curl_cffi==0.15.0` and `playwright==1.48.0` (with Chromium installed) must be installed in the RCC `mnd` conda env — see `scripts/install_playwright_for_cbo.sh` for one-time CBO setup.
+`curl_cffi==0.15.0` must be installed in the RCC `mnd` conda env (`pip install -r requirements.txt`).
 
 ## Reproducibility
 
