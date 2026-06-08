@@ -1983,29 +1983,40 @@ class CBOIngestor(Ingestor):
       wildcard endpoint is non-deterministic under load. A 77-minute
       production run yielded 0 records.
 
-      CBO assigns each publication a monotically increasing integer node id
-      at ``cbo.gov/publication/{id}``. We enumerate that ID space the same
-      way ``NBERIngestor`` enumerates ``/papers/wNNNNN``: estimate the ID
-      range corresponding to the requested date window from a calibrated
-      ID↔date anchor table, then issue one CDX query per 100-ID block
-      (``matchType=prefix``). Each block query is small (≤~100 rows),
-      returns deterministically in 1-8s, and ``collapse=urlkey`` gives the
-      EARLIEST snapshot per URL (CDX sorts timestamp-ascending per urlkey).
-      That earliest-snapshot timestamp is a cheap proxy for crawl-soon-after-
-      publication, so we pre-filter candidates by snapshot date before
-      fetching any body — bounding body fetches to the true in-window set.
+      CBO assigns each publication an integer node id at
+      ``cbo.gov/publication/{id}``. The id space is only ROUGHLY ordered in
+      time: the 2012 site migration assigned ``/publication/`` ids to a large
+      back-catalog (1990s-2009 baselines and studies) interleaved among the
+      contemporaneous ids, so a single 100-id block routinely mixes 2007-2011
+      page dates. The calibrated ID↔date anchor table therefore only brackets
+      the candidate range; the authoritative page-date filter (step 3) — not
+      the id — decides membership. We enumerate the bracketed ID space the
+      same way ``NBERIngestor`` enumerates ``/papers/wNNNNN``: one CDX query
+      per 100-ID block (``matchType=prefix``). We do NOT ``collapse=urlkey``;
+      a block returns every snapshot row (≈2k for a dense block) and we
+      aggregate ``min``/``max`` timestamp per id. The earliest (min) timestamp
+      is a cheap crawl-soon-after-publication proxy used to pre-filter
+      candidates before any body fetch; the latest (max) timestamp is the
+      capture we actually fetch.
 
     Per-record pipeline:
-      1. Snapshot fetch: ``web.archive.org/web/{ts}id_/{url}`` — the ``id_``
-         modifier returns the raw archived body, no Wayback toolbar rewrite.
-         Page-level extraction via ``_fetch_page_full`` (trafilatura + BS4).
+      1. Snapshot fetch: ``web.archive.org/web/{max_ts}id_/{url}`` — the
+         LATEST real capture (``id_`` modifier returns the raw archived body,
+         no Wayback toolbar rewrite). The latest real capture avoids the
+         degraded pre-2013 early-migration stubs the earliest snapshot holds,
+         and we use a concrete captured timestamp — never the ``29991231``
+         far-future redirect, which non-deterministically resolves to a
+         Wayback interstitial dated "today". Falls back to the earliest
+         capture only if the latest is unusable. Extraction via
+         ``_fetch_page_full`` (trafilatura + BS4).
       2. Authoritative date: from the page's own structured metadata
          (Drupal ``<meta name="dcterms.created">`` / trafilatura). The
-         Wayback snapshot timestamp is the LAST/earliest-CRAWLED date and is
-         NEVER used as the publication date — only as the pre-fetch filter.
+         Wayback snapshot timestamp is a CRAWL date and is NEVER used as the
+         publication date — only as the pre-fetch filter / fetch target.
       3. Strict keep gate: page_date present AND in ``[start, end]`` AND
-         body ≥ 50 words. Records failing any are dropped (no fabricated
-         dates, no teaser-only bodies).
+         body ≥ 50 words AND title is not the "Wayback Machine" interstitial.
+         Records failing any are dropped (no fabricated dates, no teaser-only
+         bodies).
 
     Politeness / robustness:
       - 0.5s sleep between block CDX queries; 0.3s between snapshot fetches.
@@ -2077,47 +2088,58 @@ class CBOIngestor(Ingestor):
         seen_pids: set[int] = set()
         yielded = 0
         for prefix in range(id_lo // 100, id_hi // 100 + 1):
-            for pid, ts in self._cdx_block(prefix):
+            for pid, earliest_ts, latest_ts in self._cdx_block(prefix):
                 if pid in seen_pids or pid < id_lo or pid > id_hi:
                     continue
                 seen_pids.add(pid)
-                snap_date = self._ts_to_date(ts)
+                snap_date = self._ts_to_date(earliest_ts)
                 # Cheap pre-filter: earliest snapshot ≈ first crawl, which is
                 # at or after publication. If it falls outside the window
                 # (+lag) the publication can't be in-window — skip the fetch.
                 if snap_date is None or snap_date < start or snap_date > window_end_with_lag:
                     continue
                 original_url = f"https://www.cbo.gov/publication/{pid}"
-                # Fetch the LATEST snapshot, not the earliest. For pre-~2013
-                # content the earliest capture (which `collapse=urlkey` returns
-                # and `ts` points at) is a degraded early-migration stub: a
-                # truncated body, a junk "CBO" title, and a less-accurate date
-                # (e.g. pub/41813 earliest=22w/"CBO"/2010-01-01 vs latest=
-                # 162w/real-title/2010-01-14). The page's own metadata carries
-                # the true publication date regardless of snapshot age, so a
-                # later capture is strictly higher-fidelity. `ts` is retained
-                # only as the crawl-date pre-filter above. A far-future
-                # timestamp 302-redirects to the most recent capture.
-                latest_snap = self._SNAP_PREFIX.format(
-                    ts="29991231000000", url=original_url,
-                )
+                # Fetch the LATEST *real* capture (max ts from the block query),
+                # not the earliest. For pre-~2013 content the earliest capture
+                # is a degraded early-migration stub: a truncated body, a junk
+                # "CBO" title, and a less-accurate date (e.g. pub/41813
+                # earliest=22w/"CBO"/2010-01-01 vs a later capture=162w/
+                # real-title/2010-01-14). The page's own metadata carries the
+                # true publication date regardless of snapshot age, so a later
+                # real capture is strictly higher-fidelity. We use a concrete
+                # captured timestamp — NEVER the `29991231` far-future redirect,
+                # which resolves non-deterministically to a Wayback interstitial
+                # page titled "Wayback Machine" and dated "today", corrupting
+                # both the body and the extracted date (and silently dropping or
+                # mis-dating real publications). `earliest_ts` is retained as
+                # the crawl-date pre-filter above and the fallback below.
+                snap_url = self._SNAP_PREFIX.format(ts=latest_ts, url=original_url)
                 body, fetched_title, _author, page_date = _fetch_page_full(
-                    latest_snap, min_words=50, getter=self._wayback_get,
+                    snap_url, min_words=50, getter=self._wayback_get,
                 )
                 # Fall back to the earliest capture only if the latest is
                 # unusable (page later removed → latest is a 404/redirect stub).
                 if not body or page_date is None:
-                    snap_url = self._SNAP_PREFIX.format(ts=ts, url=original_url)
+                    snap_url = self._SNAP_PREFIX.format(ts=earliest_ts, url=original_url)
                     body, fetched_title, _author, page_date = _fetch_page_full(
                         snap_url, min_words=50, getter=self._wayback_get,
                     )
                 time.sleep(0.3)
+                # Defensive guard: reject a Wayback interstitial/error page
+                # captured as 200. The "Wayback Machine" title is the tell;
+                # using a concrete captured ts (not the 2999 redirect) should
+                # prevent these, but a soft-404 snapshot could still surface.
+                if fetched_title and fetched_title.strip() == "Wayback Machine":
+                    log.debug("CBO pub/%d: dropped — Wayback interstitial (ts=%s)",
+                              pid, latest_ts)
+                    continue
                 # Strict date policy (no Wayback-timestamp fallback): the
                 # snapshot timestamp is a crawl date, not the publication
                 # date. We emit only records whose own page metadata yields
                 # a publication date inside the window.
                 if page_date is None:
-                    log.debug("CBO pub/%d: dropped — no page-extracted date (ts=%s)", pid, ts)
+                    log.debug("CBO pub/%d: dropped — no page-extracted date (ts=%s)",
+                              pid, latest_ts)
                     continue
                 if page_date < start or page_date > end:
                     log.debug("CBO pub/%d: dropped (page_date=%s out of [%s..%s])",
@@ -2192,17 +2214,31 @@ class CBOIngestor(Ingestor):
     # Wayback CDX — one query per 100-id block (matchType=prefix)
     # ------------------------------------------------------------------
 
+    # Generous per-block row cap. A 100-id block over 2010-present holds at
+    # most a few thousand snapshots (≈2k observed for a dense block); 100k
+    # leaves ample headroom. If a block ever returns exactly this many rows
+    # it was truncated → we raise rather than silently lose the block's tail.
+    _CDX_BLOCK_LIMIT = 100000
+
     def _cdx_block(
         self, prefix: int, *, max_attempts: int = 7
-    ) -> list[tuple[int, str]]:
+    ) -> list[tuple[int, str, str]]:
         """Query CDX for cbo.gov/publication/{prefix}* (one 100-id block).
 
-        Returns [(publication_id, earliest_snapshot_ts), ...] for 5-digit
-        ids matching this prefix. ``matchType=prefix`` also matches shorter
-        and longer ids sharing the prefix (e.g. prefix 594 → 594, 5940-5949,
-        59400-59499, 594000+); we keep only the 5-digit ids and let the
-        caller range-clamp. ``collapse=urlkey`` yields the earliest snapshot
-        per URL (CDX sorts ascending by timestamp within a urlkey).
+        Returns [(publication_id, earliest_ts, latest_ts), ...] for 5-digit
+        ids matching this prefix, one tuple per distinct id. ``matchType=
+        prefix`` also matches shorter and longer ids sharing the prefix (e.g.
+        prefix 594 → 594, 5940-5949, 59400-59499, 594000+); we keep only the
+        5-digit ids and let the caller range-clamp.
+
+        We do NOT ``collapse=urlkey`` (which would keep only the earliest
+        snapshot per URL). Instead we fetch every snapshot row and aggregate
+        ``min`` (earliest) and ``max`` (latest) timestamp per id — CDX sorts
+        ascending by timestamp within a urlkey, so the earliest feeds the
+        cheap crawl-date pre-filter and the latest feeds the body fetch. The
+        latest *real* capture is used (never the ``29991231`` far-future
+        redirect, which non-deterministically resolves to a Wayback
+        interstitial page dated "today" and corrupts both body and date).
 
         Retries with exponential backoff + jitter on 429 / 502 / 503 / 504
         AND on raw network errors (Wayback resets connections under burst —
@@ -2219,8 +2255,7 @@ class CBOIngestor(Ingestor):
             "matchType": "prefix",
             "fl": "original,timestamp",
             "filter": ["statuscode:200", "mimetype:text/html"],
-            "collapse": "urlkey",
-            "limit": 1000,
+            "limit": self._CDX_BLOCK_LIMIT,
         }
         backoff = 5.0
         last_err: str | None = None
@@ -2240,10 +2275,16 @@ class CBOIngestor(Ingestor):
                 backoff *= 2
                 continue
             if resp.status_code == 200:
-                rows: list[tuple[int, str]] = []
-                for line in resp.text.strip().split("\n"):
-                    if not line:
-                        continue
+                raw_lines = [ln for ln in resp.text.strip().split("\n") if ln]
+                if len(raw_lines) >= self._CDX_BLOCK_LIMIT:
+                    raise RuntimeError(
+                        f"CBO CDX block {prefix}*: hit the {self._CDX_BLOCK_LIMIT}-row "
+                        "limit — output was truncated and the block's tail would be "
+                        "lost. Refusing to proceed with a partial block."
+                    )
+                earliest: dict[int, str] = {}
+                latest: dict[int, str] = {}
+                for line in raw_lines:
                     parts = line.split(" ")
                     if len(parts) < 2 or not parts[1].isdigit():
                         continue
@@ -2253,8 +2294,14 @@ class CBOIngestor(Ingestor):
                     pid = int(m.group(1))
                     if pid < 10000 or pid > 99999:
                         continue  # keep only 5-digit publication ids
-                    rows.append((pid, parts[1]))
-                log.debug("CBO CDX block %d*: %d ids", prefix, len(rows))
+                    ts = parts[1]
+                    if pid not in earliest or ts < earliest[pid]:
+                        earliest[pid] = ts
+                    if pid not in latest or ts > latest[pid]:
+                        latest[pid] = ts
+                rows = [(pid, earliest[pid], latest[pid]) for pid in sorted(earliest)]
+                log.debug("CBO CDX block %d*: %d ids (%d snapshot rows)",
+                          prefix, len(rows), len(raw_lines))
                 return rows
             if resp.status_code in (429, 502, 503, 504):
                 last_err = f"HTTP {resp.status_code}"
