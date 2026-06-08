@@ -141,13 +141,16 @@ def ingest(
 
     valid_sources = {"institutional", *_SUB_INGESTORS}
 
-    for name in [s.strip() for s in sources.split(",")]:
+    requested = [s.strip() for s in sources.split(",")]
+    failures: list[tuple[str, str]] = []
+    for name in requested:
         if name not in valid_sources:
             log.error(
                 "Unknown or inactive source '%s'. Valid: %s. "
                 "AP News, Reuters, and MarketWatch have been removed from the semantic corpus (ADR-010).",
                 name, valid_sources,
             )
+            failures.append((name, "unknown source"))
             continue
         out_path = raw_dir / f"{name}_{start}_{end}.jsonl"
         ext = _checkpoint_ext.get(name, "txt")
@@ -158,6 +161,13 @@ def ingest(
             "Ingesting %s → %s (%s)",
             name, out_path, "appending (checkpoint resume)" if resume else "new file",
         )
+        # Any failure to fully capture a source is fatal to this command. A
+        # sub-ingestor fail-loud RAISE (transient fetch error, CDX truncation,
+        # listing break) — or a 0-article window — must propagate to a non-zero
+        # process exit. The parallel fan-out chains filter→embed→cluster on
+        # afterok of every ingest job; swallowing the raise (exit 0) would run
+        # the embed chain on a holey/truncated corpus. Partial output already
+        # written to out_path is preserved for checkpoint-resume and debugging.
         try:
             ingestor = _make_ingestor(name, checkpoint_path)
             count = 0
@@ -167,12 +177,21 @@ def ingest(
                     fh.write("\n")
                     count += 1
             log.info("  Wrote %d articles to %s", count, out_path)
-        except NotImplementedError as exc:
-            log.warning("  %s: not yet implemented — %s", name, exc)
-        except EnvironmentError as exc:
-            log.error("  %s: credentials not set — %s", name, exc)
+            if count == 0:
+                log.error("  %s produced 0 articles — under-capture; failing.", name)
+                failures.append((name, "0 articles"))
         except Exception as exc:
             log.error("  %s failed: %s", name, exc, exc_info=True)
+            failures.append((name, str(exc)))
+
+    if failures:
+        log.error(
+            "ingest: %d/%d source(s) failed — exiting non-zero so the afterok "
+            "downstream chain halts and the gap is noticed: %s",
+            len(failures), len(requested),
+            ", ".join(f"{n} ({e})" for n, e in failures),
+        )
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

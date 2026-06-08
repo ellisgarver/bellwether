@@ -44,6 +44,7 @@ pre-registration). Bodies below are preserved verbatim for that defense.
 | 027 | Fed Board testimony as a distinct document stream | Live |
 | 028 | Coverage-verification standard (shape + independent inventory) | Live |
 | 029 | PIIE two coverage defects (blog tail; 2016 misdating) | Live |
+| 030 | **Fail-loud hardening — silent under-capture forbidden at every fetch boundary** | Live |
 
 ---
 
@@ -2164,6 +2165,123 @@ looks valid), and a shape filter risks dropping real articles with unusual slugs
 which violates the under-capture-is-the-only-failure-mode rule. The date-drop is
 the robust backstop; the only cost is wasted live fetches on the junk URLs, a
 performance nit within PIIE's 6h budget. Requires a PIIE re-run to materialize.
+
+---
+
+## ADR-030: Fail-loud hardening pass — silent under-capture is forbidden at every fetch boundary
+
+- **Status**: Accepted
+- **Date**: 2026-06-08
+
+### Context
+
+A 2026-06-07 read-only audit of `src/mnd/ingestion/institutional.py` (recorded
+in the `project_ingestor_robustness_gate` memory) found a systemic class of
+defect, distinct from any single source's coverage bug: at many fetch/listing
+boundaries a transient or partial failure was swallowed (`log.warning/error;
+return`/`break`/`continue`) and the sub-ingestor still completed "clean." On the
+parallel fan-out (`submit_parallel_ingest.sh`), a sub-ingestor that exits 0
+lets the `afterok` `filter→embed→cluster` chain proceed — so a holey corpus
+would silently flow downstream and the hole would only surface (if at all) in
+post-hoc coverage QA. This violates the locked principle that **under-capture is
+the only failure mode that matters** (CLAUDE.md / ADR-022): a silent partial is
+worse than a loud abort because it masquerades as success.
+
+Seven findings, all in `institutional.py` unless noted:
+
+1. **Orchestrator + CLI swallow.** `InstitutionalIngestor.fetch` and
+   `run_pipeline.py ingest` caught sub-ingestor/source exceptions and continued,
+   so one dead source could not fail the composite or the SLURM job.
+2. **Empty-vs-failed body conflation.** `_fetch_page_full` / `_extract_body`
+   parsed a 5xx error page into a short body and dropped it as if the article
+   were genuinely empty.
+3-6. **Listing truncation.** Single-fetch or paginated listings that `return`/
+   `break` on any error, silently truncating a whole series: IMF Coveo
+   (`_coveo_list`/`_coveo_post`), NBER, Fed-regional (NY Staff Reports both
+   passes, Chicago Fed sitemap + per-page, Atlanta pagination + body loop),
+   Treasury/OFR (`_scrape_ofr_index`, FSOC current/archive/per-year), VoxEU
+   (`_fetch_year` shard), Congressional (`_chrg_list_packages` pagination).
+7. **Single-float curl_cffi timeouts.** The impersonating getters
+   (`_imf_get`, `_atlanta_get`, `_cepr_get`, `_piie_get`) passed scalar
+   timeouts, which only bound the inter-byte read gap — a half-open TCP
+   connect can stall far past the nominal value (the `c47fb91` lesson, already
+   applied in `_get`/`_wayback_get`/`fed.py`).
+
+### Decision
+
+Establish and apply a uniform fail-loud contract at every ingest fetch boundary,
+landed in **one** deliberate pre-launch hardening pass (not mid-flight, per the
+robustness-gate memory), so the freeze rebuild runs on uniformly hardened code.
+
+**Classification rule.** By the time an exception reaches these handlers, the
+fetch layer (tenacity `_get`: 5 attempts, exponential backoff, retries 5xx +
+network, not 4xx — and now the curl_cffi getters, see below) has already
+absorbed transient blips. So:
+- **404 / genuine 4xx** = the resource genuinely does not exist → skip that item
+  (or `break` when it marks the true end of a listing).
+- **5xx / network / parse failure after retries** = systemic → `raise
+  RuntimeError(... refusing to ... silently)`, which propagates to the
+  sub-ingestor, fails the composite, exits the CLI non-zero, and halts the
+  `afterok` chain.
+
+The contract is only *sound* if a single transient blip cannot trip it. The
+tenacity-backed `_get` paths already had that cushion; the impersonating
+curl_cffi getters did not (see "Timeouts" below), so this pass gave them one
+too — otherwise the new fail-loud raises on curl_cffi paths (IMF/Atlanta/
+VoxEU/PIIE) would nuke a multi-hour source on the first flaky response.
+
+**Orchestrator (finding 1).** `InstitutionalIngestor.fetch` collects per-sub
+failures (exception *or* zero articles) and raises after the loop; `run_pipeline
+ingest` collects per-source failures and `sys.exit(1)`. Zero articles counts as
+a failure — a basis-set source is never legitimately empty.
+
+**Body classification (finding 2).** `_fetch_page_full` / `_extract_body`
+inspect status before parsing: 4xx → skip, 5xx → raise, never parse an error
+page into a droppable short body. The same status-conflation existed on IMF's
+*parallel* body path (`_fetch_publication_body`, `_fetch_legacy_fandd[_body]`),
+which bypasses `_fetch_page_full` and called `_imf_get` directly with
+`if status != 200: return None`; these were given the identical 4xx-skip /
+5xx-raise split, and the caller's `except Exception: body=None; continue`
+swallow (which would have re-masked the raise) was removed. The legacy F&D
+walker keeps 4xx as genuine absence — its nav-page slugs (basics/people/
+picture) legitimately 404, and some months have no issue.
+
+**Timeouts + curl_cffi retry (finding 7, extended).** A shared
+`_normalize_timeout(kwargs)` coerces a scalar `timeout` into a `(10.0, read)`
+connect/read tuple; every curl_cffi getter calls it (the Coveo POST already
+used a literal tuple). Additionally, a shared `_cffi_get_retry(do_get, url)`
+wraps each impersonating getter (`_imf_get`/`_atlanta_get`/`_cepr_get`/
+`_piie_get`): because those getters deliberately do **not** `raise_for_status`
+(callers classify status), a 5xx arrives as a normal response that tenacity
+can't see, so the wrapper inspects the status itself and retries on
+429 / 5xx / network with exponential backoff (5 attempts), returning only once
+the result is non-retryable or attempts are exhausted. This gives the curl_cffi
+paths the same transient cushion as `_get`. curl_cffi accepts the same tuple
+timeout form as `requests`.
+
+**Additional same-class boundaries hardened (found in review).** Beyond the
+seven audited findings, the same two defect classes were closed wherever else
+they appeared: the Treasury Secretary-remarks paginated listing (404 = end of
+pages, page-0 404 / 5xx / network = raise), the FSOC annual-report PDF
+fetch+parse (~16 born-digital reports — a fetch/parse failure raises rather
+than dropping a whole year), and the CEA package-list safety bail (raises on
+contract drift, matching the Congressional 1000-page bound).
+
+### Consequences
+
+- A persistent failure anywhere in the basis set now aborts the run loudly
+  instead of shipping a partial corpus downstream. This is acceptable even for
+  the long CBO/NBER runs: **correctness > convenience** is the locked tradeoff.
+- The `afterok` chain is now a genuine gate — embed/cluster cannot run on a
+  corpus that lost a source to a transient blip.
+- Operational note: a flaky upstream that survives all 5 retries will now fail
+  the whole source's job rather than degrade silently. The fix is to re-run that
+  source (`SOURCES="<src>" SKIP_DOWNSTREAM=1 ...`), not to re-soften the handler.
+- No config, threshold, or test-contract change; this is purely a control-flow
+  hardening of the ingest layer. The pre-existing `_wp_rest_fetch` / `_cdx_block`
+  raise-after-retries handlers were the template the rest now match.
+- This is the standing contract for any new ingestor: fetch boundaries classify
+  404-skip vs systemic-raise, never swallow-and-continue.
 
 ---
 
