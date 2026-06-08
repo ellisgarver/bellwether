@@ -1771,6 +1771,16 @@ The earliest capture predates CBO's site re-platforming, so Wayback holds only a
 
 **Scope.** `CBOIngestor._cdx_block` (no-collapse + min/max aggregation + truncation guard) and `CBOIngestor.fetch` (latest-real-ts fetch + interstitial guard) in `src/mnd/ingestion/institutional.py`, plus this addendum. No config or test-contract change (`cbo_2023_wayback` still validates the path). Verification: re-run `SOURCES="cbo"` ingest, then `scripts/verify_coverage.py cbo` — expect 2010 to rise off 23 and the latest-year column to shed any `"Wayback Machine"`/today-dated junk.
 
+### Addendum (2026-06-08): the earliest-snapshot upper-bound pre-filter dropped the ENTIRE corpus
+
+**Trigger.** A post-cleanse smoke (`CBOIngestor.fetch`, 2010-01-01..2010-06-30) returned **0** publications despite Wayback being reachable (CDX 200). The id band `[41500..42807]` enumerated correctly (14 blocks) but nothing was yielded.
+
+**Cause.** `fetch()` carried a *cheap pre-filter* that skipped any candidate whose earliest snapshot fell outside `[start, end + 90 days]`. The `+90 day` upper bound assumed Wayback crawls a new cbo.gov URL within ~90 days of publication. That assumption is **false for all pre-2018 CBO content**: the `/publication/{id}` URL scheme only came into existence with CBO's 2012 site migration, so the earliest archived capture of a 2010-dated publication is ~2012 — years past the `end + 90d` bound. A CDX probe of the band confirmed it: every id in `415xx–428xx` first appears in Wayback on `2012-04`/`2012-10`, never 2010. The upper-bound filter therefore dropped *every* candidate before any body fetch — a silent total-corpus under-capture, the exact failure mode the project forbids documenting as a limitation.
+
+**Fix (adopted).** Removed the unsound upper bound and the `_WAYBACK_DISCOVERY_LAG_DAYS`/`window_end_with_lag` machinery entirely. The pre-filter now keeps only the **sound lower bound** (`snap_date < start → skip`): a snapshot can never predate publication, so an earliest capture before the window start does prove the publication is pre-window. The authoritative window decision remains the post-fetch `page_date` gate, which reads each capture's own metadata. Cost: candidates in the bottom `_ID_RANGE_PAD` (≈500 ids of late-prior-year publications) are now body-fetched then date-dropped rather than skipped cheaply — negligible over a multi-hour full run, and correctness strictly dominates. Re-smoke (2010 full year) returned real January-2010 cost-estimate publications (e.g. *H.R. 689, Shasta-Trinity National Forest…*, *S. 1369, Molalla River Wild and Scenic Rivers Act*) with correct in-window dates, real titles, and ≥50-word bodies — zero `"Wayback Machine"` interstitials.
+
+**Scope.** `CBOIngestor.fetch` pre-filter + removal of the `_WAYBACK_DISCOVERY_LAG_DAYS` constant in `src/mnd/ingestion/institutional.py`, plus this addendum. No config or test-contract change. Verification before the long re-ingest: `SOURCES="cbo"` smoke shows in-window dates / real titles / ≥50 words, then `scripts/verify_coverage.py cbo` (ADR-028 shape pivot).
+
 ---
 
 ## ADR-024: Repo cleanse + single-source-of-truth doc governance + document-and-push-per-task workflow
