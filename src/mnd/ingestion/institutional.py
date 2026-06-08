@@ -2499,19 +2499,55 @@ class CBOIngestor(Ingestor):
     # Wayback snapshot fetcher (passed to _fetch_page_full as ``getter``)
     # ------------------------------------------------------------------
 
-    def _wayback_get(self, url: str, **kwargs):
-        """HTTP GET for Wayback snapshot URLs.
+    def _wayback_get(self, url: str, *, max_attempts: int = 7, **kwargs):
+        """HTTP GET for Wayback snapshot URLs, with the CDX path's retry cushion.
 
-        Pass-through wrapper around stdlib requests with a tuple timeout —
-        per the lessons of c47fb91, single-value floats only enforce the
-        inter-byte read gap; a Wayback edge node dripping bytes never trips
-        a 30s single-value timeout.
+        Tuple timeout per c47fb91: a scalar float only bounds the inter-byte
+        read gap; a Wayback edge node dripping bytes never trips a 30s single
+        value.
+
+        Retry parity with ``_cdx_block`` (ADR-030 soundness rule: the fail-loud
+        body classification in ``_fetch_page_full`` is only sound if a single
+        transient blip can't trip it). Wayback is served by a single edge IP
+        (``getent`` returns one A record, no pool, no IPv6) that resets/refuses
+        connections under burst and during recovery; without a cushion one flap
+        in the thousands-of-snapshots walk would raise straight through
+        ``_fetch_page_full`` and fail the whole CBO source. So we retry on
+        429/5xx AND raw network errors with exponential backoff + jitter
+        (7 attempts, 5s→320s ≈ 10 min, sized to outlast the rate-limit window).
+        Genuine 4xx (404/403/410) returns for the caller to skip as real
+        absence; true exhaustion RAISES, so a sustained outage still fails loud
+        rather than dropping a snapshot silently.
         """
         timeout = kwargs.pop("timeout", 60.0)
         if isinstance(timeout, (int, float)):
             timeout = (10, max(30, int(timeout)))
         kwargs.setdefault("headers", {"User-Agent": self._UA})
-        return requests.get(url, timeout=timeout, **kwargs)
+        backoff = 5.0
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = requests.get(url, timeout=timeout, **kwargs)
+            except Exception as exc:
+                log.debug("CBO Wayback GET %s: %s (attempt %d/%d) — backoff %.1fs",
+                          url, exc, attempt, max_attempts, backoff)
+                if attempt == max_attempts:
+                    raise
+                time.sleep(backoff + random.uniform(0, backoff * 0.25))
+                backoff = min(backoff * 2, 320.0)
+                continue
+            if resp.status_code in (429, 502, 503, 504):
+                log.debug("CBO Wayback GET %s: HTTP %s (attempt %d/%d) — backoff %.1fs",
+                          url, resp.status_code, attempt, max_attempts, backoff)
+                if attempt == max_attempts:
+                    raise RuntimeError(
+                        f"CBO Wayback GET {url}: HTTP {resp.status_code} after "
+                        f"{max_attempts} attempts — refusing to drop the snapshot silently"
+                    )
+                time.sleep(backoff + random.uniform(0, backoff * 0.25))
+                backoff = min(backoff * 2, 320.0)
+                continue
+            return resp
+        raise RuntimeError(f"CBO Wayback GET {url}: retry loop exhausted")  # unreachable
 
     @staticmethod
     def _ts_to_date(ts: str) -> date | None:
