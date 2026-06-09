@@ -128,9 +128,16 @@ def ingest(
 
     _checkpoint_ext = {"institutional": "json"}
 
+    # Sources that accept a per-record resume checkpoint when run standalone.
+    # CBO's Wayback walk (~13.6k pids at the IA-safe ~1 req/9-12s) exceeds the
+    # 36h caslake QOS cap, so it must resume across sequential jobs (ADR-023).
+    _CHECKPOINTED_SUBS = {"cbo"}
+
     def _make_ingestor(name: str, cp_path):
         if name == "institutional":
             return InstitutionalIngestor(checkpoint_path=cp_path)
+        if name in _CHECKPOINTED_SUBS:
+            return _SUB_INGESTORS[name](checkpoint_path=cp_path)
         if name in _SUB_INGESTORS:
             return _SUB_INGESTORS[name]()
         raise ValueError(
@@ -175,11 +182,25 @@ def ingest(
                 for article in ingestor.fetch(start_d, end_d):
                     fh.write(article.to_jsonl())
                     fh.write("\n")
+                    # Flush each record so a checkpointed ingestor (CBO) never
+                    # marks a pid done before its article is durable on disk —
+                    # a kill between write and flush would otherwise lose a
+                    # record that the checkpoint claims was captured.
+                    fh.flush()
                     count += 1
             log.info("  Wrote %d articles to %s", count, out_path)
             if count == 0:
-                log.error("  %s produced 0 articles — under-capture; failing.", name)
-                failures.append((name, "0 articles"))
+                # On a resume that simply finished the tail, this run can
+                # legitimately yield 0 new records while the output file is
+                # already populated from prior jobs — that is completion, not
+                # under-capture. Only a fresh (non-resume) 0 is a real failure.
+                if resume and out_path.exists() and out_path.stat().st_size > 0:
+                    log.info("  %s: 0 new articles on resume — walk already "
+                             "complete (existing %d bytes).", name,
+                             out_path.stat().st_size)
+                else:
+                    log.error("  %s produced 0 articles — under-capture; failing.", name)
+                    failures.append((name, "0 articles"))
         except Exception as exc:
             log.error("  %s failed: %s", name, exc, exc_info=True)
             failures.append((name, str(exc)))
