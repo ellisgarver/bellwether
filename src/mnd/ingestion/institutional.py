@@ -2727,7 +2727,7 @@ class CBOIngestor(Ingestor):
     # ------------------------------------------------------------------
 
     def _wayback_get(
-        self, url: str, *, max_attempts: int = 10, ban_attempts: int = 3, **kwargs
+        self, url: str, *, max_attempts: int = 10, ban_cooldowns: int = 20, **kwargs
     ):
         """HTTP GET for Wayback snapshot URLs, with the CDX path's retry cushion.
 
@@ -2735,60 +2735,70 @@ class CBOIngestor(Ingestor):
         read gap; a Wayback edge node dripping bytes never trips a 30s single
         value.
 
-        Retry parity with ``_cdx_block`` (ADR-030 soundness rule: the fail-loud
-        body classification in ``_fetch_page_full`` is only sound if a single
-        transient blip can't trip it). Wayback is served by a single edge IP
-        (``getent`` returns one A record, no pool, no IPv6) that resets/refuses
-        connections under burst and during recovery; without a cushion one flap
-        in the thousands-of-snapshots walk would raise straight through
-        ``_fetch_page_full`` and fail the whole CBO source. So we retry on
-        5xx AND raw network errors over ``max_attempts`` with escalating backoff.
+        Two *separate* budgets, because 429 and 5xx are different failures:
 
-        429 is handled DIFFERENTLY from 5xx (2026-06-09 correction). IA's replay
-        429 is not a burst limiter you can outwait — it is a cumulative
-        request-count ban on the egress IP that, once tripped, stays tripped for
-        the rest of the job no matter how slowly we then crawl. Hammering it with
-        ten escalating retries doesn't recover the run (every subsequent pid also
-        429s) and *escalates* IA's ban on the IP. So we honor ``Retry-After`` for
-        a SMALL number of attempts (``ban_attempts``, default 3) — enough to ride
-        a genuinely brief throttle — and if 429 persists we raise
-        ``_WaybackBanned``, which the fetch loop catches to pause-and-resume
-        (bank the checkpoint, exit clean) rather than crash. Genuine 4xx
-        (404/403/410) returns for the caller to skip as real absence; a sustained
-        5xx/network outage still RAISES loud rather than dropping a snapshot.
+        - **5xx / raw network error** = a transient blip on IA's single edge IP
+          (``getent`` returns one A record, no pool, no IPv6 — it resets/refuses
+          under burst and during recovery). Retried over ``max_attempts`` with
+          escalating backoff; a sustained outage RAISES so it can never
+          masquerade as an empty page and silently under-capture (ADR-030
+          soundness rule — the fail-loud body classification in
+          ``_fetch_page_full`` is only sound if one blip can't trip it).
+
+        - **429** = IA's replay throttle, a *rolling-window request count* ban
+          (~15-30 fast requests trips it; see ``_REQUEST_SPACING_S``). At the
+          12s sustained pace this should never trip on a clean egress IP — but
+          if IA hiccups we ride it out PATIENTLY rather than give up: honor
+          ``Retry-After`` (IA names its own cooldown) over up to ``ban_cooldowns``
+          multi-minute waits and CONTINUE the same request once the window
+          clears. Patient cooldowns are what IA asks for and do NOT escalate the
+          ban — only the prior *rapid* 10-attempt hammer did (2026-06-09: three
+          0.3s runs escalated an IP into a hard ban). Only after the full
+          patience budget is exhausted — a genuine hard ban needing a human
+          (fresh IP / long cooldown) — do we raise ``_WaybackBanned``, which the
+          fetch loop catches to pause-and-resume (bank the checkpoint, exit
+          clean) rather than crash. Genuine 4xx (404/403/410) returns for the
+          caller to skip as real absence.
         """
         timeout = kwargs.pop("timeout", 60.0)
         if isinstance(timeout, (int, float)):
             timeout = (10, max(30, int(timeout)))
         kwargs.setdefault("headers", {"User-Agent": self._UA})
         backoff = 5.0
-        throttle_hits = 0
-        for attempt in range(1, max_attempts + 1):
+        attempt = 0          # transient 5xx / network budget
+        throttle_hits = 0    # sustained-429 patience budget
+        while True:
             try:
                 resp = requests.get(url, timeout=timeout, **kwargs)
             except Exception as exc:
+                attempt += 1
                 log.debug("CBO Wayback GET %s: %s (attempt %d/%d) — backoff %.1fs",
                           url, exc, attempt, max_attempts, backoff)
-                if attempt == max_attempts:
+                if attempt >= max_attempts:
                     raise
                 time.sleep(backoff + random.uniform(0, backoff * 0.25))
                 backoff = min(backoff * 2, 320.0)
                 continue
             if resp.status_code == 429:
                 throttle_hits += 1
-                if throttle_hits >= ban_attempts:
+                if throttle_hits >= ban_cooldowns:
                     raise _WaybackBanned(
                         f"CBO Wayback GET {url}: HTTP 429 persisted across "
-                        f"{throttle_hits} attempts — IA replay ban on this egress IP"
+                        f"{throttle_hits} patient cooldowns — IA replay ban on "
+                        f"this egress IP (needs a fresh IP or a long cooldown)"
                     )
-                wait = self._retry_after_seconds(resp, fallback=backoff)
-                log.warning("CBO Wayback GET %s: HTTP 429 (throttle %d/%d) — wait %.1fs",
-                            url, throttle_hits, ban_attempts, wait)
+                wait = self._retry_after_seconds(resp, fallback=max(backoff, 60.0))
+                log.warning(
+                    "CBO Wayback GET %s: HTTP 429 (cooldown %d/%d) — waiting %.0fs "
+                    "for IA's rolling-window throttle to clear",
+                    url, throttle_hits, ban_cooldowns, wait,
+                )
                 time.sleep(wait + random.uniform(0, min(wait * 0.25, 30.0)))
                 backoff = min(backoff * 2, 320.0)
                 continue
             if resp.status_code in (502, 503, 504):
-                if attempt == max_attempts:
+                attempt += 1
+                if attempt >= max_attempts:
                     raise RuntimeError(
                         f"CBO Wayback GET {url}: HTTP {resp.status_code} after "
                         f"{max_attempts} attempts — refusing to drop the snapshot silently"
@@ -2800,7 +2810,6 @@ class CBOIngestor(Ingestor):
                 backoff = min(backoff * 2, 320.0)
                 continue
             return resp
-        raise RuntimeError(f"CBO Wayback GET {url}: retry loop exhausted")  # unreachable
 
     @staticmethod
     def _retry_after_seconds(resp, *, fallback: float) -> float:
