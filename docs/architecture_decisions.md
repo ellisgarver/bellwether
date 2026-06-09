@@ -2297,6 +2297,23 @@ scattered third-party syndication links degrade to excerpt, which cannot truncat
 a source's tail. Threaded to all three WP-REST callers (Brookings, Liberty Street
 Economics, FRBSF).
 
+**Wayback sustained-throttle — honor `Retry-After` (2026-06-08).** The clean
+re-ingest's CBO job failed after 33 min on `HTTP 429 after 7 attempts` from
+`_wayback_get`. Distinct from the earlier connection-flap cushion: this is
+Internet Archive's *sustained* rate limiter, tripped by the full
+~21.7k-publication walk firing snapshot replay GETs faster than IA tolerates.
+The blind exponential backoff (7 attempts, ~10 min cumulative) was both too
+short and the wrong shape — IA returns `Retry-After` on those 429s stating its
+own cooldown, which we ignored. Fix: `_wayback_get` now honors `Retry-After`
+(integer seconds, clamped to [current-backoff, 600s]) and falls back to
+exponential backoff only when the header is absent; attempt budget raised 7→10.
+This paces us to what IA actually permits rather than guessing. The fail-loud
+contract is unchanged — genuine 4xx still returns to skip, and true exhaustion
+across the widened budget still RAISES rather than dropping a snapshot silently.
+If the full walk still trips a hard IP-level block, the next lever is reducing
+the base inter-request rate (currently 0.3s/publication), traded against the
+~3h walltime.
+
 **GovInfo collection pagination — follow `nextPage`, do not splice the cursor
 (2026-06-08).** The clean re-ingest failed `congressional` after 3h with a
 GovInfo `500` on page 2 of the CHRG collection listing. Root cause was a
