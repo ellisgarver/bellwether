@@ -620,12 +620,13 @@ def _wp_post_to_article(
     """Convert a WP REST API post dict to an Article. Returns None if out of range.
 
     ``expected_host`` is the WP source's own canonical host (e.g.
-    ``www.brookings.edu``). When set, a body-fetch failure on a *cross-domain*
-    ``link`` (a syndicated post whose canonical URL lives on a third-party
-    domain we don't control) is treated as one genuinely-absent record — the
-    article is kept on its excerpt rather than raising. A failure on the
-    source's OWN host still raises (ADR-030: a real outage must fail the
-    source, never silently truncate). When unset, every failure raises.
+    ``www.brookings.edu``). When set, any record whose ``link`` resolves to a
+    host outside that source's own domain family is DROPPED before fetching
+    (ADR-031 source-identity rule: a syndicated op-ed or a press/media-mention
+    is third-party content, not this source's own output). Body-fetch failures
+    on the source's own host then always raise (ADR-030: a real outage must
+    fail the source, never silently truncate). When unset, no domain filter is
+    applied and every fetch failure raises.
     """
     post_date_str = post.get("date", "")
     try:
@@ -638,6 +639,27 @@ def _wp_post_to_article(
     url = post.get("link", "")
     if not url:
         return None
+
+    # Source-identity rule (ADR-031): each basis-set source contributes only
+    # its OWN published content. A WP entry whose canonical link lives off the
+    # source's own domain is a syndicated op-ed or a press/media-mention (a
+    # scholar's piece republished in the Washington Post, a TV-appearance
+    # video, a news-wire write-up) — third-party content that would re-import
+    # the journalism dimension removed in ADR-010 and break the independence of
+    # the basis-set's source dimensions. Drop it. This is a PROVENANCE filter on
+    # source identity, NOT a topical filter, so it stays consistent with
+    # ADR-020's no-pre-cluster-topic-gate. Checked BEFORE any body fetch, so an
+    # off-domain (often reachable, or paywalled-and-slow) link is never fetched:
+    # this also prevents silently keeping the full body of a reachable
+    # third-party page, and removes the cross-domain fetch-timeout drag.
+    if expected_host:
+        link_host = urlparse(url).netloc.lower()
+        base_host = expected_host.lower()
+        if base_host.startswith("www."):
+            base_host = base_host[4:]
+        if not (link_host == base_host or link_host.endswith("." + base_host)):
+            log.debug("Dropping off-domain WP record %s (not %s)", url, expected_host)
+            return None
 
     title_raw = post.get("title", {})
     title = _wp_html_to_text(
@@ -659,19 +681,10 @@ def _wp_post_to_article(
     if api_content and len(api_content.split()) >= 50:
         body = api_content
     elif fetch_full_body:
-        fetched_title = ""
-        try:
-            body, fetched_title, author, _ = _fetch_page_full(url, min_words=50)
-        except (RetryError, RuntimeError, OSError, requests.exceptions.RequestException):
-            host = urlparse(url).netloc.lower()
-            if expected_host and host and host != expected_host.lower():
-                log.warning(
-                    "Cross-domain body fetch failed (%s ≠ %s); keeping %s on excerpt",
-                    host, expected_host, url,
-                )
-                body, author = excerpt, None
-            else:
-                raise
+        # The link is guaranteed on-domain by the source-identity check above,
+        # so any body-fetch failure here is a real outage on the source's own
+        # host → propagate it (ADR-030 fail-loud), never silently truncate.
+        body, fetched_title, author, _ = _fetch_page_full(url, min_words=50)
         if not body or len(body.split()) < 50:
             body = excerpt
         if fetched_title and not title:
