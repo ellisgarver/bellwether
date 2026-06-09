@@ -161,7 +161,16 @@ def ingest(
             continue
         out_path = raw_dir / f"{name}_{start}_{end}.jsonl"
         ext = _checkpoint_ext.get(name, "txt")
-        checkpoint_path = raw_dir / f".{name}_checkpoint.{ext}"
+        # Co-key the checkpoint to the SAME window as the output file. The
+        # submit script stamps the window end with "today" by default, so a
+        # multi-day resumable walk (CBO ~45h) gets a new output filename each
+        # calendar day. A date-independent checkpoint would then tell the new
+        # day's run that pids written to YESTERDAY's file are "done" and skip
+        # them — silent under-capture across a split pair of files. Keying the
+        # checkpoint by window guarantees checkpoint and output are always the
+        # same generation: a date roll simply starts a clean new walk rather
+        # than corrupting one. (Pin END=<date> across re-fires to resume.)
+        checkpoint_path = raw_dir / f".{name}_{start}_{end}_checkpoint.{ext}"
         resume = checkpoint_path.exists() and out_path.exists()
         mode = "a" if resume else "w"
         log.info(
