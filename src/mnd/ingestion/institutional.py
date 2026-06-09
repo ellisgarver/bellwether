@@ -2499,7 +2499,7 @@ class CBOIngestor(Ingestor):
     # Wayback snapshot fetcher (passed to _fetch_page_full as ``getter``)
     # ------------------------------------------------------------------
 
-    def _wayback_get(self, url: str, *, max_attempts: int = 7, **kwargs):
+    def _wayback_get(self, url: str, *, max_attempts: int = 10, **kwargs):
         """HTTP GET for Wayback snapshot URLs, with the CDX path's retry cushion.
 
         Tuple timeout per c47fb91: a scalar float only bounds the inter-byte
@@ -2513,8 +2513,15 @@ class CBOIngestor(Ingestor):
         connections under burst and during recovery; without a cushion one flap
         in the thousands-of-snapshots walk would raise straight through
         ``_fetch_page_full`` and fail the whole CBO source. So we retry on
-        429/5xx AND raw network errors with exponential backoff + jitter
-        (7 attempts, 5s→320s ≈ 10 min, sized to outlast the rate-limit window).
+        429/5xx AND raw network errors.
+
+        The full ~21.7k-publication walk fires snapshot GETs fast enough to trip
+        Internet Archive's *sustained* rate limiter (observed: HTTP 429 that
+        outlasted a ~10-min blind-backoff budget). IA returns ``Retry-After`` on
+        those 429s naming its own cooldown, so we honor it — that paces us to
+        what IA actually permits instead of guessing — and fall back to
+        exponential backoff + jitter only when the header is absent. Capped at
+        600s/attempt over 10 attempts so we outlast a multi-minute throttle.
         Genuine 4xx (404/403/410) returns for the caller to skip as real
         absence; true exhaustion RAISES, so a sustained outage still fails loud
         rather than dropping a snapshot silently.
@@ -2536,18 +2543,36 @@ class CBOIngestor(Ingestor):
                 backoff = min(backoff * 2, 320.0)
                 continue
             if resp.status_code in (429, 502, 503, 504):
-                log.debug("CBO Wayback GET %s: HTTP %s (attempt %d/%d) — backoff %.1fs",
-                          url, resp.status_code, attempt, max_attempts, backoff)
                 if attempt == max_attempts:
                     raise RuntimeError(
                         f"CBO Wayback GET {url}: HTTP {resp.status_code} after "
                         f"{max_attempts} attempts — refusing to drop the snapshot silently"
                     )
-                time.sleep(backoff + random.uniform(0, backoff * 0.25))
+                wait = self._retry_after_seconds(resp, fallback=backoff)
+                log.debug("CBO Wayback GET %s: HTTP %s (attempt %d/%d) — wait %.1fs",
+                          url, resp.status_code, attempt, max_attempts, wait)
+                time.sleep(wait + random.uniform(0, min(wait * 0.25, 30.0)))
                 backoff = min(backoff * 2, 320.0)
                 continue
             return resp
         raise RuntimeError(f"CBO Wayback GET {url}: retry loop exhausted")  # unreachable
+
+    @staticmethod
+    def _retry_after_seconds(resp, *, fallback: float) -> float:
+        """Cooldown to wait on a throttle, honoring a ``Retry-After`` header.
+
+        IA sends ``Retry-After`` as integer seconds on its 429s. Parse that
+        (clamped to [fallback, 600] so a tiny or pathological value can neither
+        re-hammer nor stall the walk); fall back to the caller's exponential
+        backoff when the header is absent or unparseable.
+        """
+        ra = resp.headers.get("Retry-After")
+        if ra:
+            try:
+                return min(max(float(int(ra.strip())), fallback), 600.0)
+            except (ValueError, AttributeError):
+                pass
+        return fallback
 
     @staticmethod
     def _ts_to_date(ts: str) -> date | None:
