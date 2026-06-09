@@ -2248,6 +2248,43 @@ class CBOIngestor(Ingestor):
 
     _PUBLICATION_RE = re.compile(r"/publication/(\d+)\b")
 
+    def __init__(self, checkpoint_path: "Path | None" = None) -> None:
+        # Optional per-pid resume checkpoint. The full Wayback walk (~13.6k
+        # pids at the measured IA-safe ~1 req/9-12s) exceeds the 36h caslake
+        # QOS cap, so CBO must be able to resume across sequential SLURM jobs
+        # without re-fetching. The checkpoint is a flat one-pid-per-line file
+        # (ext "txt" via run_pipeline's _make_ingestor); each pid is appended
+        # only AFTER its article has been yielded and flushed by the caller
+        # (ADR-023 resume addendum). When no path is given (the composite
+        # InstitutionalIngestor path) the walk is uncheckpointed as before.
+        self._checkpoint_path = checkpoint_path
+        self._done_pids: set[int] = self._load_checkpoint()
+
+    def _load_checkpoint(self) -> set[int]:
+        if not self._checkpoint_path or not self._checkpoint_path.exists():
+            return set()
+        done: set[int] = set()
+        with self._checkpoint_path.open() as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    done.add(int(line))
+                except ValueError:
+                    continue
+        log.info("CBO: resuming — %d pids already done (checkpoint %s)",
+                 len(done), self._checkpoint_path)
+        return done
+
+    def _mark_done(self, pid: int) -> None:
+        if not self._checkpoint_path:
+            return
+        with self._checkpoint_path.open("a") as fh:
+            fh.write(f"{pid}\n")
+            fh.flush()
+        self._done_pids.add(pid)
+
     def fetch(self, start: date, end: date) -> Iterator[Article]:
         id_lo, id_hi = self._estimate_id_range(start, end)
         log.info(
@@ -2257,11 +2294,18 @@ class CBOIngestor(Ingestor):
         )
         seen_pids: set[int] = set()
         yielded = 0
+        skipped_done = 0
         for prefix in range(id_lo // 100, id_hi // 100 + 1):
             for pid, earliest_ts, latest_ts in self._cdx_block(prefix):
                 if pid in seen_pids or pid < id_lo or pid > id_hi:
                     continue
                 seen_pids.add(pid)
+                # Resume: a pid already in the checkpoint was fully processed
+                # (kept-and-flushed or deliberately dropped) by a prior job —
+                # skip without spending a Wayback GET. No-op when uncheckpointed.
+                if pid in self._done_pids:
+                    skipped_done += 1
+                    continue
                 snap_date = self._ts_to_date(earliest_ts)
                 # Cheap lower-bound pre-filter ONLY. A snapshot can never
                 # predate publication, so an earliest capture before the
@@ -2273,82 +2317,109 @@ class CBOIngestor(Ingestor):
                 # 428xx band first appears 2012-04+). Crawl date lags
                 # publication arbitrarily for migrated content; the
                 # authoritative window gate is the post-fetch page_date below.
+                # Not marked done: it costs no fetch, so re-evaluating it on a
+                # later resume is free.
                 if snap_date is not None and snap_date < start:
                     continue
-                original_url = f"https://www.cbo.gov/publication/{pid}"
-                # Fetch the LATEST *real* capture (max ts from the block query),
-                # not the earliest. For pre-~2013 content the earliest capture
-                # is a degraded early-migration stub: a truncated body, a junk
-                # "CBO" title, and a less-accurate date (e.g. pub/41813
-                # earliest=22w/"CBO"/2010-01-01 vs a later capture=162w/
-                # real-title/2010-01-14). The page's own metadata carries the
-                # true publication date regardless of snapshot age, so a later
-                # real capture is strictly higher-fidelity. We use a concrete
-                # captured timestamp — NEVER the `29991231` far-future redirect,
-                # which resolves non-deterministically to a Wayback interstitial
-                # page titled "Wayback Machine" and dated "today", corrupting
-                # both the body and the extracted date (and silently dropping or
-                # mis-dating real publications). `earliest_ts` is retained as
-                # the crawl-date pre-filter above and the fallback below.
-                snap_url = self._SNAP_PREFIX.format(ts=latest_ts, url=original_url)
-                body, fetched_title, _author, page_date = _fetch_page_full(
-                    snap_url, min_words=50, getter=self._wayback_get,
+                # The fetch can RAISE on Wayback ban-exhaustion; the exception
+                # propagates out of this generator (fail-loud, ADR-030) and the
+                # pid is NOT marked done, so the resume retries it.
+                article = self._fetch_and_build(
+                    pid, earliest_ts, latest_ts, start, end,
                 )
-                # Fall back to the earliest capture only if the latest is
-                # unusable (page later removed → latest is a 404/redirect stub).
-                if not body or page_date is None:
-                    snap_url = self._SNAP_PREFIX.format(ts=earliest_ts, url=original_url)
-                    body, fetched_title, _author, page_date = _fetch_page_full(
-                        snap_url, min_words=50, getter=self._wayback_get,
-                    )
-                time.sleep(0.3)
-                # Defensive guard: reject a Wayback interstitial/error page
-                # captured as 200. The "Wayback Machine" title is the tell;
-                # using a concrete captured ts (not the 2999 redirect) should
-                # prevent these, but a soft-404 snapshot could still surface.
-                if fetched_title and fetched_title.strip() == "Wayback Machine":
-                    log.debug("CBO pub/%d: dropped — Wayback interstitial (ts=%s)",
-                              pid, latest_ts)
-                    continue
-                # Strict date policy (no Wayback-timestamp fallback): the
-                # snapshot timestamp is a crawl date, not the publication
-                # date. We emit only records whose own page metadata yields
-                # a publication date inside the window.
-                if page_date is None:
-                    log.debug("CBO pub/%d: dropped — no page-extracted date (ts=%s)",
-                              pid, latest_ts)
-                    continue
-                if page_date < start or page_date > end:
-                    log.debug("CBO pub/%d: dropped (page_date=%s out of [%s..%s])",
-                              pid, page_date, start, end)
-                    continue
-                if not body or len(body.split()) < 50:
-                    log.debug("CBO pub/%d: body too short (%d words)",
-                              pid, len(body.split()) if body else 0)
-                    continue
-                yield _make_article(
-                    source_id=self.source_id,
-                    # Canonical cbo.gov URL — NOT the Wayback wrapper. Keeps
-                    # the source-set framing on cbo.gov even though retrieval
-                    # went through the archive.
-                    url=original_url,
-                    published_at=page_date.isoformat() + "T00:00:00Z",
-                    title=fetched_title or "CBO publication",
-                    body=body,
-                    author="CBO",
-                    section="cbo_publication",
-                    tier=1,
-                    document_type="cbo_publication",
-                )
-                yielded += 1
+                if article is not None:
+                    yield article
+                    yielded += 1
+                # Mark done only after the `yield` resumes — by then the caller
+                # has written and flushed this article to the raw file (or, for
+                # a dropped pid, there was nothing to write). The checkpoint
+                # therefore never marks a pid done before its record is durable.
+                self._mark_done(pid)
             time.sleep(0.5 + random.uniform(0, 0.3))
-        if yielded == 0:
+        if yielded == 0 and skipped_done == 0:
             log.warning(
                 "CBO: 0 publications from Wayback in [%s..%s] (id range "
                 "[%d..%d]). Either the window has no archived snapshots or "
                 "Wayback CDX is failing (check web.archive.org availability).",
                 start, end, id_lo, id_hi,
             )
+
+    def _fetch_and_build(
+        self, pid: int, earliest_ts: str, latest_ts: str,
+        start: date, end: date,
+    ) -> "Article | None":
+        """Fetch one CBO pid's Wayback capture and build an Article, or None.
+
+        Returns None when the page fails any keep gate (interstitial, no
+        page-date, out-of-window, body < 50 words). Propagates whatever
+        ``_wayback_get`` raises on sustained ban-exhaustion so the caller can
+        fail loud rather than silently truncate the series.
+        """
+        original_url = f"https://www.cbo.gov/publication/{pid}"
+        # Fetch the LATEST *real* capture (max ts from the block query),
+        # not the earliest. For pre-~2013 content the earliest capture
+        # is a degraded early-migration stub: a truncated body, a junk
+        # "CBO" title, and a less-accurate date (e.g. pub/41813
+        # earliest=22w/"CBO"/2010-01-01 vs a later capture=162w/
+        # real-title/2010-01-14). The page's own metadata carries the
+        # true publication date regardless of snapshot age, so a later
+        # real capture is strictly higher-fidelity. We use a concrete
+        # captured timestamp — NEVER the `29991231` far-future redirect,
+        # which resolves non-deterministically to a Wayback interstitial
+        # page titled "Wayback Machine" and dated "today", corrupting
+        # both the body and the extracted date (and silently dropping or
+        # mis-dating real publications). `earliest_ts` is retained as
+        # the crawl-date pre-filter above and the fallback below.
+        snap_url = self._SNAP_PREFIX.format(ts=latest_ts, url=original_url)
+        body, fetched_title, _author, page_date = _fetch_page_full(
+            snap_url, min_words=50, getter=self._wayback_get,
+        )
+        # Fall back to the earliest capture only if the latest is
+        # unusable (page later removed → latest is a 404/redirect stub).
+        if not body or page_date is None:
+            snap_url = self._SNAP_PREFIX.format(ts=earliest_ts, url=original_url)
+            body, fetched_title, _author, page_date = _fetch_page_full(
+                snap_url, min_words=50, getter=self._wayback_get,
+            )
+        time.sleep(0.3)
+        # Defensive guard: reject a Wayback interstitial/error page
+        # captured as 200. The "Wayback Machine" title is the tell;
+        # using a concrete captured ts (not the 2999 redirect) should
+        # prevent these, but a soft-404 snapshot could still surface.
+        if fetched_title and fetched_title.strip() == "Wayback Machine":
+            log.debug("CBO pub/%d: dropped — Wayback interstitial (ts=%s)",
+                      pid, latest_ts)
+            return None
+        # Strict date policy (no Wayback-timestamp fallback): the
+        # snapshot timestamp is a crawl date, not the publication
+        # date. We emit only records whose own page metadata yields
+        # a publication date inside the window.
+        if page_date is None:
+            log.debug("CBO pub/%d: dropped — no page-extracted date (ts=%s)",
+                      pid, latest_ts)
+            return None
+        if page_date < start or page_date > end:
+            log.debug("CBO pub/%d: dropped (page_date=%s out of [%s..%s])",
+                      pid, page_date, start, end)
+            return None
+        if not body or len(body.split()) < 50:
+            log.debug("CBO pub/%d: body too short (%d words)",
+                      pid, len(body.split()) if body else 0)
+            return None
+        return _make_article(
+            source_id=self.source_id,
+            # Canonical cbo.gov URL — NOT the Wayback wrapper. Keeps
+            # the source-set framing on cbo.gov even though retrieval
+            # went through the archive.
+            url=original_url,
+            published_at=page_date.isoformat() + "T00:00:00Z",
+            title=fetched_title or "CBO publication",
+            body=body,
+            author="CBO",
+            section="cbo_publication",
+            tier=1,
+            document_type="cbo_publication",
+        )
 
     # ------------------------------------------------------------------
     # ID-range estimation (calibrated anchor interpolation)
