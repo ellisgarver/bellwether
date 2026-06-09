@@ -4087,15 +4087,13 @@ class CongressionalIngestor(Ingestor):
         url = (
             f"{self._GOVINFO_BASE}/collections/{self._CHRG_COLLECTION}/"
             f"{anchor_iso}"
-            f"?api_key={api_key}&pageSize=100&offsetMark=*"
+            f"?offsetMark=*&pageSize=100&api_key={api_key}"
         )
-        offset = "*"
         page = 0
         while True:
             page += 1
-            paged_url = re.sub(r"offsetMark=[^&]+", f"offsetMark={offset}", url)
             try:
-                resp = _get(paged_url, timeout=60.0)
+                resp = _get(url, timeout=60.0)
                 data = resp.json()
             except Exception as exc:
                 raise RuntimeError(
@@ -4107,10 +4105,17 @@ class CongressionalIngestor(Ingestor):
                 return
             for pkg in packages:
                 yield pkg
-            next_offset = data.get("nextPage") or data.get("offsetMark")
-            if not next_offset or next_offset == offset:
+            # GovInfo paginates via ``nextPage`` — a fully-formed URL carrying
+            # the opaque offsetMark cursor already URL-encoded. Follow it
+            # directly; it omits our api_key, so append it. (Splicing nextPage
+            # in as if it were the bare offsetMark token produced a nested URL
+            # GovInfo 500s on — ADR-030.)
+            next_page = data.get("nextPage")
+            if not next_page or next_page == url:
                 return
-            offset = next_offset
+            if "api_key=" not in next_page:
+                next_page += f"&api_key={api_key}"
+            url = next_page
             time.sleep(1.0)
             # Safety bound. CHRG has ~3000 hearings/year × 16 years = 48k
             # packages at pageSize=100 = ~480 pages. Bail at 1000 to avoid
@@ -4383,24 +4388,26 @@ class CEAIngestor(Ingestor):
         anchor_iso = anchor.isoformat() + "T00:00:00Z"
         url = (
             f"{self._GOVINFO_BASE}/collections/{self._COLLECTION}/{anchor_iso}"
-            f"?api_key={api_key}&pageSize=100&offsetMark=*"
+            f"?offsetMark=*&pageSize=100&api_key={api_key}"
         )
-        offset = "*"
         page = 0
         while True:
             page += 1
-            paged_url = re.sub(r"offsetMark=[^&]+", f"offsetMark={offset}", url)
-            data = self._govinfo_get_json(paged_url)
+            data = self._govinfo_get_json(url)
             packages = data.get("packages", [])
             if not packages:
                 return
             for pkg in packages:
                 yield pkg
-            next_offset = data.get("nextPage") or data.get("offsetMark")
-            # offsetMark in the response is the next cursor; if absent, stop.
-            if not next_offset or next_offset == offset:
+            # See _chrg_list_packages: follow GovInfo's fully-formed nextPage
+            # URL directly rather than splicing it in as an offsetMark token
+            # (the latter produces a nested URL GovInfo 500s on — ADR-030).
+            next_page = data.get("nextPage")
+            if not next_page or next_page == url:
                 return
-            offset = next_offset
+            if "api_key=" not in next_page:
+                next_page += f"&api_key={api_key}"
+            url = next_page
             time.sleep(0.5)
             # Safety bound — ERP has ~61 packages historical; should fit in
             # one or two pages. Bail at 10 pages to avoid an infinite loop
