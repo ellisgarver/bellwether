@@ -58,6 +58,55 @@ def gather_snapshot_urls(want: int) -> list[str]:
     return urls
 
 
+def count_publications() -> int:
+    """CDX-only enumeration: how many unique CBO pids must the walk fetch?
+
+    Hits only the CDX endpoint (separate, higher limit than replay) via the
+    ingestor's own retry-cushioned ``_cdx_block``, so it does not spend the
+    replay-GET budget. Reports the unique-pid total, a per-year histogram (by
+    earliest-snapshot date as a rough proxy), and walltime estimates at the
+    measured safe rate — the number that decides whether the Wayback walk is
+    feasible within QOS or needs a different sourcing strategy.
+    """
+    ing = CBOIngestor()
+    id_lo, id_hi = ing._estimate_id_range(date(2010, 1, 1), date(2026, 6, 8))
+    blocks = range(id_lo // 100, id_hi // 100 + 1)
+    print(f"Counting unique CBO pids over ids [{id_lo}..{id_hi}] "
+          f"({len(blocks)} CDX blocks). CDX-only, no replay GETs.\n")
+    pids: set[int] = set()
+    by_year: dict[int, int] = {}
+    for n, prefix in enumerate(blocks, start=1):
+        try:
+            block = list(ing._cdx_block(prefix))
+        except Exception as exc:
+            print(f"  [cdx] block {prefix}* FAILED: {exc} — skipping")
+            continue
+        for pid, earliest_ts, _latest_ts in block:
+            if pid in pids:
+                continue
+            pids.add(pid)
+            d = ing._ts_to_date(earliest_ts)
+            y = d.year if d else 0
+            by_year[y] = by_year.get(y, 0) + 1
+        if n % 10 == 0 or n == len(blocks):
+            print(f"  block {prefix}* ({n}/{len(blocks)}) — {len(pids)} unique pids so far")
+        time.sleep(1.0)
+
+    total = len(pids)
+    print("\n" + "=" * 60)
+    print("CBO PUBLICATION COUNT")
+    print("=" * 60)
+    print(f"  Unique pids to fetch: {total}")
+    print("  Per-year (by earliest snapshot date, rough proxy):")
+    for y in sorted(by_year):
+        label = "unknown" if y == 0 else str(y)
+        print(f"    {label}: {by_year[y]}")
+    print(f"\n  Walltime @ 1 req/12s (steady safe rate): {total * 12 / 3600:.1f}h")
+    print(f"  Walltime @ burst-15-then-185s-sleep      : {total / 15 * 185 / 3600:.1f}h")
+    print(f"  caslake QOS cap is 36h — feasible if under that.")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--delay", type=float, default=0.3,
@@ -68,7 +117,13 @@ def main() -> int:
                     help="seconds between gentle polls in the cooldown/unban phases")
     ap.add_argument("--cap", type=float, default=1800.0,
                     help="give up waiting for a block to clear after this many seconds")
+    ap.add_argument("--count", action="store_true",
+                    help="CDX-only: count unique CBO pids + per-year histogram (no replay GETs), "
+                         "then estimate walltime at the safe rate. Use this to decide feasibility.")
     args = ap.parse_args()
+
+    if args.count:
+        return count_publications()
 
     headers = {"User-Agent": CBOIngestor._UA}
     timeout = (10, 30)
