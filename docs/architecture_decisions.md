@@ -45,6 +45,7 @@ pre-registration). Bodies below are preserved verbatim for that defense.
 | 028 | Coverage-verification standard (shape + independent inventory) | Live |
 | 029 | PIIE two coverage defects (blog tail; 2016 misdating) | Live |
 | 030 | **Fail-loud hardening — silent under-capture forbidden at every fetch boundary** | Live |
+| 031 | WordPress sources restricted to own-domain content (source-identity rule) | Live |
 
 ---
 
@@ -2359,6 +2360,99 @@ structurally <200 granules, so its single-page `pageSize=200` cannot truncate.
   raise-after-retries handlers were the template the rest now match.
 - This is the standing contract for any new ingestor: fetch boundaries classify
   404-skip vs systemic-raise, never swallow-and-continue.
+
+---
+
+## ADR-031: WordPress sources restricted to own-domain content (source-identity rule)
+
+- **Status**: Accepted
+- **Date**: 2026-06-09
+
+### Context
+
+The clean re-ingest's Brookings job logged a stream of cross-domain warnings —
+WP `article` records whose canonical `link` resolved off `brookings.edu`:
+`washingtonpost.com`, `t20japan.org`, a `fengshows.com` TV-appearance video,
+etc. These fall into two kinds:
+
+1. **Syndicated op-eds** — a Brookings scholar's piece published *in* another
+   outlet (e.g. a Washington Post column), surfaced by Brookings' WP because the
+   author is affiliated.
+2. **Press / media-mentions** — a third-party article or broadcast *about* a
+   scholar, catalogued as an appearance.
+
+ADR-030's 2026-06-08 per-record refinement handled these defensively: it kept
+the off-domain record on its *excerpt* (so a single unfetchable third-party link
+could not fail the whole source), threading `expected_host` into
+`_wp_post_to_article`. That solved the fail-loud over-aggression but left the
+scope question unanswered — it still *ingested* the third-party records.
+
+The scope question: are these in scope for Brookings? They are written by
+Brookings-affiliated authors, but they are **not Brookings-published content**.
+Every other basis-set source contributes only what it itself publishes (Fed
+speeches from the Fed, IMF working papers from the IMF, CBO reports from CBO).
+Ingesting a scholar's Washington Post column under the Brookings source would:
+
+- **Re-import the journalism dimension** that ADR-010 deliberately removed
+  (Washington Post, Reuters, AP, etc. are not in the corpus), through a side door.
+- **Break basis-set dimensional independence (ADR-020).** The 12 sub-ingestors
+  map 1:1 to 8 independent discourse dimensions precisely because each carries
+  one source's own voice; folding third-party outlets into Brookings smears that
+  mapping.
+- Add little signal: meaningful macro content from Brookings scholars is
+  overwhelmingly published *on* brookings.edu; the off-domain entries are
+  dominated by media-mentions and appearances, and where a genuine op-ed exists
+  off-domain it is available only as an excerpt anyway.
+
+### Decision
+
+A WordPress basis-set source contributes **only content hosted on its own
+domain family.** `_wp_post_to_article` now drops any record whose `link` host is
+outside `expected_host`'s family **before any body fetch** (host-family test:
+strip a leading `www.` from `expected_host`; keep iff `link_host == base` or
+`link_host` ends with `"." + base`). This supersedes ADR-030's keep-on-excerpt
+refinement for off-domain records: we now drop them outright rather than retain
+the excerpt.
+
+This is a **provenance filter on source identity, not a topical filter** — it
+asks "did this source publish this?", never "is this about macro?". It is
+therefore fully consistent with ADR-020's no-pre-cluster-topic-gate: scope is
+still decided post-clustering by the JEL classifier; this only enforces that each
+source dimension carries that source's own output.
+
+Checking *before* fetch (not after) is load-bearing for two reasons: (1) it
+prevents silently keeping the full body of a *reachable* third-party page (the
+keep-on-excerpt logic only degraded gracefully when the off-domain fetch
+*failed* — a reachable one would have kept the external body); (2) it removes the
+cross-domain fetch-timeout drag (paywalled third-party links that stall the
+crawler), which also shortens the Brookings long-pole walltime.
+
+The rule lives in the **shared** `_wp_post_to_article` helper, so it applies
+uniformly to all three WP-REST callers — Brookings, Liberty Street Economics
+(`fed_ny`), FRBSF (`fed_sf`). The two Fed blogs are expected to carry ~no
+off-domain records (their WP only publishes own-host posts), so the rule is a
+no-op there and simply makes the invariant explicit and enforced.
+
+On-domain body-fetch failures still **raise** (ADR-030 fail-loud is preserved):
+once the off-domain records are dropped up front, every remaining fetch is on the
+source's own host, so a failure there is a real outage and must fail the source.
+
+### Consequences
+
+- Brookings (and any WP source) is now strictly own-domain. Off-domain syndicated
+  op-eds and media-mentions are excluded — closing the ADR-010 journalism re-import
+  side door and preserving ADR-020 dimensional independence.
+- **Reversal of an ADR-030 sub-decision:** off-domain WP records are no longer
+  kept on excerpt; they are dropped. The `expected_host` parameter is retained but
+  its semantics change from "keep-on-excerpt if off-domain fetch fails" to
+  "drop if off-domain."
+- The current Brookings raw file (already on disk from the in-flight run) can be
+  corrected **post-hoc** by filtering off-domain lines with the *identical*
+  host-family predicate, avoiding a ~15h re-run. If that run instead TIMEOUTs with
+  no usable output, the re-run picks up the new rule (and runs faster for skipping
+  the paywall stalls).
+- No config/threshold/seed change; control-flow + scope only. Standing contract
+  for any future WordPress ingestor: own-domain only, enforced in the shared helper.
 
 ---
 
