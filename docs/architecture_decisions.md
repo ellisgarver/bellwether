@@ -2297,6 +2297,24 @@ scattered third-party syndication links degrade to excerpt, which cannot truncat
 a source's tail. Threaded to all three WP-REST callers (Brookings, Liberty Street
 Economics, FRBSF).
 
+**GovInfo collection pagination — follow `nextPage`, do not splice the cursor
+(2026-06-08).** The clean re-ingest failed `congressional` after 3h with a
+GovInfo `500` on page 2 of the CHRG collection listing. Root cause was a
+pagination-construction bug, not an upstream flap: GovInfo's response carries
+`nextPage` as a *fully-formed URL* (with the opaque `offsetMark` cursor already
+URL-encoded), but `_chrg_list_packages` treated `nextPage` as if it were the
+bare cursor token and spliced it back into the base URL via
+`re.sub(r"offsetMark=[^&]+", ...)`. That produced a nested URL
+(`...&offsetMark=https://api.govinfo.gov/...?offsetMark=AoJw...`) that GovInfo
+500s on, which the fail-loud contract then correctly converted into a hard
+source failure. The bug only triggers on page 2+, so the single-page
+integration window never exercised it. Fix: follow `nextPage` directly,
+appending our `api_key` (which GovInfo omits from the link). The identical
+pattern in `CEAIngestor._list_packages` (ERP collection) was latently broken too
+— it only escaped because ERP is ~61 packages = one page — and was fixed in the
+same pass. The non-paginating granule fetch was left as-is: ERP volumes are
+structurally <200 granules, so its single-page `pageSize=200` cannot truncate.
+
 ### Consequences
 
 - A persistent failure anywhere in the basis set now aborts the run loudly
