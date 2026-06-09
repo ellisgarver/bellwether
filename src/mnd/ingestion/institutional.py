@@ -95,6 +95,20 @@ USER_AGENT = "MacroNarrativeDynamics/0.1 (academic research; contact via project
 _HEADERS = {"User-Agent": USER_AGENT}
 
 
+class _WaybackBanned(RuntimeError):
+    """Sustained HTTP 429 from Internet Archive replay — a ban, not a blip.
+
+    IA's replay throttle is a *cumulative request-count* cap on the egress IP,
+    not a burst limiter: once tripped it stays tripped for the rest of the job
+    regardless of pacing (observed 2026-06-09: the CBO walk dies at the same pid
+    after ~172 fetches whether spaced 0.3s or 12s, and re-firing escalates the
+    ban). Riding it out inside one run is therefore futile and only deepens the
+    flag. The CBO fetch loop catches this to PAUSE cleanly — bank the checkpoint
+    and exit 0 — so a later run from a fresh egress IP or after a cooldown
+    resumes from where it stopped instead of crashing and re-paying from zero.
+    """
+
+
 def _is_retryable(exc: Exception) -> bool:
     """Retry on server errors and transient network failures; not on 4xx."""
     if isinstance(exc, requests.exceptions.HTTPError):
@@ -2345,10 +2359,28 @@ class CBOIngestor(Ingestor):
             # re-evaluating it on a later resume is free.
             if snap_date is not None and snap_date < start:
                 continue
-            # The fetch can RAISE on Wayback ban-exhaustion; the exception
-            # propagates out of this generator (fail-loud, ADR-030) and the
-            # pid is NOT marked done, so the resume retries it.
-            article = self._fetch_and_build(pid, earliest_ts, latest_ts, start, end)
+            # A sustained IA replay ban (cumulative request cap on the egress
+            # IP) raises _WaybackBanned. Riding it out within this run is futile
+            # — every subsequent pid would 429 too, and re-hammering escalates
+            # the ban. So we PAUSE cleanly: log where we stopped and RETURN from
+            # the generator. The current pid is NOT marked done (no _mark_done
+            # below the raise), so a later run from a fresh egress IP or after a
+            # ~12-24h cooldown resumes from exactly here off the checkpoint,
+            # banking all prior progress. A 5xx/network outage still raises and
+            # fails loud (ADR-030) — only the ban path pauses.
+            try:
+                article = self._fetch_and_build(
+                    pid, earliest_ts, latest_ts, start, end
+                )
+            except _WaybackBanned as exc:
+                log.warning(
+                    "CBO: PAUSED at pub/%d — %s. %d publications captured this "
+                    "run, %d skipped (already done). Re-fire the source to "
+                    "resume from the checkpoint once the IA ban clears (fresh "
+                    "egress IP, or ~12-24h cooldown).",
+                    pid, exc, yielded, skipped_done,
+                )
+                return
             if article is not None:
                 yield article
                 yielded += 1
@@ -2694,7 +2726,9 @@ class CBOIngestor(Ingestor):
     # Wayback snapshot fetcher (passed to _fetch_page_full as ``getter``)
     # ------------------------------------------------------------------
 
-    def _wayback_get(self, url: str, *, max_attempts: int = 10, **kwargs):
+    def _wayback_get(
+        self, url: str, *, max_attempts: int = 10, ban_attempts: int = 3, **kwargs
+    ):
         """HTTP GET for Wayback snapshot URLs, with the CDX path's retry cushion.
 
         Tuple timeout per c47fb91: a scalar float only bounds the inter-byte
@@ -2708,24 +2742,27 @@ class CBOIngestor(Ingestor):
         connections under burst and during recovery; without a cushion one flap
         in the thousands-of-snapshots walk would raise straight through
         ``_fetch_page_full`` and fail the whole CBO source. So we retry on
-        429/5xx AND raw network errors.
+        5xx AND raw network errors over ``max_attempts`` with escalating backoff.
 
-        The full ~21.7k-publication walk fires snapshot GETs fast enough to trip
-        Internet Archive's *sustained* rate limiter (observed: HTTP 429 that
-        outlasted a ~10-min blind-backoff budget). IA returns ``Retry-After`` on
-        those 429s naming its own cooldown, so we honor it — that paces us to
-        what IA actually permits instead of guessing — and fall back to
-        exponential backoff + jitter only when the header is absent. Capped at
-        600s/attempt over 10 attempts so we outlast a multi-minute throttle.
-        Genuine 4xx (404/403/410) returns for the caller to skip as real
-        absence; true exhaustion RAISES, so a sustained outage still fails loud
-        rather than dropping a snapshot silently.
+        429 is handled DIFFERENTLY from 5xx (2026-06-09 correction). IA's replay
+        429 is not a burst limiter you can outwait — it is a cumulative
+        request-count ban on the egress IP that, once tripped, stays tripped for
+        the rest of the job no matter how slowly we then crawl. Hammering it with
+        ten escalating retries doesn't recover the run (every subsequent pid also
+        429s) and *escalates* IA's ban on the IP. So we honor ``Retry-After`` for
+        a SMALL number of attempts (``ban_attempts``, default 3) — enough to ride
+        a genuinely brief throttle — and if 429 persists we raise
+        ``_WaybackBanned``, which the fetch loop catches to pause-and-resume
+        (bank the checkpoint, exit clean) rather than crash. Genuine 4xx
+        (404/403/410) returns for the caller to skip as real absence; a sustained
+        5xx/network outage still RAISES loud rather than dropping a snapshot.
         """
         timeout = kwargs.pop("timeout", 60.0)
         if isinstance(timeout, (int, float)):
             timeout = (10, max(30, int(timeout)))
         kwargs.setdefault("headers", {"User-Agent": self._UA})
         backoff = 5.0
+        throttle_hits = 0
         for attempt in range(1, max_attempts + 1):
             try:
                 resp = requests.get(url, timeout=timeout, **kwargs)
@@ -2737,7 +2774,20 @@ class CBOIngestor(Ingestor):
                 time.sleep(backoff + random.uniform(0, backoff * 0.25))
                 backoff = min(backoff * 2, 320.0)
                 continue
-            if resp.status_code in (429, 502, 503, 504):
+            if resp.status_code == 429:
+                throttle_hits += 1
+                if throttle_hits >= ban_attempts:
+                    raise _WaybackBanned(
+                        f"CBO Wayback GET {url}: HTTP 429 persisted across "
+                        f"{throttle_hits} attempts — IA replay ban on this egress IP"
+                    )
+                wait = self._retry_after_seconds(resp, fallback=backoff)
+                log.warning("CBO Wayback GET %s: HTTP 429 (throttle %d/%d) — wait %.1fs",
+                            url, throttle_hits, ban_attempts, wait)
+                time.sleep(wait + random.uniform(0, min(wait * 0.25, 30.0)))
+                backoff = min(backoff * 2, 320.0)
+                continue
+            if resp.status_code in (502, 503, 504):
                 if attempt == max_attempts:
                     raise RuntimeError(
                         f"CBO Wayback GET {url}: HTTP {resp.status_code} after "
