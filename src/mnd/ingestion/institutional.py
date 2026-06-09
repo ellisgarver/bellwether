@@ -2246,6 +2246,17 @@ class CBOIngestor(Ingestor):
     # nodes, out of the 2010+ corpus scope.
     _MIN_PUBLICATION_ID = 40000
 
+    # Seconds to sleep between per-publication Wayback fetches. Set to IA's
+    # MEASURED sustained-safe replay rate (~1 req/9-12s; probed 2026-06-09).
+    # This is the load-bearing knob: IA's replay throttle is a count-in-window
+    # ban (~15-30 fast requests → block), and hammering through each cooldown
+    # makes the bans ESCALATE until one exceeds the _wayback_get retry budget
+    # (this is why three 0.3s-paced runs all died at pub/41672, ~170 pids in).
+    # Pacing at the safe rate keeps the rolling-window count under the threshold
+    # so the ban never trips; the walk then runs to its 36h walltime and the
+    # checkpoint carries the ~45h remainder into a second job (ADR-023 resume).
+    _REQUEST_SPACING_S = 12.0
+
     _PUBLICATION_RE = re.compile(r"/publication/(\d+)\b")
 
     def __init__(self, checkpoint_path: "Path | None" = None) -> None:
@@ -2381,7 +2392,7 @@ class CBOIngestor(Ingestor):
             body, fetched_title, _author, page_date = _fetch_page_full(
                 snap_url, min_words=50, getter=self._wayback_get,
             )
-        time.sleep(0.3)
+        time.sleep(self._REQUEST_SPACING_S)
         # Defensive guard: reject a Wayback interstitial/error page
         # captured as 200. The "Wayback Machine" title is the tell;
         # using a concrete captured ts (not the 2999 redirect) should
