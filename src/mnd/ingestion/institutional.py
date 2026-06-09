@@ -2210,7 +2210,14 @@ class CBOIngestor(Ingestor):
          bodies).
 
     Politeness / robustness:
-      - 0.5s sleep between block CDX queries; 0.3s between snapshot fetches.
+      - BOTH IA-facing phases are paced at ``_REQUEST_SPACING_S`` (the measured
+        sustained-safe replay rate): the CDX enumeration sweep AND the per-pid
+        snapshot fetches. The enumeration sweep is paced because it alone is
+        enough traffic to trip IA's count-in-window ban; an unpaced sweep
+        established the ban before the first fetch and killed the walk at pid 1
+        (ADR-023, 2026-06-09 correction).
+      - The CDX map is cached to disk (window-keyed) so a resume skips the
+        sweep entirely — neither re-hammering IA nor re-paying the enumeration.
       - Exponential backoff retry on Wayback 429 / 502 / 503 / 504 — never
         403 (Wayback does not bot-block CDX).
 
@@ -2310,63 +2317,156 @@ class CBOIngestor(Ingestor):
         self._done_pids.add(pid)
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
-        id_lo, id_hi = self._estimate_id_range(start, end)
-        log.info(
-            "CBO: enumerating publication ids [%d..%d] for window [%s..%s] "
-            "(%d 100-id blocks)",
-            id_lo, id_hi, start, end, (id_hi // 100) - (id_lo // 100) + 1,
-        )
-        seen_pids: set[int] = set()
+        cdx_map = self._build_or_load_cdx_map(start, end)
         yielded = 0
         skipped_done = 0
-        for prefix in range(id_lo // 100, id_hi // 100 + 1):
-            for pid, earliest_ts, latest_ts in self._cdx_block(prefix):
-                if pid in seen_pids or pid < id_lo or pid > id_hi:
-                    continue
-                seen_pids.add(pid)
-                # Resume: a pid already in the checkpoint was fully processed
-                # (kept-and-flushed or deliberately dropped) by a prior job —
-                # skip without spending a Wayback GET. No-op when uncheckpointed.
-                if pid in self._done_pids:
-                    skipped_done += 1
-                    continue
-                snap_date = self._ts_to_date(earliest_ts)
-                # Cheap lower-bound pre-filter ONLY. A snapshot can never
-                # predate publication, so an earliest capture before the
-                # window start proves the publication is pre-window — skip it.
-                # We must NOT impose an upper bound on the snapshot date: CBO's
-                # /publication/{id} URLs only came into existence with the 2012
-                # site migration, so the earliest archived capture of a
-                # 2010-dated publication is ~2012 (verified: the entire 415xx–
-                # 428xx band first appears 2012-04+). Crawl date lags
-                # publication arbitrarily for migrated content; the
-                # authoritative window gate is the post-fetch page_date below.
-                # Not marked done: it costs no fetch, so re-evaluating it on a
-                # later resume is free.
-                if snap_date is not None and snap_date < start:
-                    continue
-                # The fetch can RAISE on Wayback ban-exhaustion; the exception
-                # propagates out of this generator (fail-loud, ADR-030) and the
-                # pid is NOT marked done, so the resume retries it.
-                article = self._fetch_and_build(
-                    pid, earliest_ts, latest_ts, start, end,
-                )
-                if article is not None:
-                    yield article
-                    yielded += 1
-                # Mark done only after the `yield` resumes — by then the caller
-                # has written and flushed this article to the raw file (or, for
-                # a dropped pid, there was nothing to write). The checkpoint
-                # therefore never marks a pid done before its record is durable.
-                self._mark_done(pid)
-            time.sleep(0.5 + random.uniform(0, 0.3))
+        # Ascending pid order so the walk is deterministic and resumable: the
+        # checkpoint a prior job wrote names exactly the low-id span already
+        # covered, and we pick up at the next unmarked pid.
+        for pid in sorted(cdx_map):
+            earliest_ts, latest_ts = cdx_map[pid]
+            # Resume: a pid already in the checkpoint was fully processed
+            # (kept-and-flushed or deliberately dropped) by a prior job —
+            # skip without spending a Wayback GET. No-op when uncheckpointed.
+            if pid in self._done_pids:
+                skipped_done += 1
+                continue
+            snap_date = self._ts_to_date(earliest_ts)
+            # Cheap lower-bound pre-filter ONLY. A snapshot can never predate
+            # publication, so an earliest capture before the window start
+            # proves the publication is pre-window — skip it. We must NOT
+            # impose an upper bound on the snapshot date: CBO's /publication/
+            # {id} URLs only came into existence with the 2012 site migration,
+            # so the earliest archived capture of a 2010-dated publication is
+            # ~2012 (verified: the entire 415xx–428xx band first appears
+            # 2012-04+). Crawl date lags publication arbitrarily for migrated
+            # content; the authoritative window gate is the post-fetch
+            # page_date below. Not marked done: it costs no fetch, so
+            # re-evaluating it on a later resume is free.
+            if snap_date is not None and snap_date < start:
+                continue
+            # The fetch can RAISE on Wayback ban-exhaustion; the exception
+            # propagates out of this generator (fail-loud, ADR-030) and the
+            # pid is NOT marked done, so the resume retries it.
+            article = self._fetch_and_build(pid, earliest_ts, latest_ts, start, end)
+            if article is not None:
+                yield article
+                yielded += 1
+            # Mark done only after the `yield` resumes — by then the caller
+            # has written and flushed this article to the raw file (or, for a
+            # dropped pid, there was nothing to write). The checkpoint
+            # therefore never marks a pid done before its record is durable.
+            self._mark_done(pid)
         if yielded == 0 and skipped_done == 0:
             log.warning(
-                "CBO: 0 publications from Wayback in [%s..%s] (id range "
-                "[%d..%d]). Either the window has no archived snapshots or "
-                "Wayback CDX is failing (check web.archive.org availability).",
-                start, end, id_lo, id_hi,
+                "CBO: 0 publications from Wayback in [%s..%s]. Either the "
+                "window has no archived snapshots or Wayback CDX is failing "
+                "(check web.archive.org availability).",
+                start, end,
             )
+
+    # ------------------------------------------------------------------
+    # CDX enumeration map (paced sweep, disk-cached for resume)
+    # ------------------------------------------------------------------
+
+    def _build_or_load_cdx_map(
+        self, start: date, end: date
+    ) -> "dict[int, tuple[str, str]]":
+        """The ``{pid: (earliest_ts, latest_ts)}`` map driving the fetch walk.
+
+        Built by ONE paced sweep of the bounded CDX id-block space, then cached
+        to disk (window-keyed, beside the checkpoint). This is load-bearing for
+        resumability, not a mere speed-up:
+
+          - The 218-block CDX sweep is itself enough Wayback traffic to trip
+            Internet Archive's count-in-window replay ban. The prior design
+            interleaved the (unpaced, 0.5s) sweep with the snapshot fetches, so
+            the sweep established the ban *before* the first snapshot fetch —
+            which then died on HTTP 429 at the very first pid (pub/41672),
+            never advancing the checkpoint. Every re-fire repeated the full
+            unpaced sweep, re-escalating the ban: four jobs, zero progress
+            (2026-06-09).
+          - So the sweep is now paced at the same ``_REQUEST_SPACING_S`` as the
+            fetches (count-based ban → stay below the rolling-window threshold),
+            and its result is cached. A resume LOADS the cache and skips the
+            sweep entirely, so re-fires neither re-hammer IA with 218 blocks nor
+            re-pay the ~44min enumeration — they start fetching immediately from
+            the checkpoint.
+
+        Uncheckpointed callers (the composite ``InstitutionalIngestor`` path)
+        get the paced sweep but no cache (no path to key it to), preserving the
+        original single-shot behavior with the ban-prevention pacing added.
+        """
+        cached = self._load_cdx_cache()
+        if cached is not None:
+            log.info(
+                "CBO: loaded CDX map from cache (%d pids) — skipping the "
+                "enumeration sweep (%s)",
+                len(cached), self._cdx_cache_path(),
+            )
+            return cached
+        id_lo, id_hi = self._estimate_id_range(start, end)
+        prefixes = list(range(id_lo // 100, id_hi // 100 + 1))
+        log.info(
+            "CBO: enumerating publication ids [%d..%d] for window [%s..%s] "
+            "(%d 100-id blocks, paced %.0fs/block)",
+            id_lo, id_hi, start, end, len(prefixes), self._REQUEST_SPACING_S,
+        )
+        cdx_map: dict[int, tuple[str, str]] = {}
+        for i, prefix in enumerate(prefixes):
+            for pid, earliest_ts, latest_ts in self._cdx_block(prefix):
+                if pid < id_lo or pid > id_hi:
+                    continue
+                cdx_map[pid] = (earliest_ts, latest_ts)
+            # Pace the sweep at the safe rate so the enumeration phase never
+            # establishes the replay ban that used to kill the first fetch. No
+            # trailing sleep after the final block.
+            if i < len(prefixes) - 1:
+                time.sleep(self._REQUEST_SPACING_S + random.uniform(0, 1.0))
+        self._write_cdx_cache(cdx_map)
+        return cdx_map
+
+    def _cdx_cache_path(self) -> "Path | None":
+        """Disk path for the CDX map cache, derived from the checkpoint path.
+
+        ``.cbo_<start>_<end>_checkpoint.txt`` → ``.cbo_<start>_<end>_cdxcache.json``.
+        None when uncheckpointed (then there is no cache).
+        """
+        if not self._checkpoint_path:
+            return None
+        return self._checkpoint_path.with_name(
+            self._checkpoint_path.name.replace("_checkpoint.txt", "_cdxcache.json")
+        )
+
+    def _load_cdx_cache(self) -> "dict[int, tuple[str, str]] | None":
+        path = self._cdx_cache_path()
+        if not path or not path.exists():
+            return None
+        try:
+            with path.open() as fh:
+                raw = json.load(fh)
+            return {int(k): (v[0], v[1]) for k, v in raw.items()}
+        except (json.JSONDecodeError, OSError, KeyError, IndexError, ValueError, TypeError) as exc:
+            log.warning(
+                "CBO: CDX cache %s unreadable (%s) — re-enumerating", path, exc
+            )
+            return None
+
+    def _write_cdx_cache(self, cdx_map: "dict[int, tuple[str, str]]") -> None:
+        """Persist the CDX map atomically (temp file + rename).
+
+        Written only after the full sweep completed, so a partial/aborted sweep
+        never leaves a truncated cache a resume would trust. The rename is
+        atomic on POSIX: a kill mid-write leaves either the old cache or none.
+        """
+        path = self._cdx_cache_path()
+        if not path:
+            return
+        tmp = path.with_name(path.name + ".tmp")
+        with tmp.open("w") as fh:
+            json.dump({str(k): [v[0], v[1]] for k, v in cdx_map.items()}, fh)
+        tmp.replace(path)
+        log.info("CBO: cached CDX map (%d pids) → %s", len(cdx_map), path)
 
     def _fetch_and_build(
         self, pid: int, earliest_ts: str, latest_ts: str,
