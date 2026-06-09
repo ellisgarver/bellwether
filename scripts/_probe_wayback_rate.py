@@ -62,16 +62,32 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--delay", type=float, default=0.3,
                     help="seconds between burst requests (default 0.3 = current ingest pace)")
-    ap.add_argument("--n", type=int, default=600,
-                    help="max burst requests before giving up looking for a 429")
-    ap.add_argument("--cooldown-poll", type=float, default=20.0,
-                    help="seconds between cooldown-phase polls")
-    ap.add_argument("--cooldown-cap", type=float, default=1800.0,
-                    help="give up waiting for the block to clear after this many seconds")
+    ap.add_argument("--n", type=int, default=300,
+                    help="max burst requests before declaring the rate tolerated")
+    ap.add_argument("--poll", type=float, default=30.0,
+                    help="seconds between gentle polls in the cooldown/unban phases")
+    ap.add_argument("--cap", type=float, default=1800.0,
+                    help="give up waiting for a block to clear after this many seconds")
     args = ap.parse_args()
 
     headers = {"User-Agent": CBOIngestor._UA}
     timeout = (10, 30)
+
+    def probe_once(url: str) -> tuple[str, str]:
+        """Return ('ok'|'blocked'|'other', detail) for one GET.
+
+        A connection refusal / reset / timeout AND HTTP 429/503 all count as
+        'blocked' — IA throttles at both the TCP and HTTP layers.
+        """
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+        except Exception as exc:
+            return "blocked", f"net:{type(exc).__name__}"
+        if resp.status_code == 200:
+            return "ok", "200"
+        if resp.status_code in (429, 503):
+            return "blocked", f"HTTP {resp.status_code} Retry-After={resp.headers.get('Retry-After')!r}"
+        return "other", f"HTTP {resp.status_code}"
 
     print(f"Gathering up to {args.n + 50} real CBO snapshot URLs from CDX ...")
     urls = gather_snapshot_urls(args.n + 50)
@@ -79,83 +95,87 @@ def main() -> int:
         print(f"FAILED: only gathered {len(urls)} URLs — CDX may be down.")
         return 1
     print(f"Got {len(urls)} URLs.\n")
+    idx = 0
+
+    def next_url() -> str:
+        nonlocal idx
+        u = urls[idx % len(urls)]
+        idx += 1
+        return u
+
+    # ---- Phase 0: clear any pre-existing ban (gentle, no hammering) -------
+    print("=== PHASE 0: ensure we start unblocked (gentle poll) ===")
+    waited = 0.0
+    while True:
+        status, detail = probe_once(next_url())
+        if status == "ok":
+            print(f"  unblocked after {waited:.0f}s — starting burst.\n")
+            break
+        print(f"  +{waited:4.0f}s: blocked ({detail}) — waiting {args.poll:.0f}s")
+        if waited >= args.cap:
+            print(f"  CAP HIT: still blocked after {args.cap:.0f}s. IA is banning "
+                  "this IP hard. Re-run later, or the base rate must be very low.")
+            return 1
+        time.sleep(args.poll)
+        waited += args.poll
 
     # ---- Phase 1: burst tolerance ----------------------------------------
     print(f"=== PHASE 1: burst at {args.delay}s/request (≈ {60/args.delay:.0f}/min) ===")
-    first_429_at: int | None = None
-    retry_after: str | None = None
     ok = 0
-    other: dict[int, int] = {}
+    consec_block = 0
+    block_detail = ""
     t0 = time.time()
-    for i, url in enumerate(urls[:args.n], start=1):
-        try:
-            resp = requests.get(url, headers=headers, timeout=timeout)
-        except Exception as exc:
-            print(f"  req {i:4d}: NETWORK ERROR {exc}")
-            time.sleep(args.delay)
-            continue
-        code = resp.status_code
-        if code == 200:
+    tolerated = True
+    for i in range(args.n):
+        status, detail = probe_once(next_url())
+        if status == "ok":
             ok += 1
-        elif code == 429:
-            first_429_at = i
-            retry_after = resp.headers.get("Retry-After")
-            print(f"  req {i:4d}: *** HTTP 429 *** (first throttle) "
-                  f"Retry-After={retry_after!r}  after {ok} OK in {time.time()-t0:.0f}s")
-            break
+            consec_block = 0
         else:
-            other[code] = other.get(code, 0) + 1
-        if i % 25 == 0:
-            print(f"  req {i:4d}: {ok} OK so far ({time.time()-t0:.0f}s elapsed)")
+            consec_block += 1
+            block_detail = detail
+            if consec_block >= 2:  # two in a row = real block, not a single flap
+                print(f"  *** BLOCKED after {ok} OK requests in {time.time()-t0:.0f}s "
+                      f"({detail}) ***")
+                tolerated = False
+                break
+        if (i + 1) % 10 == 0:
+            print(f"  req {i+1:4d}: {ok} OK so far ({time.time()-t0:.0f}s)")
         time.sleep(args.delay)
 
-    if first_429_at is None:
-        print(f"\nNo 429 in {args.n} requests at {args.delay}s spacing — "
-              f"{ok} OK, others={other}.")
-        print("IA tolerated this rate. Try a faster --delay to find the ceiling, "
-              "or treat this rate as safe.")
+    if tolerated:
+        print(f"\nTOLERATED: {ok} OK in {args.n} requests at {args.delay}s with no "
+              "sustained block. This rate is safe — or push --delay lower / --n higher.")
         return 0
 
-    # ---- Phase 2: cooldown duration --------------------------------------
-    print(f"\n=== PHASE 2: cooldown — polling every {args.cooldown_poll:.0f}s "
-          f"until a 200 returns (cap {args.cooldown_cap:.0f}s) ===")
-    if retry_after:
-        print(f"  IA's stated Retry-After was {retry_after!r} — measuring actual clear time too.")
-    cd_start = time.time()
-    poll_url_idx = first_429_at  # use fresh URLs we haven't hit yet
-    cleared_at: float | None = None
-    while time.time() - cd_start < args.cooldown_cap:
-        time.sleep(args.cooldown_poll)
-        url = urls[poll_url_idx % len(urls)]
-        poll_url_idx += 1
-        elapsed = time.time() - cd_start
-        try:
-            resp = requests.get(url, headers=headers, timeout=timeout)
-            code = resp.status_code
-        except Exception as exc:
-            print(f"  +{elapsed:5.0f}s: NETWORK ERROR {exc}")
-            continue
-        print(f"  +{elapsed:5.0f}s: HTTP {code}"
-              + (f"  Retry-After={resp.headers.get('Retry-After')!r}" if code == 429 else ""))
-        if code == 200:
-            cleared_at = elapsed
+    # ---- Phase 2: cooldown — STOP hammering, poll gently until clear ------
+    print(f"\n=== PHASE 2: cooldown — polling every {args.poll:.0f}s, NOT hammering "
+          f"(cap {args.cap:.0f}s) ===")
+    cd = 0.0
+    cooldown: float | None = None
+    while cd < args.cap:
+        time.sleep(args.poll)
+        cd += args.poll
+        status, detail = probe_once(next_url())
+        print(f"  +{cd:5.0f}s: {status} ({detail})")
+        if status == "ok":
+            cooldown = cd
             break
 
     # ---- Summary ----------------------------------------------------------
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
-    print(f"  Burst tolerance : {first_429_at - 1} OK requests before first 429 "
-          f"at {args.delay}s spacing")
-    print(f"  Retry-After hdr : {retry_after!r}")
-    if cleared_at is not None:
-        print(f"  Cooldown        : block cleared after ~{cleared_at:.0f}s")
-        print(f"  → Sustained-safe rate ≈ {first_429_at - 1} requests per "
-              f"{cleared_at:.0f}s = 1 request / {cleared_at/max(first_429_at-1,1):.1f}s")
+    print(f"  Burst tolerance : {ok} OK requests before block at {args.delay}s spacing")
+    print(f"  Block signal    : {block_detail}")
+    if cooldown is not None:
+        period = cooldown + ok * args.delay
+        print(f"  Cooldown        : block cleared after ~{cooldown:.0f}s of NOT hammering")
+        print(f"  → Sustained-safe ≈ {ok} requests per ~{period:.0f}s "
+              f"= 1 request / {period/max(ok,1):.1f}s")
     else:
-        print(f"  Cooldown        : STILL BLOCKED after {args.cooldown_cap:.0f}s "
-              "(cap hit) — IA's block is long; the base rate must be well under "
-              "the burst threshold to avoid tripping it at all.")
+        print(f"  Cooldown        : STILL BLOCKED after {args.cap:.0f}s (cap hit). "
+              "IA's ban is long; pace must stay well under the burst threshold.")
     return 0
 
 
