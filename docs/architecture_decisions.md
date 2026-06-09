@@ -1804,6 +1804,16 @@ Two changes (in `src/mnd/ingestion/institutional.py`):
 
 Operational note: IA escalates IP-level bans under repeated abuse, and the four rapid re-fires hammered it; after this fix the first run should **wait several hours for IA to cool** before submitting, or it may still 429 on a residual ban regardless of our pacing. A clean reset before the first fixed run removes the stale partial + checkpoint + any cache: `rm -f data/raw/articles/cbo_*.jsonl data/raw/articles/.cbo_*` then the pinned re-fire above.
 
+**Third correction (2026-06-09) — a ban must PAUSE the walk, not crash it; finishing is an egress-IP problem, not a pacing problem.** The cached, fetch-paced run (`50634074`) confirmed the diagnosis the second correction only half-grasped. Enumeration succeeded (cache wrote 13,616 pids, ~640 KB) and 124 real publications were captured — then the job `FAILED` at `pub/41672` with HTTP 429 after the retry loop's 10 attempts. The fetch death after ~172 checkpoint entries was **identical regardless of pacing** (0.3s and 12s both die there), which is the signature of a *cumulative request-count cap on the egress IP*, not a rate/burst limiter. Pacing cannot beat a count cap; it only changes how long until you hit it. The Midway egress IP was flagged from five CBO jobs in ~19h, so its budget was small.
+
+Two consequences, one code change:
+
+1. **The fix is operational, not algorithmic.** A count-capped, possibly-banned IP cannot complete a ~13.6k-fetch walk no matter how the client behaves. Finishing CBO means running from a **fresh egress IP** (the walk completes in one shot under a clean budget) or after a **long cooldown** that restores the Midway IP's budget. The client's only job is to not *waste* or *escalate* either path.
+
+2. **So the client must pause-and-resume on a ban, never crash.** A new `_WaybackBanned(RuntimeError)` is raised by `_wayback_get` when HTTP 429 *persists* (honor `Retry-After` for `ban_attempts=3` — enough to ride a genuinely brief throttle — then raise). `CBOIngestor.fetch` catches it, logs where it stopped (`PAUSED at pub/N — … re-fire to resume`), and **`return`s from the generator** — a clean exit-0, not a traceback. The paused pid is *not* marked done, so the checkpoint banks every prior capture and the next run resumes from exactly that pid. 429 is now handled **separately from 5xx/network**: those remain transient blips retried over `max_attempts=10` with escalating backoff and still RAISE on true exhaustion (ADR-030 fail-loud is preserved — only a *sustained ban* pauses, never a genuine outage masquerading as empty). This also stops the prior 10-attempt 429 hammer that *escalated* IA's ban on every dying job.
+
+Net effect: each run banks maximum progress and exits clean; a fresh-IP run finishes in one pass; a cooldown-then-resume run continues without re-paying enumeration or crashing. The reset/re-fire one-liner above is unchanged.
+
 ---
 
 ## ADR-024: Repo cleanse + single-source-of-truth doc governance + document-and-push-per-task workflow
