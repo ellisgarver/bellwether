@@ -2176,33 +2176,27 @@ class CBOIngestor(Ingestor):
     "cbo.gov content" choice — we just retrieve it via the archive instead
     of direct.
 
-    Enumeration strategy (ADR-023, 2026-06-01) — bounded ID walk, NOT a
-    window-sharded CDX wildcard:
-      The prior design (ADR-021) queried CDX with ``url=cbo.gov/publication/*``
-      and ``from/to`` set to the publication window. That is fundamentally
-      broken because CDX ``from/to`` filters by CRAWL date, not publication
-      date: a 2-month window matched every cbo.gov URL re-crawled in that
-      period (~10k URLs, decades of back-catalog). Worse, the resulting
-      wildcard result set is so large it routinely 504s, and the same query
-      returned 0 / 849 / 6575 rows across three runs in one hour — the bulk
-      wildcard endpoint is non-deterministic under load. A 77-minute
-      production run yielded 0 records.
+    Enumeration strategy (ADR-032, 2026-06-10) — authoritative sitemap, NOT
+    an id-range guess:
+      The publication universe is read from ``cbo.gov/sitemap.xml`` — the
+      site's own complete index (~25k publication ids). The prior design
+      (ADR-023) guessed the id range from an id↔date anchor table and walked
+      a bounded ``/publication/{id}`` span floored at id 40000. That silently
+      under-captured: CBO node ids are NOT chronological (pid 22000→2011 sits
+      far below pid 41138→2009), so the floor dropped scattered 2010+
+      publications. The sitemap has no floor and makes any residual gap
+      measurable instead of silent.
 
-      CBO assigns each publication an integer node id at
-      ``cbo.gov/publication/{id}``. The id space is only ROUGHLY ordered in
-      time: the 2012 site migration assigned ``/publication/`` ids to a large
-      back-catalog (1990s-2009 baselines and studies) interleaved among the
-      contemporaneous ids, so a single 100-id block routinely mixes 2007-2011
-      page dates. The calibrated ID↔date anchor table therefore only brackets
-      the candidate range; the authoritative page-date filter (step 3) — not
-      the id — decides membership. We enumerate the bracketed ID space the
-      same way ``NBERIngestor`` enumerates ``/papers/wNNNNN``: one CDX query
-      per 100-ID block (``matchType=prefix``). We do NOT ``collapse=urlkey``;
-      a block returns every snapshot row (≈2k for a dense block) and we
-      aggregate ``min``/``max`` timestamp per id. The earliest (min) timestamp
-      is a cheap crawl-soon-after-publication proxy used to pre-filter
-      candidates before any body fetch; the latest (max) timestamp is the
-      capture we actually fetch.
+      Wayback snapshot timestamps (needed to build the replay URL) still come
+      from one CDX query per 100-id block (``matchType=prefix``) over the id
+      range the sitemap spans; we aggregate min/max ts per id and KEEP only
+      ids the sitemap declares real publications. Sitemap ids with NO archived
+      snapshot are logged as a MEASURABLE IA gap (cbo.gov live is
+      DataDome-blocked, so they are unrecoverable) — never a silent drop. We
+      do NOT ``collapse=urlkey``; the earliest ts feeds a crawl-date pre-filter
+      and the latest *real* ts (never the ``29991231`` far-future redirect) is
+      the capture we fetch. The authoritative page-date filter (step 3) — not
+      the id — decides 2010+ membership.
 
     Per-record pipeline:
       1. Snapshot fetch: ``web.archive.org/web/{max_ts}id_/{url}`` — the
@@ -2253,32 +2247,17 @@ class CBOIngestor(Ingestor):
         "academic research; via web.archive.org)"
     )
 
-    # ID↔date calibration anchors (publication id, observed page/snapshot
-    # date), empirically probed 2026-06-01 via per-URL Wayback fetches:
-    #   42000≈2010-01, 44000≈2013-03, 54000≈2018-06, 56000≈2020-01,
-    #   58000≈2022-04, 59460≈2023-07.
-    # CBO node ids are monotone in time but the rate is NOT constant
-    # (~625/yr 2010-2013, ~1900/yr 2013-2018, ~800/yr since 2020), so we
-    # interpolate piecewise-linearly between anchors and extrapolate past
-    # the last anchor at the recent ~800/yr slope. The estimate only needs
-    # to bracket the true range; ``_ID_RANGE_PAD`` absorbs slope error and
-    # the page-date filter discards anything that slips outside the window.
-    _ID_DATE_ANCHORS: list[tuple[date, int]] = [
-        (date(2010, 1, 1), 42000),
-        (date(2013, 3, 18), 44000),
-        (date(2018, 6, 6), 54000),
-        (date(2020, 1, 9), 56000),
-        (date(2022, 4, 19), 58000),
-        (date(2023, 7, 31), 59460),
-    ]
-    # Pad each end of the estimated ID range to absorb anchor/slope error.
-    # ~2 quarters of recent-rate publications — generous but cheap (extra
-    # block queries are pre-filtered out by snapshot date before any body
-    # fetch).
-    _ID_RANGE_PAD = 500
-    # CBO node ids below this are pre-2010 back-catalog / non-publication
-    # nodes, out of the 2010+ corpus scope.
-    _MIN_PUBLICATION_ID = 40000
+    # CBO's own sitemap is the AUTHORITATIVE publication universe (ADR-032).
+    # It returns HTTP 200 even though cbo.gov *publication pages* are
+    # DataDome-blocked (403, even via curl_cffi chrome impersonation) — the
+    # sitemap path sits outside the bot wall (verified 2026-06-10). We no
+    # longer guess the id range from an id↔date anchor table: CBO node ids
+    # are NOT chronological (probed 2026-06-10: pid 21000→1981, 22000→2011,
+    # 41138→2009, 41479→2011), so NO id floor can separate 2010+ from older
+    # — any floor silently drops scattered 2010+ publications, the exact
+    # under-capture failure the basis-set framing forbids. We enumerate the
+    # full sitemap and let the post-fetch page-date gate decide membership.
+    _SITEMAP_INDEX = "https://www.cbo.gov/sitemap.xml"
 
     # Seconds to sleep between per-publication Wayback fetches. Set to IA's
     # MEASURED sustained-safe replay rate (~1 req/9-12s; probed 2026-06-09).
@@ -2437,26 +2416,105 @@ class CBOIngestor(Ingestor):
                 len(cached), self._cdx_cache_path(),
             )
             return cached
-        id_lo, id_hi = self._estimate_id_range(start, end)
+        sitemap_pids = self._fetch_sitemap_pids()
+        id_lo, id_hi = min(sitemap_pids), max(sitemap_pids)
         prefixes = list(range(id_lo // 100, id_hi // 100 + 1))
         log.info(
-            "CBO: enumerating publication ids [%d..%d] for window [%s..%s] "
-            "(%d 100-id blocks, paced %.0fs/block)",
-            id_lo, id_hi, start, end, len(prefixes), self._REQUEST_SPACING_S,
+            "CBO: %d publications in cbo.gov sitemap (ids %d..%d); resolving "
+            "Wayback snapshots via %d 100-id CDX blocks, paced %.0fs/block",
+            len(sitemap_pids), id_lo, id_hi, len(prefixes), self._REQUEST_SPACING_S,
         )
         cdx_map: dict[int, tuple[str, str]] = {}
         for i, prefix in enumerate(prefixes):
             for pid, earliest_ts, latest_ts in self._cdx_block(prefix):
-                if pid < id_lo or pid > id_hi:
-                    continue
-                cdx_map[pid] = (earliest_ts, latest_ts)
+                # Keep only ids the sitemap declares real publications; a CDX
+                # prefix query also returns redirects / non-publication nodes.
+                if pid in sitemap_pids:
+                    cdx_map[pid] = (earliest_ts, latest_ts)
             # Pace the sweep at the safe rate so the enumeration phase never
             # establishes the replay ban that used to kill the first fetch. No
             # trailing sleep after the final block.
             if i < len(prefixes) - 1:
                 time.sleep(self._REQUEST_SPACING_S + random.uniform(0, 1.0))
+        # Sitemap publications that IA never archived are unrecoverable via
+        # Wayback (cbo.gov live is DataDome-blocked). Log as a MEASURABLE gap —
+        # the basis-set rule is that under-capture must be visible, not silent.
+        missing = sitemap_pids - cdx_map.keys()
+        if missing:
+            sample = sorted(missing)[:20]
+            log.warning(
+                "CBO: %d of %d sitemap publications have NO Wayback snapshot "
+                "(unrecoverable via the archive; sample ids: %s%s)",
+                len(missing), len(sitemap_pids), sample,
+                " ..." if len(missing) > len(sample) else "",
+            )
         self._write_cdx_cache(cdx_map)
         return cdx_map
+
+    def _fetch_sitemap_pids(self) -> "set[int]":
+        """The authoritative publication-id universe from cbo.gov/sitemap.xml.
+
+        The sitemap is a ``<sitemapindex>`` pointing at ``sitemap.xml?page=N``
+        sub-sitemaps; each lists ``/publication/{id}`` (and ``/{id}/html``)
+        URLs. We union the numeric ids across all sub-sitemaps. Raises if the
+        index is unreachable or yields zero ids: enumeration must fail loud,
+        never fall back to a guessed range that silently under-captures
+        (ADR-032).
+        """
+        index = self._cbo_get(self._SITEMAP_INDEX)
+        sub_urls = [
+            loc for loc in re.findall(r"<loc>\s*([^<]+?)\s*</loc>", index)
+            if "sitemap.xml?page=" in loc
+        ]
+        if not sub_urls:
+            raise RuntimeError(
+                f"CBO: sitemap index {self._SITEMAP_INDEX} returned no "
+                f"sub-sitemaps ({len(index)} bytes) — refusing to enumerate "
+                "from a guessed id range"
+            )
+        pids: set[int] = set()
+        for sub in sub_urls:
+            body = self._cbo_get(sub)
+            pids.update(int(m) for m in self._PUBLICATION_RE.findall(body))
+        if not pids:
+            raise RuntimeError(
+                f"CBO: sitemap ({len(sub_urls)} sub-sitemaps) yielded zero "
+                "publication ids — refusing to proceed with an empty universe"
+            )
+        return pids
+
+    @classmethod
+    def _cbo_get(cls, url: str, **kwargs) -> str:
+        """GET cbo.gov via curl_cffi chrome impersonation; return response text.
+
+        Used ONLY for the sitemap — publication pages are DataDome-blocked and
+        come from Wayback instead. The sitemap path serves 200, but a
+        datacenter egress IP is best served looking like a real browser, so we
+        impersonate Chrome (same rationale as ``_piie_get``). Raises on any
+        non-200 so a DataDome block or outage fails loud rather than yielding
+        an empty universe.
+        """
+        _normalize_timeout(kwargs)
+        kwargs.setdefault("timeout", (10, 60))
+        try:
+            from curl_cffi import requests as cffi_requests
+            kwargs.setdefault("impersonate", "chrome131")
+            resp = _cffi_get_retry(lambda: cffi_requests.get(url, **kwargs), url)
+        except ImportError:
+            log.error(
+                "curl_cffi not installed; CBO sitemap fetch may be blocked. "
+                "Install with `pip install curl_cffi==0.15.0` (ADR-014)."
+            )
+            resp = _cffi_get_retry(
+                lambda: requests.get(url, headers={"User-Agent": cls._UA}, **kwargs),
+                url,
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"CBO sitemap GET {url}: HTTP {resp.status_code} "
+                "(DataDome block or outage) — cannot enumerate"
+            )
+        return resp.text
 
     def _cdx_cache_path(self) -> "Path | None":
         """Disk path for the CDX map cache, derived from the checkpoint path.
@@ -2576,43 +2634,6 @@ class CBOIngestor(Ingestor):
             tier=1,
             document_type="cbo_publication",
         )
-
-    # ------------------------------------------------------------------
-    # ID-range estimation (calibrated anchor interpolation)
-    # ------------------------------------------------------------------
-
-    def _estimate_id_range(self, start: date, end: date) -> tuple[int, int]:
-        """Estimate the [id_lo, id_hi] CBO node-id range for a date window.
-
-        Piecewise-linear interpolation over ``_ID_DATE_ANCHORS``, padded by
-        ``_ID_RANGE_PAD`` on each side, clamped at ``_MIN_PUBLICATION_ID``.
-        """
-        lo = self._estimate_id(start) - self._ID_RANGE_PAD
-        hi = self._estimate_id(end) + self._ID_RANGE_PAD
-        lo = max(self._MIN_PUBLICATION_ID, lo)
-        if hi < lo:
-            hi = lo
-        return lo, hi
-
-    def _estimate_id(self, target: date) -> int:
-        anchors = self._ID_DATE_ANCHORS
-        if target <= anchors[0][0]:
-            d0, i0 = anchors[0]
-            d1, i1 = anchors[1]
-        elif target >= anchors[-1][0]:
-            d0, i0 = anchors[-2]
-            d1, i1 = anchors[-1]
-        else:
-            d0, i0 = anchors[0]
-            d1, i1 = anchors[1]
-            for j in range(1, len(anchors)):
-                if target <= anchors[j][0]:
-                    d0, i0 = anchors[j - 1]
-                    d1, i1 = anchors[j]
-                    break
-        span_days = (d1 - d0).days or 1
-        slope = (i1 - i0) / span_days  # ids per day
-        return int(round(i0 + slope * (target - d0).days))
 
     # ------------------------------------------------------------------
     # Wayback CDX — one query per 100-id block (matchType=prefix)

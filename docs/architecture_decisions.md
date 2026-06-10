@@ -46,6 +46,7 @@ pre-registration). Bodies below are preserved verbatim for that defense.
 | 029 | PIIE two coverage defects (blog tail; 2016 misdating) | Live |
 | 030 | **Fail-loud hardening — silent under-capture forbidden at every fetch boundary** | Live |
 | 031 | WordPress sources restricted to own-domain content (source-identity rule) | Live |
+| 032 | CBO enumeration via the authoritative cbo.gov sitemap (supersedes ADR-023 id-floor estimation) | Live |
 
 ---
 
@@ -1688,7 +1689,7 @@ No changes to `_sub_ingestors`, the composite ingestor, the filter / embed / clu
 
 ## ADR-023: CBO via bounded publication-ID enumeration; fail-loud hardening of WP-REST / BIS / CEA-govinfo paths
 
-- **Status**: Accepted
+- **Status**: Accepted; **enumeration layer superseded by ADR-032** (the `_ID_DATE_ANCHORS` / `_estimate_id_range` / `_MIN_PUBLICATION_ID` id-floor estimation is removed — CBO node ids are NOT chronological, so no id floor is sound). The fail-loud hardening of WP-REST / BIS / CEA-govinfo, the per-pid checkpoint-resume, the 12s pacing, and the `_WaybackBanned` pause-and-resume (addendums below) all remain live.
 - **Date**: 2026-06-01
 - **Refines / resolves**: ADR-021 (CBO Wayback access path), ADR-022 (CBO yield open question)
 
@@ -2472,6 +2473,57 @@ source's own host, so a failure there is a real outage and must fail the source.
   the paywall stalls).
 - No config/threshold/seed change; control-flow + scope only. Standing contract
   for any future WordPress ingestor: own-domain only, enforced in the shared helper.
+
+---
+
+## ADR-032: CBO enumeration via the authoritative cbo.gov sitemap (supersedes ADR-023 id-floor estimation)
+
+- **Status**: Accepted
+- **Date**: 2026-06-10
+- **Supersedes**: the enumeration layer of ADR-023 (id↔date anchor table + `_estimate_id_range` + `_MIN_PUBLICATION_ID` floor). Everything else in ADR-023 and its addendums (fail-loud hardening, per-pid checkpoint-resume, 12s pacing, `_WaybackBanned` pause-and-resume, CDX min/max-ts capture) is unchanged.
+
+### Context
+
+ADR-023 enumerated CBO's publication universe by *guessing* a publication-id range from a six-point id↔date anchor table (`_ID_DATE_ANCHORS`), padding ±500, and clamping the floor at `_MIN_PUBLICATION_ID = 40000` on the premise that "below that is pre-2010 back-catalog, out of corpus scope." That premise rests on CBO node ids being roughly chronological. **They are not.**
+
+The CBO full-corpus completeness audit (2026-06-10) probed dates directly across the id space and found old back-catalog reports interleaved with 2011 republications across the *entire* range:
+
+| pid | page date | pid | page date |
+|---|---|---|---|
+| 21000 | 1981 | 41138 | 2009 |
+| 20000 | 1992 | 41479 | 2011 |
+| 22000 | 2011 | 41441 | 1983 |
+| 25157–25164 | 2011 | 41448 | 2011 |
+
+A 94-of-361 sample of the contested boundary band `41138–41499` (the band just below the Wayback floor of 41500 that ADR-023's machinery would discard) was **19/94 dated 2010+** — real in-window publications the floor was silently dropping. There is **no id value that separates 2010+ from pre-2010 content**: any floor drops scattered in-window publications, and any ceiling keeps scattered out-of-window ones. The page-date gate already sorts window membership correctly *for whatever it is handed* — the only failure was the enumerator never handing it those ids. Dropping scattered 2010+ publications is precisely the under-capture failure the basis-set framing (CLAUDE.md, ADR-020) forbids documenting as a limitation.
+
+CBO publishes an authoritative, complete index of itself: **`cbo.gov/sitemap.xml`**. Crucially, the sitemap path returns **HTTP 200 even though cbo.gov *publication pages* are DataDome-blocked** (403, even via curl_cffi chrome impersonation — verified 2026-06-10) — the sitemap sits outside the bot wall. So we can enumerate the true publication universe directly from CBO, without Wayback and without guessing, then use the archive only for the bodies (the pages we cannot fetch live).
+
+### Decision
+
+**1. The publication universe is the cbo.gov sitemap, not an estimated id range.** `_fetch_sitemap_pids()` fetches `cbo.gov/sitemap.xml` (a `<sitemapindex>` of 14 sub-sitemaps at `sitemap.xml?page=N`), walks every sub-sitemap, and extracts every `/publication/{id}` id via `_PUBLICATION_RE`. Live result 2026-06-10: **25,423 unique publication ids spanning 10329–62515.** Fetched with curl_cffi chrome131 impersonation (`_cbo_get`), which **fails loud** (raises) on any non-200 — there is no guessed-range fallback, because a silent fallback to the old broken estimator is exactly the under-capture trap ADR-030 forbids.
+
+**2. The sitemap `lastmod` is NOT used for dating.** It is CMS-migration noise (13,631 docs stamped "modified" 2019; earliest 2014; publications go back to 1996). Window membership remains the post-fetch page-date gate reading each Wayback capture's own `datePublished`/`article:published_time`/`datetime` metadata — the ADR-022 strict-date policy, unchanged.
+
+**3. CDX still supplies snapshot timestamps; the sweep is driven by the sitemap.** `_build_or_load_cdx_map` now derives the CDX block range from `min/max` of the sitemap ids (≈523 100-id prefix blocks for the full universe), paced at `_REQUEST_SPACING_S` per the ADR-023 third-correction addendum. Each block's `(earliest_ts, latest_ts)` rows are kept **only for ids the sitemap declares real publications** (a prefix query also returns redirects / non-publication nodes). The window-keyed CDX cache (ADR-023 second correction) is unchanged.
+
+**4. Sitemap ids with no Wayback snapshot are logged as a measurable gap, not silently lost.** After the sweep, `missing = sitemap_pids - cdx_map.keys()` is WARN-logged with a count and sample. This converts "publications the archive doesn't hold" from an invisible hole into a counted, auditable quantity — consistent with ADR-028's independent-inventory standard.
+
+**Removed:** `_ID_DATE_ANCHORS`, `_ID_RANGE_PAD`, `_MIN_PUBLICATION_ID`, `_estimate_id_range`, `_estimate_id`. Added: `_SITEMAP_INDEX`, `_fetch_sitemap_pids`, `_cbo_get`. `_PUBLICATION_RE` is retained (now shared by `_cdx_block` and `_fetch_sitemap_pids`).
+
+### Consequences
+
+- **CBO is now enumerated completely and correctly.** Every publication CBO lists is a candidate; the page-date gate decides window membership from real metadata; no id heuristic can silently drop in-window content. The audit's 19%-of-band 2010+ leakage is closed.
+- **Enumeration works from any IP** (sitemap + CDX are not the throttled replay endpoint). Only the body fetches hit IA's replay throttle, so the ADR-023 third-correction conclusion stands: finishing CBO is an egress-IP problem — a fresh residential/cloud IP completes the ~13–16k in-window body walk under a clean count budget; the checkpoint + `_WaybackBanned` pause-resume carry it across IPs/cooldowns otherwise.
+- **Larger candidate set, same kept set.** 25,423 sitemap ids vs ADR-023's ~13.6k id-range census, but the extra ids are overwhelmingly pre-2010 back-catalog the page-date gate drops after a cheap CDX-ts pre-filter; the in-window body-fetch count is essentially unchanged. The CDX sweep grows to ~523 blocks (~1.7h paced) but is cached, so a resume pays it once.
+- **No methodology change beyond enumeration:** CBO stays in the basis set (dimension 5, legislative fiscal authority), canonical url stays cbo.gov, retrieval stays cbo.gov-via-Wayback for bodies, strict page-date filter and ≥50-word floor preserved. No config/threshold/seed change.
+- **New dependency surface:** correctness now relies on cbo.gov keeping its sitemap reachable and outside the bot wall. If CBO ever DataDome-gates the sitemap too, `_cbo_get` fails loud (the run stops) rather than silently under-capturing — the correct failure mode.
+
+### Verification
+
+- `python -c "import ast; ast.parse(open('src/mnd/ingestion/institutional.py').read())"` — syntax OK; module imports clean; no dangling references to the removed symbols.
+- Live smoke of `_fetch_sitemap_pids()` against cbo.gov: **25,423 pids (10329–62515), 523 prefix blocks**, with all scattered 2010+ ids found in the audit (22000, 25157, 41150, 41479) plus the RCC death-point pid 41672 present in the set.
+- End-to-end remains the fresh-IP body walk (calibration probe of ~300 paced fetches first, then the full checkpointed run), per the ADR-023 third-correction operational note — not yet executed.
 
 ---
 
