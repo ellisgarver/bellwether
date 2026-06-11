@@ -43,16 +43,19 @@ temporal:
 #
 embedding:
   primary:
-    model: "Qwen/Qwen3-Embedding-0.6B"
+    model: "Qwen/Qwen3-Embedding-8B"  # ADR-036 (was 0.6B); top-tier MTEB, A100-only
     revision: "main"               # Pin to specific commit hash before Phase 2
-    dimensions: 1024
-    # On RCC (CUDA V100 16 GB): max_seq_len=1024, batch_size=8, fp16 (ADR-013).
+    dimensions: 4096               # ADR-036 (was 1024); 8B native output dim
+    # On RCC (CUDA A100 40 GB, gpu partition --constraint=a100): max_seq_len=1024,
+    # batch_size=8, fp16 — 8B ≈ 16 GB fp16 weights, comfortable on 40 GB (ADR-036).
     # On Apple Silicon (MPS): export MND_MAX_SEQ_LEN=512 to avoid OOM (ADR-006).
     # Chunker (per ADR-019) produces 512-Qwen3-token chunks, well within both.
+    # Embedding dim does NOT flow into BERTopic — UMAP reduces any input dim to
+    # n_components=5, so the clustering params (config below) are unchanged (ADR-036).
     max_seq_len: 1024
     instruction_aware: true
     instruction_prefix: "Instruct: Represent this financial policy document for narrative clustering\nQuery: "
-    upgrade_path: "Qwen/Qwen3-Embedding-4B"  # If RCC capacity allows; identical interface
+    # No upgrade_path — 8B is the top of the Qwen3-Embedding family.
   # Comparator (mpnet) look-ahead sensitivity check removed by ADR-019 (2026-05-20).
   # The negative finding from the prior look-ahead check (ADR-011) is preserved
   # as historical evidence in the project record; the apparatus itself is not

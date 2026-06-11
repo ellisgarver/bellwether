@@ -21,26 +21,27 @@
 #
 # Resource spec:
 #   Account:   pi-dachxiu
-#   GPU:       1x V100 16GB (constraint=v100)
-#              Qwen3-0.6B at max_seq_len=1024, batch=8, fp16: < 6 GB working set
-#              all-mpnet-base-v2 at 384 tokens: < 2 GB — trivially fits
-#              (Job 49622334 OOMed on 2026-05-13 at the prior config of seq=2048 +
-#              batch=32: caused 16 GB causal-mask + KV-cache allocation. Config is
-#              now batch=8 + seq=1024; see config/config.yaml comments.)
+#   GPU:       1x A100 40GB (constraint=a100)  — ADR-036
+#              Qwen3-8B at max_seq_len=1024, batch=8, fp16: ~16 GB weights +
+#              activations — comfortable on 40 GB (was V100 16GB for 0.6B, which
+#              cannot hold 8B). The gpu partition has a100 nodes (gold-6248r,384g).
+#              all-mpnet-base-v2 comparator at 384 tokens: < 2 GB — trivially fits.
+#              (Job 49622334 OOMed on 2026-05-13 on V100 at seq=2048 + batch=32;
+#              config is now batch=8 + seq=1024; see config/config.yaml comments.)
 #   CPUs:      8
-#   RAM:       32 GB
-#   Time:      12 h   (Qwen3 primary ~5-8 h; mpnet comparator ~2 h on V100)
+#   RAM:       64 GB
+#   Time:      18 h   (Qwen3-8B primary on A100 ~6-12 h; mpnet comparator ~2 h)
 #
 # All output in /scratch/midway3/ehgarver/ — never in PI project folder.
 
 #SBATCH --job-name=mnd-embed
 #SBATCH --account=pi-dachxiu
 #SBATCH --partition=gpu
-#SBATCH --constraint=v100
+#SBATCH --constraint=a100
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
-#SBATCH --time=12:00:00
+#SBATCH --mem=64G
+#SBATCH --time=18:00:00
 #SBATCH --output=logs/embed_rcc_%j.log
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ehgarver@uchicago.edu

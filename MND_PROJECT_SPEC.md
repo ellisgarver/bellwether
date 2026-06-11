@@ -266,15 +266,16 @@ No topic filter needed — all Layer 1A sources are macro-relevant by constructi
 
 **Two-model strategy (resolved per ADR-011, 2026-05-11):**
 
-- **Primary (production): `Qwen/Qwen3-Embedding-0.6B`** — 1024-dim, 32,768-token context,
-  instruction-aware, Apache 2.0. Long context is essential for the corpus:
-  FOMC minutes 10–15k words, BIS QR 3–8k, Jackson Hole 8–15k, VoxEU 800–2,500.
-  Ranks at the top of MTEB clustering benchmarks (early 2025).
-  - On RCC: `max_seq_len=1024`, `batch_size=8`, fp16 (V100 16 GB OOM-safe, ADR-013).
-    The 600-BPE-token chunker output fits with 1.7× headroom.
+- **Primary (production): `Qwen/Qwen3-Embedding-8B`** (ADR-036; was 0.6B) — 4096-dim,
+  32,768-token context, instruction-aware, Apache 2.0. Long context is essential for
+  the corpus: FOMC minutes 10–15k words, BIS QR 3–8k, Jackson Hole 8–15k, VoxEU 800–2,500.
+  Tops the MTEB benchmark.
+  - On RCC: A100-40GB (`gpu` partition `--constraint=a100`), `max_seq_len=1024`,
+    `batch_size=8`, fp16. ~16 GB fp16 weights — comfortable on 40 GB (8B does NOT
+    fit V100-16GB, which is why ADR-036 moved the embed job to A100).
   - On Apple Silicon (MPS): set `MND_MAX_SEQ_LEN=512` in `.env` to avoid OOM on the
     attention matrix (ADR-006).
-  - Upgrade path: `Qwen/Qwen3-Embedding-4B` if RCC capacity allows; identical interface.
+  - No upgrade path — 8B tops the Qwen3-Embedding family.
 
 - **Comparator (look-ahead sensitivity check only): `all-mpnet-base-v2`** —
   768-dim, 384-token native context, ~2020–2021 training cutoff. Not used for
@@ -501,9 +502,9 @@ Weekly cron job. Pulls past week's documents from all active basis-set sources (
 **Do not change any of these without creating a new ADR in `docs/architecture_decisions.md`.**
 
 ```yaml
-# Embedding (ADR-011; ADR-013 for max_seq_len / batch_size)
-embedding_primary_model:    Qwen/Qwen3-Embedding-0.6B
-embedding_primary_max_seq_len: 1024       # RCC V100 16GB OOM-safe; 512 on MPS via MND_MAX_SEQ_LEN
+# Embedding (ADR-036 model/dim; ADR-013 for max_seq_len / batch_size)
+embedding_primary_model:    Qwen/Qwen3-Embedding-8B   # 4096-dim, A100-40GB (ADR-036)
+embedding_primary_max_seq_len: 1024       # chunker emits 512-tok chunks; 512 on MPS via MND_MAX_SEQ_LEN
 embedding_primary_batch_size: 8           # V100 OOM-safe (was 32)
 embedding_comparator_model: sentence-transformers/all-mpnet-base-v2
 embedding_comparator_max_seq_len: 384     # mpnet native max
