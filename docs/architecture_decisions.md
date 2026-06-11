@@ -47,6 +47,7 @@ pre-registration). Bodies below are preserved verbatim for that defense.
 | 030 | **Fail-loud hardening — silent under-capture forbidden at every fetch boundary** | Live |
 | 031 | WordPress sources restricted to own-domain content (source-identity rule) | Live |
 | 032 | CBO enumeration via the authoritative cbo.gov sitemap (supersedes ADR-023 id-floor estimation) | Live |
+| 033 | Atlanta Fed pre-2019 Wayback recovery (macroblog + working papers) | Live |
 
 ---
 
@@ -2524,6 +2525,62 @@ CBO publishes an authoritative, complete index of itself: **`cbo.gov/sitemap.xml
 - `python -c "import ast; ast.parse(open('src/mnd/ingestion/institutional.py').read())"` — syntax OK; module imports clean; no dangling references to the removed symbols.
 - Live smoke of `_fetch_sitemap_pids()` against cbo.gov: **25,423 pids (10329–62515), 523 prefix blocks**, with all scattered 2010+ ids found in the audit (22000, 25157, 41150, 41479) plus the RCC death-point pid 41672 present in the set.
 - End-to-end remains the fresh-IP body walk (calibration probe of ~300 paced fetches first, then the full checkpointed run), per the ADR-023 third-correction operational note — not yet executed.
+
+---
+
+## ADR-033: Atlanta Fed pre-2019 Wayback recovery (macroblog + working papers)
+
+- **Status**: Accepted
+- **Date**: 2026-06-11
+- **Lineage**: same deleted-from-live-but-archived recovery pattern as ADR-032 (CBO), ADR-026 (PIIE), and the Brookings off-domain backfill — CDX enumeration + Wayback body fetch for in-scope content the live site no longer serves.
+
+### Context
+
+The full-corpus composition QA (2026-06-11) found `fed_atlanta` is a **hard zero across all of 2010–2018** — a clean zero-band at the window open that abruptly turns on in 2019. This is the classic under-capture signature, not a real absence: the Atlanta Fed published continuously through that period.
+
+The cause is the 2026 atlantafed.org redesign, which retired the old discovery surface entirely (documented in `_fetch_atlanta`: old `/blogs/macroblog`, RSS, and `/research/publications/*` listings all 404). The current ingestor hits the new Sitecore JSS listing API, whose four series only exist from their inaugural dates on the *new* surface (Working Papers 2019-02, Policy Hub Papers 2020-01, Policy Hub Macroblog 2022-10, Macroeconomy hub feed 2016-09). The old article URLs 404 on the live site, so even the hub-feed rows that *list* 2016–2018 items drop on `_fetch_page_full`'s ≥50-word body gate — which is exactly why the band is a hard zero rather than thin.
+
+Dimension 2 (US monetary research voice, ADR-020) stays covered for 2010–2018 by NY/SF/Chicago, all of which span the full window — so no *dimension* goes uncovered, and this gap was previously documented (not silent). But under per-source full-scope (user decision, 2026-06-11), Atlanta's distinctive **macroblog** is a voice worth recovering rather than conceding.
+
+A Wayback CDX audit (2026-06-11) sized the recoverable, in-window, in-scope surface honestly:
+
+| Surface | Archived URL pattern | 2010–2018 | Disposition |
+|---|---|---|---|
+| Macroblog | `macroblog.typepad.com/macroblog/YYYY/MM/slug.html` | 392 | **Recover** — narrative macro discourse |
+| Working Papers | `frbatlanta.org/research/publications/wp/YYYY/NN.aspx` (pre-2016) or `/wp/YYYY/NN-slug` (2016+) | 177 | **Recover** — abstract/landing pages, clean dated surface |
+| Economic Review | `/research/publications/economic-review/YYYY/…` | 3 (2010 only) | Skip — journal wound down ~2010 |
+| CQER tools | `/cqer/research/*` (GDPNow, Wu-Xia, etc.) | — | **Exclude** — persistent data products, not narrative documents |
+
+Total recovery ≈ **569 documents** (392 macroblog + 177 WP). Two prior estimates were wrong and are corrected here: an off-the-cuff 900–1,500, then a ~340 figure derived from enumerating `frbatlanta.org/blogs/macroblog/` — which turned out to be the wrong host (see Decision §1). Enumerating the macroblog's real home (typepad) yields 392 in-window posts.
+
+**Source-of-truth correction (load-bearing):** the macroblog lived on `macroblog.typepad.com` for its entire pre-2020 life. The `frbatlanta.org/blogs/macroblog/YYYY/MM/DD/slug` URLs are **post-deletion 404 stubs** — Wayback has *no contemporaneous captures* of them (earliest snapshots are 2023–2024, all post-redesign error pages). Recovery therefore enumerates and fetches the **typepad** host, not frbatlanta.
+
+### Decision
+
+Add `_fetch_atlanta_wayback(start, end, seen)` to `FedRegionalIngestor`, yielded from `fetch()` alongside the live-API `_fetch_atlanta`. Two recovery surfaces:
+
+1. **Macroblog** — CDX-enumerate `macroblog.typepad.com/macroblog`, keep posts matching `/macroblog/\d{4}/\d{2}/slug.html` (the monthly `index.html` archive pages are excluded by a negative lookahead). The typepad path carries **year/month but no day**, so the URL gives only a coarse `YYYY-MM-01` provisional date; the authoritative `pub_date` comes from the page metadata after the body fetch. The post `<title>` is the site masthead ("macroblog"), so the title falls back to a title-cased URL slug. **Capped at `pub_date < 2019-01-01`** to match WP — the live fetch already covers 2019+, and the cap prevents double-capture across the typepad→frbatlanta migration. `document_type=fed_regional_research`.
+2. **Working Papers** — CDX-enumerate `frbatlanta.org/research/publications/wp` (+ the `atlantafed.org` alias), keep `/wp/\d{4}/\d+` optionally followed by `.aspx` (pre-2016) or a `-slug` (2016+); `.aspx` is stripped for the dedup key. These resolve to the WP **abstract/landing page** (the full text lives in a separate PDF), which clears the ≥50-word floor (~300–400 words). **Capped at `pub_date < 2019-01-01`** because the live listing API already covers WP from 2019-02. `document_type=fed_staff_report`. `pub_date` prefers the page metadata, falling back to the URL year (`YYYY-07-01`).
+
+Mechanics (reusing established patterns, not the CBO checkpoint/ban apparatus — ~570 fetches on a clean IP is a single sub-hour session):
+- CDX query with `filter=statuscode:200`, `filter=mimetype:text/html`, `fl=original,timestamp`; keep the **earliest real** snapshot per distinct URL. This is the opposite of CBO/ADR-023 (which keeps the latest): this content was *deleted* in the 2026 redesign, so a late snapshot of an frbatlanta URL captures the post-deletion 404 stub — the earliest capture is when the page was live and complete. (The `29991231` far-future redirect stub is skipped outright.) The **exact archived original URL** — including its `:80` port or `.aspx` variant — is retained and used as the snapshot-fetch target (a reconstructed URL would not resolve).
+- Bodies fetched from the raw `web.archive.org/web/{ts}id_/{url}` snapshot (the `id_` modifier strips Wayback chrome so trafilatura extracts the original article), via a compact `_atlanta_wayback_get`: tuple timeout, escalating backoff on 5xx / connection-reset, patient `Retry-After` cooldown on 429, **fail-loud** (raises) on true exhaustion (ADR-030).
+- Extraction reuses `_fetch_page_full` with the ≥50-word floor; the exact archived URL is stored for provenance and dedup against the shared `seen` set (no collision with the live pass — typepad/`.aspx` URLs differ from the live-API URLs, and the 2019 cap separates the date ranges).
+- Strict page-date / window gate and ADR-022 dating policy preserved.
+
+### Consequences
+
+- **The fed_atlanta 2010–2018 zero-band fills** (~569 docs); Atlanta's macroblog voice is recovered rather than conceded. The previously-documented gap is closed under the user's full-scope-per-source standard.
+- **Cheap recovery:** ~570 paced fetches ≈ 30 min, one session, clean IP — no checkpoint/resume machinery needed. CDX enumeration runs from any IP. **But it is ~570 Internet-Archive fetches**, so it cannot run concurrently with another large IA walk (e.g. the CBO ingest) on the same egress IP without compounding IA's per-IP throttle — schedule them apart.
+- **Deliberate exclusions, recorded:** CQER pages (ongoing data tools, not documents) and the pre-2010 Economic Review (out-of-window) are intentionally not recovered — exclusion rationale lives here so it isn't re-litigated as a coverage hole.
+- **No methodology change beyond capture:** Atlanta stays in the basis set (dimension 2), strict page-date filter and ≥50-word floor preserved. No config/threshold/seed change. Provenance URLs are the archived typepad/`.aspx` URLs (the live frbatlanta paths are dead), which is acceptable for a recovered-from-archive source.
+- **New dependency:** correctness relies on Wayback holding the old-surface snapshots (audit confirmed it does). A CDX outage fails loud (ADR-030) rather than silently under-capturing.
+
+### Verification
+
+- Wayback CDX audit (2026-06-11): macroblog enumerates 1,668 typepad posts total, 392 in-window/under-cap (2010–2018, by url-year: 57/45/58/52/47/36/46/25/26); WP enumerates 555 total, 177 in-window/under-cap. Economic Review 3 (skipped).
+- Local end-to-end smoke (2026-06-11): both surfaces fetch clean bodies from `{ts}id_/` snapshots — macroblog 944–2066 words with accurate metadata dates (e.g. 2010-01-07/13/21); WP 323–399-word abstract pages with real titles ("Do Credit Constraints Amplify Macroeconomic Fluctuations?"). Earliest-snapshot selection confirmed (latest-snapshot returns 404 stubs).
+- Post-change (deferred until IA throttle clears): re-ingest `fed_atlanta` only, then `verify_coverage.py fed_regional` + `corpus-composition` must show the 2010–2018 fed_atlanta band populated with no 2019+ regression.
 
 ---
 
