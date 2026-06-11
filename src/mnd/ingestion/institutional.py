@@ -1970,6 +1970,14 @@ class FedRegionalIngestor(Ingestor):
         # document type (cf. Fed Board, fed.py), so capturing Chicago's is a
         # straight extension of an in-scope type, not a new methodology.
         (r"/publications/speeches/(\d{4})/[^/]+$", "speech"),
+        # Chicago Fed survey of business/economic conditions — monthly regional
+        # qualitative-conditions writeups (the Beige Book genre already in the
+        # corpus via the Board + SF). CFSBC ran 2016-2022; CFSEC is its 2023+
+        # successor. Same publication path shape (/YYYY/<month><year>); the
+        # narrative body (~60 words) clears the floor and the month is recovered
+        # from the citation block.
+        (r"/publications/cfsbc/(\d{4})/[^/]+$", "survey_business_conditions"),
+        (r"/publications/cfsec/(\d{4})/[^/]+$", "survey_economic_conditions"),
     ]
 
     def _fetch_chicago_fed_letter(
@@ -2058,13 +2066,33 @@ class FedRegionalIngestor(Ingestor):
             #   3. Else fall back to a body-text "MONTH YYYY" or "QN YYYY"
             #      regex constrained to the URL-derived year.
             #   4. Else drop — no fabricated dates.
+            # The citation block is Chicago's OWN structured publication date
+            # (month granularity) and is authoritative for the MONTH; trafilatura's
+            # meta_date is the order-dependent OG `article:published_time`, which
+            # the 2026 site redesign overwrote on the survey templates with a
+            # 2026-01-01 migration stamp (other templates kept a genuine day-
+            # precise date). So: anchor on the citation block, but keep meta_date's
+            # day-precision only when meta corroborates the citation month/year.
+            # When they disagree (the stamp: Jan vs. the real April) the citation
+            # block wins. The prior meta-first order silently collapsed every
+            # in-window 2026 survey onto Jan 1 (the only year where stamp-year ==
+            # URL-year). meta_date survives as a fallback for pages with no
+            # citation block.
+            cite_date = _chicago_fed_date_from_html(page_html, year)
             pub_date: date | None = None
-            if meta_date is not None and meta_date.year == year:
-                pub_date = meta_date
-            if pub_date is None:
-                pub_date = _chicago_fed_date_from_html(page_html, year)
+            if cite_date is not None:
+                if (
+                    meta_date is not None
+                    and meta_date.year == cite_date.year
+                    and meta_date.month == cite_date.month
+                ):
+                    pub_date = meta_date  # corroborated → keep day-precision
+                else:
+                    pub_date = cite_date
             if pub_date is None:
                 pub_date = _chicago_fed_date_from_body(body, year)
+            if pub_date is None and meta_date is not None and meta_date.year == year:
+                pub_date = meta_date
             if pub_date is None:
                 log.debug(
                     "Chicago Fed: dropping %s — no authoritative pub date "

@@ -41,7 +41,7 @@ The corpus is a **basis set**: the minimum set of sources spanning every indepen
 | Dimension | Source(s) |
 |---|---|
 | 1. US monetary authority | Federal Reserve Board (FOMC, speeches incl. Jackson Hole, Beige Book, FEDS Notes, MPR, FSR) |
-| 2. US monetary research | Regional Feds — NY (Liberty Street + Staff Reports via RePEc/IDEAS, ADR-025), SF (Economic Letter, Working Papers, FedViews, Beige Book, Community Development; cross-posts excluded, ADR-034), Chicago (multi-series incl. president speeches), Atlanta (macroblog + working papers) |
+| 2. US monetary research | Regional Feds — NY (Liberty Street + Staff Reports via RePEc/IDEAS, ADR-025), SF (Economic Letter, Working Papers, FedViews, Beige Book, Community Development; cross-posts excluded, ADR-034), Chicago (multi-series incl. president speeches + business/economic-conditions surveys CFSBC/CFSEC), Atlanta (macroblog + working papers) |
 | 3. International macro authority | IMF (WEO, GFSR, F&D, working papers, blog) |
 | 4. International central-bank network | BIS (Quarterly Review, working papers, Bulletins, curated CB speeches) |
 | 5. US fiscal authority | CBO (legislative scoring + outlook + working papers + MBR) + **CEA** (executive — Economic Report of the President via govinfo.gov ERP) |

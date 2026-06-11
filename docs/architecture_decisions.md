@@ -49,6 +49,7 @@ pre-registration). Bodies below are preserved verbatim for that defense.
 | 032 | CBO enumeration via the authoritative cbo.gov sitemap (supersedes ADR-023 id-floor estimation) | Live |
 | 033 | Atlanta Fed pre-2019 Wayback recovery (macroblog + working papers) | Live |
 | 034 | SF Fed `sffed_publications` per-segment labeling + cross-post exclusion | Live |
+| 035 | Chicago Fed 2026-redesign date-stamp fix (citation block over OG meta) | Live |
 
 ---
 
@@ -2649,6 +2650,57 @@ research is this), not a *topical* one.
   shapes; a renamed segment would degrade to the generic fallback (still
   captured), surfacing as a label drift in composition QA rather than as silent
   loss.
+
+---
+
+## ADR-035: Chicago Fed 2026-redesign date-stamp fix (citation block over OG meta)
+
+- **Status**: Accepted
+- **Date**: 2026-06-11
+
+### Context
+
+While extending Chicago Fed capture to the business/economic-conditions survey
+series (CFSBC 2016–2022 and its successor CFSEC 2023–present — the Beige Book
+genre already in the corpus via the Board + SF, so an in-scope series extension,
+not a new methodology), live verification surfaced a dating defect: the 2026
+chicagofed.org site redesign (the same redesign that retired Atlanta's old
+discovery surface, ADR-033) overwrote the OG `article:published_time` on the
+survey page templates with a **2026-01-01 migration stamp**. Other templates
+(e.g. Chicago Fed Letter) kept a genuine day-precise OG date.
+
+The prior date logic was meta_date-first: `if meta_date.year == url_year: use
+meta_date`. trafilatura returns the stamp as `meta_date`, so for every
+**in-window 2026** page the stamp's year (2026) matched the URL year and the
+stamp won — silently collapsing all 2026 Chicago content onto Jan 1. Pre-2026
+years were unaffected only by luck (stamp-year 2026 ≠ their URL year, so the
+existing citation-block fallback already ran). Same defect *class* as ADR-029
+(PIIE 2016 migration stamp) and the ADR-032 CBO correction (order-dependent
+trafilatura date picker).
+
+### Decision
+
+Anchor Chicago dating on the **citation block** (`_chicago_fed_date_from_html`)
+— Chicago's own structured publication date, month-granular and authoritative —
+and keep the OG `meta_date`'s day-precision **only when it corroborates the
+citation block's month and year**. When they disagree (the stamp's January vs.
+the citation block's real month) the citation block wins; the stamp can never
+win. `meta_date` survives solely as a fallback for a page with no citation block
+and no in-body "MONTH YYYY". No fabricated dates: a page resolving to none is
+still dropped (methodology principle 1).
+
+### Consequences
+
+- All in-window 2026 Chicago records (every series, not just surveys) now date
+  to their true month instead of Jan 1; pre-2026 day-precise dates are preserved
+  unchanged (verified: 2021 Fed Letter keeps 2021-04-27; 2026 CFSEC April resolves
+  2026-04-15, was 2026-01-01; 2019 CFSBC September → 2019-09-15).
+- Survey series enumerated from the live sitemap: CFSBC 59 + CFSEC 49 records.
+  Sections `survey_business_conditions` / `survey_economic_conditions`,
+  `document_type=fed_regional_research` (Beige Book genre).
+- Day-precision on the survey pages themselves is mid-month (day 15) because the
+  citation block is month-granular — immaterial to volume-curve / lifecycle
+  dynamics, which bin well above day resolution.
 
 ---
 
