@@ -48,6 +48,7 @@ pre-registration). Bodies below are preserved verbatim for that defense.
 | 031 | WordPress sources restricted to own-domain content (source-identity rule) | Live |
 | 032 | CBO enumeration via the authoritative cbo.gov sitemap (supersedes ADR-023 id-floor estimation) | Live |
 | 033 | Atlanta Fed pre-2019 Wayback recovery (macroblog + working papers) | Live |
+| 034 | SF Fed `sffed_publications` per-segment labeling + cross-post exclusion | Live |
 
 ---
 
@@ -2589,6 +2590,65 @@ Mechanics (reusing established patterns, not the CBO checkpoint/ban apparatus �
 - Wayback CDX audit (2026-06-11): macroblog enumerates 1,668 typepad posts total, 392 in-window/under-cap (2010–2018, by url-year: 57/45/58/52/47/36/46/25/26); WP enumerates 555 total, 177 in-window/under-cap. Economic Review 3 (skipped).
 - Local end-to-end smoke (2026-06-11): both surfaces fetch clean bodies from `{ts}id_/` snapshots — macroblog 944–2066 words with accurate metadata dates (e.g. 2010-01-07/13/21); WP 323–399-word abstract pages with real titles ("Do Credit Constraints Amplify Macroeconomic Fluctuations?"). Earliest-snapshot selection confirmed (latest-snapshot returns 404 stubs).
 - Post-change (deferred until IA throttle clears): re-ingest `fed_atlanta` only, then `verify_coverage.py fed_regional` + `corpus-composition` must show the 2010–2018 fed_atlanta band populated with no 2019+ regression.
+
+---
+
+## ADR-034: SF Fed `sffed_publications` per-segment labeling + cross-post exclusion
+
+- **Status**: Accepted
+- **Date**: 2026-06-11
+
+### Context
+
+The SF Fed WordPress REST endpoint exposes a single custom post type,
+`sffed_publications`, that is a **catch-all bucket** holding 16+ distinct series
+(Economic Letter, Working Papers, FedViews, the Twelfth-District Beige Book,
+Community Development articles/research briefs, and more). The prior
+`_fetch_frbsf` pulled every post from this type and emitted them under one flat
+`section`, which (a) erased the series distinction the rest of the pipeline
+relies on and (b) silently violated the ADR-031 source-identity rule: the bucket
+includes **cross-posts of other institutions' research** whose slugs begin with
+`system-research-` (Federal Reserve System working-paper series) and
+`board-of-governors` (Board content republished on frbsf.org). Because those
+cross-posts carry canonical `link`s on `www.frbsf.org`, URL-dedup against the
+native Fed Board / FEDS ingestors cannot catch them — they would enter the
+corpus twice and inflate the SF dimension with content that belongs to other
+ADR-020 dimensions.
+
+### Decision
+
+`_fetch_frbsf` now classifies each post by its URL path segment
+(`/publications/<segment>/`) before emitting:
+
+- A `_FRBSF_SECTION_BY_SEGMENT` map assigns each known series its own
+  `(section, document_type)` — Economic Letter, Working Papers (→
+  `fed_staff_report`), FedViews, Beige Book, and Community Development
+  articles/briefs. Unknown segments fall back to a generic
+  `(frbsf_publication, fed_regional_research)` so a new SF series is still
+  captured (under-capture is the failure mode that matters), just not
+  mislabeled.
+- Posts whose segment begins with `system-research-` or `board-of-governors`
+  (`_FRBSF_EXCLUDED_PREFIXES`) are **dropped** — they are other institutions'
+  content and belong to those institutions' dimensions, not SF's.
+
+This keeps the SF ingestor mapped 1:1 to the SF dimension (ADR-020) and honors
+the source-identity rule (ADR-031). No content filter beyond the standing
+window + dedup is introduced; the exclusion is an *identity* gate (whose
+research is this), not a *topical* one.
+
+### Consequences
+
+- The SF dimension now carries correctly-labeled per-series sections instead of
+  one undifferentiated bucket; downstream composition QA can see each series.
+- Cross-posted System/Board research no longer double-enters via SF, so the
+  1:1 ingestor↔dimension invariant holds.
+- Verified offline against a live 100-record `sffed_publications` sample: kept
+  Economic Letter / Working Papers / FedViews / Beige Book / Community
+  Development; skipped 9 `board-of-governors` + the `system-research-*` posts.
+- Residual to confirm on re-ingest: the segment map is keyed to current SF URL
+  shapes; a renamed segment would degrade to the generic fallback (still
+  captured), surfacing as a label drift in composition QA rather than as silent
+  loss.
 
 ---
 
