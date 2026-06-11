@@ -1502,6 +1502,42 @@ class FedRegionalIngestor(Ingestor):
         ),
     ]
 
+    # ADR-033: pre-2019 Atlanta content (macroblog + working papers) was deleted
+    # from the live site in the 2026 redesign, so the listing API can't see it and
+    # 2010-2018 is a hard zero. Recover both surfaces from the Internet Archive.
+    # The macroblog lived on macroblog.typepad.com for its entire pre-2020 life
+    # (the frbatlanta.org/blogs/macroblog/ URLs are post-deletion 404 stubs with
+    # NO contemporaneous captures) — so its real archive is the typepad host, where
+    # the path carries year/month but no day (date comes from page metadata). The
+    # WP HTML landing pages are deleted (404 live) but archived contemporaneously
+    # under /research/publications/wp/YYYY/NN.aspx (pre-2016) or .../NN-slug (2016+).
+    # Each entry: (cdx_prefixes, post-path regex matched against the host-stripped
+    # path, section, document_type, exclusive pub_date cap). Both caps are
+    # 2019-01-01 because the live fetch already covers 2019+ — the cap prevents
+    # double-capture across the old/new split. CQER data-tool pages and the
+    # pre-2010 Economic Review are deliberately not recovered.
+    _WB_CDX_API = "https://web.archive.org/cdx/search/cdx"
+    _WB_SNAP = "https://web.archive.org/web/{ts}id_/{url}"
+    _WB_UA = "Mozilla/5.0 (compatible; MND-academic-research/1.0; +https://web.archive.org)"
+    _WB_SPACING_S = 3.0
+    _ATLANTA_WAYBACK: list = [
+        (
+            ["macroblog.typepad.com/macroblog"],
+            re.compile(r"^/macroblog/(\d{4})/(\d{2})/(?!index\.html$)[^/]+\.html$"),
+            "macroblog",
+            "fed_regional_research",
+            date(2019, 1, 1),
+        ),
+        (
+            ["frbatlanta.org/research/publications/wp",
+             "atlantafed.org/research/publications/wp"],
+            re.compile(r"^/research/publications/wp/(\d{4})/\d+[a-z]?(?:-[^/]+)?$"),
+            "working_paper",
+            "fed_staff_report",
+            date(2019, 1, 1),
+        ),
+    ]
+
     # atlantafed.org returns 403 to stdlib `requests` from RCC/residential IPs
     # — same TLS-fingerprint class as IMF/CBO. curl_cffi with Chrome
     # impersonation defeats it; falling back to stdlib `requests` is intentional
@@ -1552,6 +1588,7 @@ class FedRegionalIngestor(Ingestor):
         yield from self._fetch_frbsf(start, end, seen)
         yield from self._fetch_chicago_fed_letter(start, end, seen)
         yield from self._fetch_atlanta(start, end, seen)
+        yield from self._fetch_atlanta_wayback(start, end, seen)
 
     # ------------------------------------------------------------------
     # Liberty Street Economics — WP REST API
@@ -2151,6 +2188,212 @@ class FedRegionalIngestor(Ingestor):
                 document_type="fed_regional_research",
             )
             time.sleep(0.5)
+
+    # ------------------------------------------------------------------
+    # Atlanta pre-2019 recovery from the Internet Archive (ADR-033)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _atlanta_path(url: str) -> str:
+        """Reduce a (possibly http/www/:port/.aspx-variant) Atlanta or typepad
+        URL to a bare path key, so the same post archived under either legacy
+        host or as an .aspx mirror collapses to one entry."""
+        u = url.split("?", 1)[0].split("#", 1)[0]
+        u = re.sub(
+            r"^https?://(www\.)?"
+            r"(frbatlanta\.org|atlantafed\.org|macroblog\.typepad\.com)(:\d+)?",
+            "",
+            u,
+        )
+        if u.endswith(".aspx"):
+            u = u[:-5]
+        if u.endswith("/"):
+            u = u[:-1]
+        return u
+
+    def _atlanta_wayback_get(
+        self, url: str, *, max_attempts: int = 8, throttle_waits: int = 8, **kwargs
+    ):
+        """GET a web.archive.org URL (CDX index or ``id_`` snapshot) for the
+        ADR-033 recovery. Tuple timeout; escalating backoff on 5xx / network
+        reset; patient ``Retry-After`` cooldown on 429; fail-loud (RAISES) on
+        true exhaustion so a sustained outage can't masquerade as an empty page
+        (ADR-030). A genuine 4xx is returned for the caller to treat as absence.
+        ~340 fetches on a clean IP — no checkpoint/ban apparatus needed."""
+        timeout = kwargs.pop("timeout", 60.0)
+        if isinstance(timeout, (int, float)):
+            timeout = (10, max(30, int(timeout)))
+        kwargs.setdefault("headers", {"User-Agent": self._WB_UA})
+        backoff = 4.0
+        attempt = 0
+        throttle = 0
+        while True:
+            try:
+                resp = requests.get(url, timeout=timeout, **kwargs)
+            except Exception as exc:
+                attempt += 1
+                if attempt >= max_attempts:
+                    raise RuntimeError(
+                        f"Atlanta Wayback GET {url} failed after {attempt} "
+                        f"attempts (last error: {exc}) — refusing to mask as empty"
+                    ) from exc
+                time.sleep(backoff + random.uniform(0, backoff * 0.25))
+                backoff = min(backoff * 2, 120)
+                continue
+            if resp.status_code == 429:
+                throttle += 1
+                if throttle > throttle_waits:
+                    raise RuntimeError(
+                        f"Atlanta Wayback GET {url}: HTTP 429 persisted across "
+                        f"{throttle} patient cooldowns — IA hard throttle"
+                    )
+                ra = resp.headers.get("Retry-After", "")
+                wait = float(ra) if ra.isdigit() else 30.0
+                log.info("Atlanta Wayback: 429, cooling %.0fs (%d/%d)",
+                         wait, throttle, throttle_waits)
+                time.sleep(min(wait, 120))
+                continue
+            if resp.status_code >= 500:
+                attempt += 1
+                if attempt >= max_attempts:
+                    raise RuntimeError(
+                        f"Atlanta Wayback GET {url} → HTTP {resp.status_code} "
+                        f"after {attempt} attempts — refusing to mask as empty"
+                    )
+                time.sleep(backoff + random.uniform(0, backoff * 0.25))
+                backoff = min(backoff * 2, 120)
+                continue
+            return resp
+
+    def _atlanta_cdx_enumerate(
+        self, prefixes: list[str], post_re: "re.Pattern"
+    ) -> dict[str, tuple[str, date, str]]:
+        """Enumerate archived post URLs across ``prefixes`` whose host-stripped
+        path matches ``post_re``. Returns {path: (earliest_real_timestamp,
+        url_date, original_url)}. We keep the EARLIEST snapshot, not the latest:
+        this content was *deleted* in the 2026 redesign, so a late snapshot
+        captures the post-deletion 404/redirect stub — the earliest capture is
+        when the page was live and complete. The exact ``original_url`` (with its
+        :port/.aspx variant) is retained so the snapshot fetch hits the URL that
+        was actually archived. (The 29991231 far-future redirect stub is skipped
+        outright.) Fail-loud: a CDX HTTP error RAISES rather than yielding a
+        partial set (ADR-030)."""
+        out: dict[str, tuple[str, date, str]] = {}
+        for prefix in prefixes:
+            params = {
+                "url": prefix,
+                "matchType": "prefix",
+                "fl": "original,timestamp",
+                "filter": ["statuscode:200", "mimetype:text/html"],
+                "limit": 200000,
+            }
+            resp = self._atlanta_wayback_get(
+                self._WB_CDX_API, params=params, timeout=120.0
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"Atlanta Wayback CDX {prefix}: HTTP {resp.status_code} "
+                    "— refusing to proceed with partial enumeration"
+                )
+            for line in resp.text.splitlines():
+                parts = line.split(" ")
+                if len(parts) < 2 or not parts[1].isdigit():
+                    continue
+                original, ts = parts[0], parts[1]
+                if ts[:4] == "2999":
+                    continue  # far-future redirect stub
+                path = self._atlanta_path(original)
+                m = post_re.match(path)
+                if not m:
+                    continue
+                g = m.groups()
+                try:
+                    if len(g) >= 3:
+                        url_date = date(int(g[0]), int(g[1]), int(g[2]))
+                    elif len(g) == 2:
+                        url_date = date(int(g[0]), int(g[1]), 1)
+                    else:
+                        url_date = date(int(g[0]), 7, 1)
+                except ValueError:
+                    continue
+                if path not in out or ts < out[path][0]:
+                    out[path] = (ts, url_date, original)
+        return out
+
+    def _fetch_atlanta_wayback(
+        self, start: date, end: date, seen: set[str]
+    ) -> Iterator[Article]:
+        """Recover Atlanta's pre-2019 macroblog + working papers from the
+        Internet Archive (ADR-033). The 2026 redesign deleted these from
+        atlantafed.org, so the live listing API can't see them and 2010-2018 is
+        a hard zero. Each surface is CDX-enumerated, bodies are fetched from the
+        raw ``id_`` snapshot, and records are gated on the page date (URL date
+        as fallback). The canonical live URL is stored for dedup/provenance."""
+        for prefixes, post_re, section, doc_type, date_cap in self._ATLANTA_WAYBACK:
+            snaps = self._atlanta_cdx_enumerate(prefixes, post_re)
+            if not snaps:
+                log.warning(
+                    "Atlanta Wayback %s: 0 archived posts enumerated — CDX "
+                    "returned nothing for %s (investigate before clearing)",
+                    section, ", ".join(prefixes),
+                )
+                continue
+            kept = 0
+            for path, (ts, url_date, original) in sorted(snaps.items()):
+                # The exact archived URL is both the snapshot target and the
+                # provenance/dedup key — the live frbatlanta path is a 404 stub.
+                canon_url = original
+                if canon_url in seen:
+                    continue
+                # Provisional gate on the URL date (year/month for macroblog,
+                # mid-year for WP); the page metadata refines it after the fetch.
+                if url_date < start or url_date > end:
+                    continue
+                if date_cap is not None and url_date >= date_cap:
+                    continue
+                snap_url = self._WB_SNAP.format(ts=ts, url=canon_url)
+                body, fetched_title, author, meta_date = _fetch_page_full(
+                    snap_url,
+                    min_words=50,
+                    getter=lambda u, **kw: self._atlanta_wayback_get(u, **kw),
+                )
+                if not body or len(body.split()) < 50:
+                    log.debug(
+                        "Atlanta Wayback %s: dropping %s — body <50 words",
+                        section, canon_url,
+                    )
+                    continue
+                pub_date = meta_date or url_date
+                if pub_date < start or pub_date > end:
+                    continue
+                if date_cap is not None and pub_date >= date_cap:
+                    continue
+                seen.add(canon_url)
+                # The typepad <title> is the masthead ("macroblog"), not the post
+                # title — fall back to the URL slug so each post is distinguishable.
+                title = fetched_title
+                if not title or title.strip().lower() == "macroblog":
+                    slug = path.rsplit("/", 1)[-1]
+                    if slug.endswith(".html"):
+                        slug = slug[:-5]
+                    title = slug.replace("-", " ").strip().title() or None
+                yield _make_article(
+                    source_id="fed_atlanta",
+                    url=canon_url,
+                    published_at=pub_date.isoformat() + "T00:00:00Z",
+                    title=title or f"Atlanta Fed {section.replace('_', ' ').title()}",
+                    body=body,
+                    author=author,
+                    section=section,
+                    tier=1,
+                    document_type=doc_type,
+                )
+                kept += 1
+                time.sleep(self._WB_SPACING_S)
+            log.info(
+                "Atlanta Wayback %s: recovered %d articles (%d posts enumerated)",
+                section, kept, len(snaps),
+            )
 
 
 class CBOIngestor(Ingestor):
