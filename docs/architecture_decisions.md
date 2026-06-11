@@ -2526,6 +2526,14 @@ CBO publishes an authoritative, complete index of itself: **`cbo.gov/sitemap.xml
 - Live smoke of `_fetch_sitemap_pids()` against cbo.gov: **25,423 pids (10329–62515), 523 prefix blocks**, with all scattered 2010+ ids found in the audit (22000, 25157, 41150, 41479) plus the RCC death-point pid 41672 present in the set.
 - End-to-end remains the fresh-IP body walk (calibration probe of ~300 paced fetches first, then the full checkpointed run), per the ADR-023 third-correction operational note — not yet executed.
 
+### Correction (2026-06-11): the authoritative date extractor was never wired in
+
+The 2026-06-11 source audit found the all-`2011` dating symptom (an early partial run stamped every record `2011`) traced to a real bug, not stale data. ADR-023's class docstring promised CBO dates came from the page's structured `dcterms.created` metadata, but `_fetch_and_build` called `_fetch_page_full` with **no `date_extractor`**, so the date fell to trafilatura's generic picker. trafilatura 1.12.2's picker is **order-sensitive** (verified offline): when the Open Graph `article:published_time` meta appears earlier in `<head>` than the Dublin Core block — the normal Drupal layout — it returns the OG value. On CBO that OG timestamp is the 2011-12 site-migration stamp, which collapsed the pre-migration back-catalogue onto a single `2011` date. This is the same migration-stamp failure class as PIIE (ADR-029), and the strict in-window gate then *kept* the mis-stamped records because `2011` is in-window.
+
+**Fix:** added module-level `_cbo_publication_date_from_html`, an explicit reader of the genuine structured date fields (`dcterms.created → dcterms.issued → dcterms.date → dc.date.created → dc.date.issued → dc.date`, first present wins, tolerant of either meta-attribute order), and passed it as the `date_extractor` on both the latest- and earliest-capture `_fetch_page_full` calls. Reading dcterms explicitly is authoritative regardless of tag order and never falls through to the OG stamp; a `None` result (no structured date present) drops the record per methodology principle 1, surfacing as visible under-capture on re-ingest QA rather than silent mis-dating. No methodology change — this brings the code in line with the date policy ADR-023 already documented and the ADR-029 anti-migration-stamp principle.
+
+**Residual to verify on re-ingest:** the fix assumes CBO's archived Drupal pages actually carry a `dcterms.*`/`dc.date.*` tag. This could not be confirmed offline (no cached CBO HTML; IA + the DataDome-walled live site both unavailable at fix time). The first calibration batch of the fresh-IP body walk must confirm real dates (not zeros) before committing the full run.
+
 ---
 
 ## ADR-033: Atlanta Fed pre-2019 Wayback recovery (macroblog + working papers)

@@ -351,6 +351,65 @@ def _piie_blog_date_from_html(html: str) -> date | None:
     return _parse_date_flexible(m.group(1)[:10])
 
 
+# CBO runs Drupal with the metatag module, which emits the true publication
+# date in structured Dublin Core <meta> tags (dcterms.created / .issued /
+# .date). trafilatura *does* read these, but its date picker is order-sensitive
+# (verified, trafilatura 1.12.2): when the Open Graph block — which carries
+# ``article:published_time`` — appears earlier in <head> than the dcterms
+# block (the normal Drupal layout), trafilatura returns the OG value. On CBO
+# that OG timestamp is the 2011-12 site-migration stamp, which collapsed the
+# pre-migration back-catalogue onto a single 2011 date (same failure class as
+# PIIE's 2016 stamp, ADR-029). Reading the dcterms fields *explicitly* is
+# therefore authoritative regardless of tag order. We try the genuine
+# creation/issue fields in priority order and never fall through to the OG
+# stamp: a None result means "no structured date" and the caller drops the
+# record (methodology principle 1: never fabricate a date) rather than
+# re-admitting the migration timestamp.
+_CBO_DATE_META_KEYS = (
+    "dcterms.created",
+    "dcterms.issued",
+    "dcterms.date",
+    "dc.date.created",
+    "dc.date.issued",
+    "dc.date",
+)
+# Match a <meta> tag carrying one of the keys above in EITHER attribute order
+# (name=…/content=… or content=…/name=…), tolerating single/double quotes.
+_CBO_META_DATE_RE = re.compile(
+    r"<meta\b[^>]*?"
+    r"(?:name|property)\s*=\s*['\"](?P<key>[^'\"]+)['\"][^>]*?"
+    r"content\s*=\s*['\"](?P<val>[^'\"]+)['\"]"
+    r"|<meta\b[^>]*?"
+    r"content\s*=\s*['\"](?P<val2>[^'\"]+)['\"][^>]*?"
+    r"(?:name|property)\s*=\s*['\"](?P<key2>[^'\"]+)['\"]",
+    re.IGNORECASE,
+)
+
+
+def _cbo_publication_date_from_html(html: str) -> date | None:
+    """Authoritative CBO publication date from Drupal Dublin Core meta tags.
+
+    Scans for the structured dcterms/dc.date fields and returns the first one
+    present in ``_CBO_DATE_META_KEYS`` priority order. Returns ``None`` when no
+    such field exists, so the caller drops the record rather than trusting
+    trafilatura's order-dependent ``article:published_time`` migration stamp.
+    """
+    if not html:
+        return None
+    found: dict[str, str] = {}
+    for m in _CBO_META_DATE_RE.finditer(html):
+        key = (m.group("key") or m.group("key2") or "").strip().lower()
+        val = m.group("val") or m.group("val2")
+        if key in _CBO_DATE_META_KEYS and key not in found and val:
+            found[key] = val
+    for key in _CBO_DATE_META_KEYS:
+        if key in found:
+            parsed = _parse_date_flexible(found[key][:10])
+            if parsed is not None:
+                return parsed
+    return None
+
+
 _MONTH_NAME_TO_NUM = {
     "january": 1, "february": 2, "march": 3, "april": 4, "may": 5,
     "june": 6, "july": 7, "august": 8, "september": 9, "october": 10,
@@ -2451,10 +2510,14 @@ class CBOIngestor(Ingestor):
          Wayback interstitial dated "today". Falls back to the earliest
          capture only if the latest is unusable. Extraction via
          ``_fetch_page_full`` (trafilatura + BS4).
-      2. Authoritative date: from the page's own structured metadata
-         (Drupal ``<meta name="dcterms.created">`` / trafilatura). The
-         Wayback snapshot timestamp is a CRAWL date and is NEVER used as the
-         publication date — only as the pre-fetch filter / fetch target.
+      2. Authoritative date: read explicitly from the page's Drupal Dublin
+         Core meta tags by ``_cbo_publication_date_from_html`` (the
+         ``date_extractor``), NOT trafilatura's generic picker — trafilatura
+         is order-sensitive and would return the earlier-in-<head> Open Graph
+         ``article:published_time``, which on CBO is the 2011-12 migration
+         stamp (see that function). The Wayback snapshot timestamp is a CRAWL
+         date and is NEVER used as the publication date — only as the
+         pre-fetch filter / fetch target.
       3. Strict keep gate: page_date present AND in ``[start, end]`` AND
          body ≥ 50 words AND title is not the "Wayback Machine" interstitial.
          Records failing any are dropped (no fabricated dates, no teaser-only
@@ -2830,6 +2893,7 @@ class CBOIngestor(Ingestor):
         snap_url = self._SNAP_PREFIX.format(ts=latest_ts, url=original_url)
         body, fetched_title, _author, page_date = _fetch_page_full(
             snap_url, min_words=50, getter=self._wayback_get,
+            date_extractor=_cbo_publication_date_from_html,
         )
         # Fall back to the earliest capture only if the latest is
         # unusable (page later removed → latest is a 404/redirect stub).
@@ -2837,6 +2901,7 @@ class CBOIngestor(Ingestor):
             snap_url = self._SNAP_PREFIX.format(ts=earliest_ts, url=original_url)
             body, fetched_title, _author, page_date = _fetch_page_full(
                 snap_url, min_words=50, getter=self._wayback_get,
+                date_extractor=_cbo_publication_date_from_html,
             )
         time.sleep(self._REQUEST_SPACING_S)
         # Defensive guard: reject a Wayback interstitial/error page
