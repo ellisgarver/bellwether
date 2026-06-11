@@ -50,6 +50,7 @@ pre-registration). Bodies below are preserved verbatim for that defense.
 | 033 | Atlanta Fed pre-2019 Wayback recovery (macroblog + working papers) | Live |
 | 034 | SF Fed `sffed_publications` per-segment labeling + cross-post exclusion | Live |
 | 035 | Chicago Fed 2026-redesign date-stamp fix (citation block over OG meta) | Live |
+| 036 | **Primary embedder Qwen3-Embedding-0.6B → 8B (4096-dim, A100); BERTopic unchanged** | Live |
 
 ---
 
@@ -2701,6 +2702,72 @@ still dropped (methodology principle 1).
 - Day-precision on the survey pages themselves is mid-month (day 15) because the
   citation block is month-granular — immaterial to volume-curve / lifecycle
   dynamics, which bin well above day resolution.
+
+---
+
+## ADR-036: Primary embedder Qwen3-Embedding-0.6B → 8B (4096-dim, A100); BERTopic unchanged
+
+- **Status**: Accepted
+- **Date**: 2026-06-11
+
+### Context
+
+The production embedder (ADR-001/011/019) was Qwen3-Embedding-0.6B (1024-dim),
+chosen when the only RCC GPU we'd provisioned was V100-16GB. Embedding quality is
+the upstream determinant of cluster separation — sharper vectors give HDBSCAN
+denser, better-separated regions, which is the lever most likely to improve anchor
+recovery (6/10 on the pre-fix corpus). The Qwen3-Embedding family (all Apache-2.0,
+instruction-aware, 32k context, identical interface) offers 0.6B (1024-dim),
+4B (2560-dim), and 8B (4096-dim); 8B is top-tier on MTEB. config.yaml already
+named 4B as an `upgrade_path` "if RCC capacity allows."
+
+The constraint was GPU memory: 8B is ~16 GB of fp16 weights, which will not fit a
+V100-16GB alongside activations. A 2026-06-11 `sinfo` audit showed the standard
+Midway3 `gpu` partition carries **a100** feature nodes (`gold-6248r,384g,a100`,
+40 GB/GPU) in addition to v100/rtx6000, and the account already submits embedding
+jobs to that partition. So A100-40GB is reachable via `--constraint=a100` with no
+new allocation — putting 8B comfortably in budget (16 GB weights, 24 GB headroom).
+
+### Decision
+
+1. **Primary embedder → `Qwen/Qwen3-Embedding-8B`, `dimensions: 4096`** (config
+   `embedding.primary`). 8B over 4B because the corpus embed is a one-time cost
+   and we want maximum cluster separation; the marginal MTEB gain is worth the
+   extra A100-hours here. `max_seq_len` stays 1024 (the ADR-019 chunker emits
+   512-token chunks); `instruction_prefix` unchanged. No `upgrade_path` — 8B tops
+   the family.
+
+2. **Embed SLURM job moves to A100**: `embed_rcc.sh` `--constraint=v100` →
+   `a100`, `--mem` 32G→64G, `--time` 12h→18h. Partition stays `gpu`.
+
+3. **BERTopic is NOT retuned.** This is the load-bearing methodological point.
+   BERTopic's pipeline is `embeddings → UMAP(n_components=5) → HDBSCAN →
+   c-TF-IDF`. UMAP maps *any* input dimensionality to a fixed 5-dim manifold, so
+   the embedding dim (1024 → 4096) never reaches HDBSCAN, which clusters on the
+   5-dim output. `n_neighbors=15`, `min_dist=0.0`, `cosine`, `min_cluster_size=10`,
+   `eom`, and c-TF-IDF (text-only) are all unchanged. Scaling UMAP `n_components`
+   "because the embeddings are richer" would be unanchored researcher-tuning —
+   precisely what methodology principles 1, 2, and 7 (ADR-019) forbid. The
+   model-agnostic library-default clusterer is *why* an embedder swap is a clean,
+   isolated change.
+
+### Consequences
+
+- **Intended**: sharper semantic separation → tighter, better-separated clusters
+  and a plausibly higher anchor-recovery rate. Reported as-is, not tuned toward.
+- The clustering *result* will shift — outlier rate (was 25.4%) and cluster count
+  will differ under the new embeddings. Expected; we report whatever emerges.
+- `embeddings.npy` grows ~4× (4096 vs 1024 dim); a few GB at corpus scale. Fine.
+- `embedding_batch_size: 8` is retained but is now a pure throughput knob with
+  ~24 GB of A100 headroom — raisable later with zero effect on the vectors.
+- **Invalidates the prior Phase-3 numbers** (Qwen3-0.6B NMI=0.880±0.003, anchor
+  6/10). Re-validation was already pending the post-fix re-ingest, so the timing
+  cost is zero.
+- Hard dependency: 8B requires an A100 — the embed job must land on a
+  `--constraint=a100` node. A V100-only fallback would force 0.6B (or 4B at tiny
+  batch); not in scope while A100 is reachable.
+- The comparator path (mpnet, ADR-011) is untouched here; it remains removed from
+  active methodology by ADR-019 and is not part of this decision.
 
 ---
 

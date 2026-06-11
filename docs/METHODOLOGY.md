@@ -86,7 +86,7 @@ Documents that fit within 512 tokens of the embedding model's context window pas
 
 ### Stage 4 — Embedding
 
-Each chunk goes through **Qwen3-Embedding-0.6B**, an open-source transformer model that turns text into a 1024-dimensional numerical vector capturing its semantic content. Documents about the same narrative end up near each other in the 1024-dimensional space; documents about different narratives end up far apart.
+Each chunk goes through **Qwen3-Embedding-8B** (ADR-036), an open-source transformer model that turns text into a 4096-dimensional numerical vector capturing its semantic content. Documents about the same narrative end up near each other in the 4096-dimensional space; documents about different narratives end up far apart.
 
 **Why this model?** Top performance on the MTEB embedding benchmark, Apache 2.0 license, instruction-aware (we prefix each chunk with "Represent this financial policy document for narrative clustering", biasing the vector toward semantic content rather than writing style), and native 32k-token context window (so it handles long inputs gracefully).
 
@@ -96,7 +96,7 @@ Each chunk goes through **Qwen3-Embedding-0.6B**, an open-source transformer mod
 
 We run **BERTopic** (Grootendorst 2022), the field-standard pipeline for transformer-based topic discovery. Internally it does three things:
 
-1. **UMAP** — reduces the 1024-dim embedding vectors to 5 dimensions while preserving cluster structure. Think of this as squashing a high-dimensional cloud of points into a lower-dimensional shape that's easier to find clusters in.
+1. **UMAP** — reduces the 4096-dim embedding vectors to 5 dimensions while preserving cluster structure. Think of this as squashing a high-dimensional cloud of points into a lower-dimensional shape that's easier to find clusters in.
 2. **HDBSCAN** — finds the dense regions in the 5-dim space. Each dense region is a cluster (a narrative). Sparse regions are "outliers" — documents that don't belong to any clear narrative.
 3. **c-TF-IDF** — for each cluster, extracts the most distinguishing words (the words that appear unusually often in this cluster compared to others). These become the cluster's algorithmic name.
 
@@ -293,7 +293,7 @@ Each phase boundary is a methodology checkpoint — significant decisions get an
 
 ## 10. References (cited methodology anchors)
 
-- **Embedding & retrieval**: Thakur et al. 2021 *BEIR* (NeurIPS); Reimers & Gurevych 2019 *SBERT*; Qwen3-Embedding-0.6B model card.
+- **Embedding & retrieval**: Thakur et al. 2021 *BEIR* (NeurIPS); Reimers & Gurevych 2019 *SBERT*; Qwen3-Embedding-8B model card (ADR-036).
 - **Clustering**: Grootendorst 2022 *BERTopic* (arXiv:2203.05794); McInnes et al. 2018 *UMAP*; McInnes & Healy 2017 *HDBSCAN*.
 - **Published topic-model narrative studies**: Bybee, Kelly, Manela & Xiu 2024 (*Journal of Finance* 79(5), 3105-3147); Hansen, McMahon & Prat 2018 (*QJE*); Larsen & Thorsrud 2019 (*Journal of Econometrics* 210(1), 203-218); Larsen, Thorsrud & Zhulanova 2021 (*JME*); Bertsch, Hull, Lumsdaine & Zhang 2021 (*Economics Letters*).
 - **Narrative-economics framing & related work**: Shiller 2017 (AEA Presidential Address); Shiller 2019 *Narrative Economics*; Roos & Reccius 2024 (*Journal of Economic Surveys*); Flynn & Sastry 2024 (NBER WP 32602); Andre, Haaland, Roth, Wiederholt & Wohlfart (forthcoming *RES*).

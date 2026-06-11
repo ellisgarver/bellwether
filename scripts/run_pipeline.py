@@ -4,7 +4,7 @@ Dispatches pipeline stages:
   ingest              — fetch raw articles from the basis-set sources (ADR-020)
   filter-pre-embed    — drop archived journalism sources from raw JSONL (ADR-010)
   filter              — date-range filter + near-duplicate removal (NO topic filter, ADR-020)
-  embed               — encode articles (primary: Qwen3-Embedding-0.6B; comparator: mpnet)
+  embed               — encode articles (primary: Qwen3-Embedding-8B; comparator: mpnet)
   cluster             — BERTopic single-granularity clustering (ADR-019)
   stability           — bootstrap stability diagnostic (mean NMI reported, not gated)
   validate            — anchor narrative recovery (reported as rate, not gated)

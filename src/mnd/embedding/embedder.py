@@ -1,7 +1,8 @@
 """Article embedding (ADR-019).
 
-Single embedder: Qwen3-Embedding-0.6B (1024-d, 32K-token context, Apache 2.0,
-instruction-aware). Top of MTEB clustering benchmark.
+Single embedder: Qwen3-Embedding-8B (4096-d, 32K-token context, Apache 2.0,
+instruction-aware; ADR-036, was 0.6B). Top of MTEB clustering benchmark.
+Runs on A100-40GB (gpu partition --constraint=a100); ~16 GB fp16 weights.
 
 The comparator (mpnet) look-ahead sensitivity check from ADR-011 was removed
 by ADR-019 under the "anchored or removed" principle — sensitivity checks are
@@ -26,7 +27,7 @@ ModelRole = Literal["primary"]
 
 
 class Embedder:
-    """Production embedder (Qwen3-Embedding-0.6B).
+    """Production embedder (Qwen3-Embedding-8B; ADR-036).
 
     Use ``Embedder.from_config()`` to instantiate from project config.
     """
@@ -64,7 +65,7 @@ class Embedder:
             raise ValueError(
                 f"Embedder role {role!r} is not supported. The comparator "
                 "(mpnet) look-ahead sensitivity check was removed by ADR-019; "
-                "only 'primary' (Qwen3-Embedding-0.6B) is available."
+                "only 'primary' (Qwen3-Embedding-8B) is available."
             )
         cfg = load_config()
         emb_cfg = cfg["embedding"]["primary"]

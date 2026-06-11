@@ -36,7 +36,12 @@ log = get_logger(__name__)
 
 @functools.lru_cache(maxsize=1)
 def _get_qwen3_tokenizer():
-    """Return the Qwen3-Embedding-0.6B tokenizer. Cached after first call."""
+    """Return the configured Qwen3-Embedding tokenizer (8B; ADR-036). Cached.
+
+    Loaded from config.embedding.primary.model so it always matches the
+    embedder. The Qwen3-Embedding family shares one tokenizer across sizes,
+    so 512-token chunk boundaries are identical whichever size is configured.
+    """
     cfg = load_config()
     model_name = cfg["embedding"]["primary"]["model"]
     try:
