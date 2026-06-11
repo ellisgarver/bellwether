@@ -1873,6 +1873,48 @@ class FedRegionalIngestor(Ingestor):
     # FRBSF — sffed_publications WP REST API
     # ------------------------------------------------------------------
 
+    # SF Fed's single `sffed_publications` WP type is a catch-all: it serves
+    # SF's own series (Economic Letter, Working Papers, FedViews, the Twelfth-
+    # District Beige Book, Community Development) AND "system research" cross-
+    # posts of OTHER institutions' work (other regional Feds + the Board). The
+    # cross-posts are dropped — ingesting them under fed_sf would duplicate
+    # other basis-set dimensions (their canonical link is on frbsf.org, so URL
+    # dedup never catches the duplicate) and break the 1:1 ingestor↔dimension
+    # mapping (ADR-020/ADR-034). SF's own series each get a real section /
+    # document_type from the URL path segment; before ADR-034 every SF record
+    # was mislabeled frbsf_economic_letter.
+    _FRBSF_SECTION_BY_SEGMENT: dict[str, tuple[str, str]] = {
+        "economic-letter": ("frbsf_economic_letter", "fed_regional_research"),
+        "working-papers": ("frbsf_working_paper", "fed_staff_report"),
+        "fedviews": ("frbsf_fedviews", "fed_regional_research"),
+        "san-francisco-fed-twelfth-district-beige-book":
+            ("frbsf_beige_book", "fed_regional_research"),
+        "community-development-articles":
+            ("frbsf_community_development", "fed_regional_research"),
+        "community-development-research-briefs":
+            ("frbsf_community_development", "fed_regional_research"),
+    }
+    # Path segments that are NOT SF's own research (cross-posts) → skip.
+    _FRBSF_EXCLUDED_PREFIXES = ("system-research-", "board-of-governors")
+    _FRBSF_SEGMENT_RE = re.compile(r"/publications/([^/]+)/")
+
+    @classmethod
+    def _frbsf_classify(cls, url: str) -> "tuple[str, str] | None":
+        """Map an SF publication URL to (section, document_type), or None to skip.
+
+        Returns None for the system-research / board-of-governors cross-posts.
+        An unknown SF-own segment falls back to a generic publication label
+        rather than being dropped — under-capture is the failure mode that
+        matters, so a new SF series is kept (mislabeled-generic) not lost.
+        """
+        m = cls._FRBSF_SEGMENT_RE.search(url)
+        segment = m.group(1) if m else ""
+        if any(segment.startswith(p) for p in cls._FRBSF_EXCLUDED_PREFIXES):
+            return None
+        return cls._FRBSF_SECTION_BY_SEGMENT.get(
+            segment, ("frbsf_publication", "fed_regional_research")
+        )
+
     def _fetch_frbsf(
         self, start: date, end: date, seen: set[str]
     ) -> Iterator[Article]:
@@ -1882,12 +1924,16 @@ class FedRegionalIngestor(Ingestor):
             if not url or url in seen:
                 continue
             seen.add(url)
+            classified = self._frbsf_classify(url)
+            if classified is None:
+                continue  # cross-post of another institution's research
+            section, document_type = classified
             article = _wp_post_to_article(
                 post,
                 source_id="fed_sf",
-                section="frbsf_economic_letter",
+                section=section,
                 tier=1,
-                document_type="fed_regional_research",
+                document_type=document_type,
                 start=start,
                 end=end,
                 fetch_full_body=True,
@@ -1920,6 +1966,10 @@ class FedRegionalIngestor(Ingestor):
         # neither of which exists — they matched zero URLs, so all ~98 Insights
         # posts were silently missed.
         (r"/publications/chicago-fed-insights/(\d{4})/[^/]+$", "insights"),
+        # Regional Fed president speeches — `speech` is an established corpus
+        # document type (cf. Fed Board, fed.py), so capturing Chicago's is a
+        # straight extension of an in-scope type, not a new methodology.
+        (r"/publications/speeches/(\d{4})/[^/]+$", "speech"),
     ]
 
     def _fetch_chicago_fed_letter(

@@ -498,7 +498,9 @@ class FederalReserveIngestor(Ingestor):
                     log.warning("Failed to fetch %s %s: %s", label, full_url, exc)
                     continue
                 body = _extract_text(page.text)
-                if not body or len(body.split()) < 200:
+                # 50-word floor matches every other ingestor; it drops the
+                # short quantitative/notice posts while keeping brief remarks.
+                if not body or len(body.split()) < 50:
                     continue
                 yield Article(
                     article_id=_stable_article_id(self.source_id, full_url),
