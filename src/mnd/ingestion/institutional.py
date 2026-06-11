@@ -1647,7 +1647,14 @@ class FedRegionalIngestor(Ingestor):
         yield from self._fetch_frbsf(start, end, seen)
         yield from self._fetch_chicago_fed_letter(start, end, seen)
         yield from self._fetch_atlanta(start, end, seen)
-        yield from self._fetch_atlanta_wayback(start, end, seen)
+        # The Atlanta pre-2019 recovery (ADR-033) is the only Internet-Archive
+        # call inside this otherwise direct-fetch source. MND_SKIP_IA=1 lets a
+        # re-ingest deploy the direct-source fixes (NY/SF/Chicago) without
+        # touching IA — the Atlanta band is then back-filled in the IA batch.
+        if os.environ.get("MND_SKIP_IA") == "1":
+            log.info("MND_SKIP_IA=1 — skipping Atlanta Wayback (IA) recovery layer")
+        else:
+            yield from self._fetch_atlanta_wayback(start, end, seen)
 
     # ------------------------------------------------------------------
     # Liberty Street Economics — WP REST API
@@ -3989,11 +3996,15 @@ class PIIEIngestor(Ingestor):
             )
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
-        # Wayback CDX enumeration (full history, both URL schemes) unioned with
-        # the live sitemap walk (freshest items not yet archived). CDX is the
-        # workhorse — PIIE's Drupal sitemap lists only the 2016+ /YYYY/ URLs and
-        # a thin slice of recent blogs (ADR-026); CDX surfaces the pre-2016
-        # flat-slug publications and the full blog history the sitemap omits.
+        # The live piie.com sitemap (DIRECT) is the preferred surface and is
+        # comprehensive from the 2016 CMS migration onward — verified 2026-06-11:
+        # 100+ realtime-economics blog posts/yr for 2020-2026 and all /YYYY/
+        # publications 2016-present, so the recent tail needs no archive. The
+        # Wayback CDX enumeration (IA) backfills only what the live site dropped
+        # in that migration: pre-2016 flat-slug publications and the deepest blog
+        # history (ADR-026). CDX is the narrow historical supplement, not the
+        # workhorse; if the pre-2016 tail ever becomes reachable directly this
+        # source can drop its sole IA dependency.
         cdx_candidates = self._cdx_enumerate()
         sitemap_candidates = self._discover_sitemap_urls(start, end)
 
