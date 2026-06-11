@@ -383,16 +383,16 @@ Threshold values are pre-specified in `config.yaml`. Do not modify without a new
 
 ### Stage 7: Dashboard
 
-Public web tool. Reads pre-computed static artifacts only — no live computation at user request time. Two primary views:
+Public web tool. Reads pre-computed static artifacts only — no live computation at user request time. Three primary views:
 
-**View 1 — Life-Cycle Viewer:** Select a narrative → growth curve with fitted model overlaid, R₀ estimate with credible interval, current life-cycle stage, representative document titles from key moments, links to original source URLs.
+**View 1 — Life-Cycle Viewer:** Select a narrative → growth curve with fitted model overlaid, R₀ estimate with credible interval, current life-cycle stage, representative document titles from key moments, links to original source URLs. The institutional volume curve is the primary line; the **Media Cloud Premium press series for the same narrative is overlaid as a second line**, shape-normalized (z-score or 0–1) since cross-validation compares trajectory shape, not absolute level. The cluster→Media Cloud query mapping is display/validation-only and must never feed clustering (ADR-020) — pin the mapping in a new ADR before building.
 
 **View 2 — Emerging Narratives Panel:**
 - *Currently emerging:* Narratives crossing from pre-emergence into early-spread within the past 7–30 days; R₀ estimate, current volume, sample titles
-- *Historical analogs:* Top 3–5 historical narratives with most similar early-stage Signal A trajectories
+- *Historical analogs:* Top 3–5 historical narratives with most similar early-stage Signal A trajectories. Inter-narrative relationships are surfaced by the three similarity measures (semantic centroid cosine, top-term Jaccard, growth-curve Pearson) — these are the "connect-the-dots" links between clusters by topic and by dynamics.
 - *Aggregate state:* Number of narratives per stage, dominant clusters, current discourse landscape
 
-**Stretch — Narrative Map:** 2D UMAP projection with cluster centroids labeled, zoom and click. Cut this if time-constrained.
+**View 3 — Narrative Landscape Map:** 2D UMAP projection of cluster centroids (proximity = semantic similarity), each point colored by life-cycle stage and sized by current volume; click a centroid to open its Life-Cycle Viewer. Reuses the UMAP already computed for clustering. UMAP geometry is illustrative, not metric — a navigation aid, not a measurement.
 
 **Onboarding:** Persistent "what is this?" page with plain-language explanation and a worked historical example. Tooltips on R₀, stage labels, and technical terms.
 
@@ -480,7 +480,7 @@ Do not begin until Phase 3 NMI and ARI results are confirmed and pass kill crite
 
 1. Streamlit (MVP) or React single-page app
 2. Static cached artifacts from analysis pipeline (JSON cluster data, fitted parameters, stage classifications, document titles and URLs)
-3. Implement View 1 (Life-Cycle Viewer) and View 2 (Emerging Narratives Panel)
+3. Implement View 1 (Life-Cycle Viewer, with Media Cloud Premium overlay), View 2 (Emerging Narratives Panel), and View 3 (Narrative Landscape Map, 2D UMAP)
 4. Onboarding page with worked historical example
 5. Deploy to Hugging Face Spaces (free tier, public URL, no authentication)
 
