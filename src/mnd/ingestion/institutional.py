@@ -1913,8 +1913,13 @@ class FedRegionalIngestor(Ingestor):
         (r"/publications/policy-discussion-papers/(\d{4})/[^/]+$", "policy_discussion_paper"),
         (r"/publications/public-policy-papers/(\d{4})/[^/]+$", "public_policy_paper"),
         (r"/publications/profitwise-news-and-views/(\d{4})/[^/]+$", "profitwise"),
-        (r"/publications/insights/(\d{4})/[^/]+$", "insights"),
-        (r"/publications/blogs/chicago-fed-insights/(\d{4})/[^/]+$", "insights_blog"),
+        # Chicago Fed Insights research blog lives at
+        # /publications/chicago-fed-insights/YYYY/slug (verified against the
+        # live sitemap 2026-06-11). The prior two patterns pointed at
+        # /publications/insights/ and /publications/blogs/chicago-fed-insights/,
+        # neither of which exists — they matched zero URLs, so all ~98 Insights
+        # posts were silently missed.
+        (r"/publications/chicago-fed-insights/(\d{4})/[^/]+$", "insights"),
     ]
 
     def _fetch_chicago_fed_letter(
