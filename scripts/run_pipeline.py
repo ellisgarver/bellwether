@@ -75,9 +75,20 @@ def cli(ctx: click.Context) -> None:
     ),
 )
 @click.option("--output-dir", default=None, help="Output directory for raw JSONL files (overrides config default)")
+@click.option(
+    "--shard", default=None,
+    help=(
+        "Shard the walk as 'k/N' (0-based k, N total) — CBO only (ADR-038). "
+        "Each shard owns pids where pid % N == k and writes its own "
+        "'<src>_<win>_shard{k}of{N}.jsonl'. Lets independent egress IPs "
+        "(e.g. RCC + laptop) walk disjoint slices in parallel; merge after with "
+        "'cbo-merge-shards'. Requires a pre-built CDX cache. Omit for unsharded."
+    ),
+)
 @click.pass_context
 def ingest(
     ctx: click.Context, start: str, end: str, sources: str, output_dir: str | None,
+    shard: str | None,
 ) -> None:
     """Fetch raw articles from institutional/academic sources (ADR-010)."""
     from datetime import date as date_t
@@ -126,6 +137,26 @@ def ingest(
     start_d = date_t.fromisoformat(start)
     end_d = date_t.fromisoformat(end)
 
+    requested = [s.strip() for s in sources.split(",")]
+
+    # Parse --shard k/N once (ADR-038). shard_count=1 → unsharded default.
+    shard_index, shard_count = 0, 1
+    if shard:
+        try:
+            k_str, n_str = shard.split("/", 1)
+            shard_index, shard_count = int(k_str), int(n_str)
+        except ValueError:
+            raise click.BadParameter(f"--shard must be 'k/N' (got {shard!r})")
+        if shard_count < 1 or not (0 <= shard_index < shard_count):
+            raise click.BadParameter(
+                f"--shard {shard!r}: need N>=1 and 0<=k<N"
+            )
+        if shard_count > 1 and requested != ["cbo"]:
+            raise click.BadParameter(
+                "--shard is only supported for --sources cbo (ADR-038); "
+                f"got --sources {sources!r}"
+            )
+
     _checkpoint_ext = {"institutional": "json"}
 
     # Sources that accept a per-record resume checkpoint when run standalone.
@@ -136,6 +167,12 @@ def ingest(
     def _make_ingestor(name: str, cp_path):
         if name == "institutional":
             return InstitutionalIngestor(checkpoint_path=cp_path)
+        if name == "cbo":
+            return CBOIngestor(
+                checkpoint_path=cp_path,
+                shard_index=shard_index,
+                shard_count=shard_count,
+            )
         if name in _CHECKPOINTED_SUBS:
             return _SUB_INGESTORS[name](checkpoint_path=cp_path)
         if name in _SUB_INGESTORS:
@@ -148,7 +185,6 @@ def ingest(
 
     valid_sources = {"institutional", *_SUB_INGESTORS}
 
-    requested = [s.strip() for s in sources.split(",")]
     failures: list[tuple[str, str]] = []
     for name in requested:
         if name not in valid_sources:
@@ -159,7 +195,11 @@ def ingest(
             )
             failures.append((name, "unknown source"))
             continue
-        out_path = raw_dir / f"{name}_{start}_{end}.jsonl"
+        # Sharded CBO runs write disjoint per-shard files (and per-shard
+        # checkpoints) so independent egress IPs never touch the same output or
+        # resume state; merge them later with 'cbo-merge-shards' (ADR-038).
+        shard_tag = f"_shard{shard_index}of{shard_count}" if shard_count > 1 else ""
+        out_path = raw_dir / f"{name}_{start}_{end}{shard_tag}.jsonl"
         ext = _checkpoint_ext.get(name, "txt")
         # Co-key the checkpoint to the SAME window as the output file. The
         # submit script stamps the window end with "today" by default, so a
@@ -170,7 +210,7 @@ def ingest(
         # checkpoint by window guarantees checkpoint and output are always the
         # same generation: a date roll simply starts a clean new walk rather
         # than corrupting one. (Pin END=<date> across re-fires to resume.)
-        checkpoint_path = raw_dir / f".{name}_{start}_{end}_checkpoint.{ext}"
+        checkpoint_path = raw_dir / f".{name}_{start}_{end}{shard_tag}_checkpoint.{ext}"
         resume = checkpoint_path.exists() and out_path.exists()
         mode = "a" if resume else "w"
         log.info(
@@ -222,6 +262,73 @@ def ingest(
             ", ".join(f"{n} ({e})" for n, e in failures),
         )
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# cbo-merge-shards  (ADR-038)
+# ---------------------------------------------------------------------------
+
+@cli.command("cbo-merge-shards")
+@click.option("--start", required=True, help="Start date YYYY-MM-DD (the ingest window)")
+@click.option("--end", required=True, help="End date YYYY-MM-DD (the ingest window)")
+@click.option("--output-dir", default=None, help="Raw JSONL directory (overrides config default)")
+@click.pass_context
+def cbo_merge_shards(
+    ctx: click.Context, start: str, end: str, output_dir: str | None
+) -> None:
+    """Merge sharded CBO output into the canonical single file (ADR-038).
+
+    A sharded CBO run (``ingest --sources cbo --shard k/N``) writes one file per
+    shard: ``cbo_<win>_shard{k}of{N}.jsonl``. The shards partition the pid space
+    by ``pid % N``, so they are disjoint by construction — but we still dedup on
+    article_id defensively (a pid re-crawled across a window roll could appear
+    twice). The merged file is named ``cbo_<win>.jsonl`` so the filter-pre-embed
+    glob sees exactly ONE CBO file; the shard files are renamed ``.merged`` so a
+    stale shard never double-counts into the corpus.
+    """
+    import json
+
+    root = project_root()
+    cfg = ctx.obj["cfg"]
+    raw_dir = Path(output_dir) if output_dir else root / cfg["paths"]["raw_articles"]
+
+    shard_glob = f"cbo_{start}_{end}_shard*of*.jsonl"
+    shard_files = sorted(raw_dir.glob(shard_glob))
+    if not shard_files:
+        log.error("cbo-merge-shards: no shard files match %s in %s — nothing to "
+                  "merge (did the sharded run write output?)", shard_glob, raw_dir)
+        sys.exit(1)
+
+    out_path = raw_dir / f"cbo_{start}_{end}.jsonl"
+    seen: set[str] = set()
+    kept = 0
+    dupes = 0
+    with out_path.open("w", encoding="utf-8") as out_fh:
+        for sf in shard_files:
+            n_file = 0
+            with sf.open(encoding="utf-8") as in_fh:
+                for line in in_fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    aid = json.loads(line).get("article_id")
+                    if aid in seen:
+                        dupes += 1
+                        continue
+                    seen.add(aid)
+                    out_fh.write(line + "\n")
+                    kept += 1
+                    n_file += 1
+            log.info("  %s → %d records", sf.name, n_file)
+
+    for sf in shard_files:
+        sf.rename(sf.with_suffix(sf.suffix + ".merged"))
+
+    log.info(
+        "cbo-merge-shards: %d shard files → %s (%d unique articles, %d cross-shard "
+        "dupes dropped); shard files renamed .merged",
+        len(shard_files), out_path, kept, dupes,
+    )
 
 
 # ---------------------------------------------------------------------------
