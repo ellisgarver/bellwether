@@ -3199,6 +3199,24 @@ class CBOIngestor(Ingestor):
                 backoff = min(backoff * 2, 320.0)
                 continue
             if resp.status_code == 429:
+                # A *replayed archived* 429 — the origin (e.g. CBO's DataDome
+                # wall) returned 429 to IA's crawler and IA stored it — carries
+                # ``x-archive-orig-*`` headers and is FROZEN: every replay of
+                # this capture returns 429 regardless of how long we wait, so
+                # the cooldown budget below would stall the whole walk on one
+                # dead snapshot (the 2026-06-11 CBO incident: a stale cache
+                # pointed pid 41672 at a captured block page). Hand it back as
+                # the caller's 4xx "genuine absence" so it falls through to the
+                # earliest-ts fallback, then skips. Only a LIVE IA throttle
+                # (IA's own 429, no archived-origin headers) gets the patient
+                # cooldown budget.
+                if any(k.lower().startswith("x-archive-orig-") for k in resp.headers):
+                    log.debug(
+                        "CBO Wayback GET %s: replayed archived 429 block page "
+                        "(x-archive-orig-*) — skipping snapshot, not a live throttle",
+                        url,
+                    )
+                    return resp
                 throttle_hits += 1
                 if throttle_hits >= ban_cooldowns:
                     raise _WaybackBanned(
