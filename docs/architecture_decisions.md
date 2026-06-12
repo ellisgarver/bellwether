@@ -51,6 +51,7 @@ pre-registration). Bodies below are preserved verbatim for that defense.
 | 034 | SF Fed `sffed_publications` per-segment labeling + cross-post exclusion | Live |
 | 035 | Chicago Fed 2026-redesign date-stamp fix (citation block over OG meta) | Live |
 | 036 | **Primary embedder Qwen3-Embedding-0.6B → 8B (4096-dim, A100); BERTopic unchanged** | Live |
+| 037 | CBO Wayback: replayed-archived 429 is a dead snapshot to skip, not a live throttle | Live |
 
 ---
 
@@ -2768,6 +2769,77 @@ new allocation — putting 8B comfortably in budget (16 GB weights, 24 GB headro
   batch); not in scope while A100 is reachable.
 - The comparator path (mpnet, ADR-011) is untouched here; it remains removed from
   active methodology by ADR-019 and is not part of this decision.
+
+---
+
+## ADR-037: CBO Wayback — a replayed-archived 429 is a dead snapshot to skip, not a live throttle
+
+- **Status**: Accepted
+- **Date**: 2026-06-11
+
+### Context
+
+CBO bodies come from the Wayback Machine (`id_/` raw replay) because live cbo.gov
+is DataDome-walled (ADR-032). The 2026-06-11 re-ingest (job 50722066) ran ~90 min
+and wrote **zero** articles: it stalled on the very first publication with
+snapshots (pid 41672), looping `HTTP 429` cooldowns. The surface reading was an IA
+replay-throttle ban on the RCC egress IP.
+
+Direct probing disproved that. The `id_/` request 302-redirects to the nearest
+capture; following it returned `429` — but the response carried `x-archive-orig-*`
+headers (`x-archive-orig-content-length: 444`, `x-archive-orig-date: 2025-09-04`).
+Those headers are the *origin's* response as IA stored it: when IA crawled the page
+on 2025-09-04, CBO's DataDome wall returned a 429 block stub, and IA archived it.
+The `id_/` endpoint replays that captured 429 verbatim — **it is frozen; no amount
+of waiting changes it.** The CDX index for pid 41672 holds 44 captures, 43 of them
+`200` with real 5–27 KB bodies (2013–2025-05); only the single most-recent capture
+is the 429 block page.
+
+Two faults compounded:
+
+1. **Stale CDX cache.** The current `_cdx_block` query already filters
+   `statuscode:200` (it would have selected the 2025-05 real capture). But the run
+   reused a `cdxcache.json` carried forward from a pre-filter build, which stored
+   the 2025-09-04 non-200 timestamp. The cache short-circuits enumeration, so the
+   corrected query never ran.
+2. **Misclassification in `_wayback_get`.** A replayed-archived 429 is
+   indistinguishable, by status code alone, from a live IA throttle — and the
+   fetcher treated every 429 as a live throttle, spending its full multi-minute
+   cooldown budget on a snapshot that can only ever return 429, then raising
+   `_WaybackBanned` and pausing the whole walk.
+
+### Decision
+
+1. **`_wayback_get` distinguishes the two 429s by the `x-archive-orig-*` marker.**
+   A 429 bearing any `x-archive-orig-*` header is a replayed archived block page:
+   return it immediately so `_fetch_page_full` classifies it as a 4xx genuine
+   absence (skip → earliest-ts fallback → drop the pid as unfetchable). A 429
+   *without* those headers is a live IA throttle and keeps the existing patient
+   cooldown/`_WaybackBanned` budget. The discriminator is safe-by-default: the
+   archived-origin headers are added only on replay, so a live throttle never
+   trips the skip path.
+
+2. **A CDX cache built by superseded selection logic must be rebuilt, not carried
+   forward.** Operationally: when the snapshot-selection query changes, discard
+   `.cbo_*_cdxcache.json` and let the current code rebuild it. Rebuilding is cheap
+   — it hits the CDX *index* API, not the throttled `id_/` content endpoint.
+
+### Consequences
+
+- One dead capture can no longer halt the CBO walk; it costs a single skipped pid,
+  and the earliest-ts fallback still recovers a real body when an older capture is
+  `200`. Upholds the ADR-030 fail-loud rule without letting a frozen 429 masquerade
+  as a live outage.
+- A pid whose every capture is a block page is dropped as genuine absence — correct:
+  there is no archived CBO body to recover. This is real source-side absence, not
+  under-capture from our enumeration.
+- The IA-egress-ban theory is retired for this incident: the RCC IP was never
+  banned; the 429s were archived content. (A genuine live throttle remains possible
+  and is still handled by the cooldown path.)
+- No methodology-surface change to the corpus definition or selection criteria —
+  this is fetch-layer correctness. The `statuscode:200` CDX filter (ADR-032) is the
+  primary selector; this ADR hardens the fetch against the residual case where a
+  selected/redirected capture still replays an archived error.
 
 ---
 
