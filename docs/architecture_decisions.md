@@ -52,6 +52,7 @@ pre-registration). Bodies below are preserved verbatim for that defense.
 | 035 | Chicago Fed 2026-redesign date-stamp fix (citation block over OG meta) | Live |
 | 036 | **Primary embedder Qwen3-Embedding-0.6B → 8B (4096-dim, A100); BERTopic unchanged** | Live |
 | 037 | CBO Wayback: replayed-archived 429 is a dead snapshot to skip, not a live throttle | Live |
+| 038 | CBO walk shardable by `pid % N` across independent egress IPs (RCC + laptop) | Live |
 
 ---
 
@@ -2840,6 +2841,74 @@ Two faults compounded:
   this is fetch-layer correctness. The `statuscode:200` CDX filter (ADR-032) is the
   primary selector; this ADR hardens the fetch against the residual case where a
   selected/redirected capture still replays an archived error.
+
+---
+
+## ADR-038: CBO Wayback walk is shardable by `pid % N` across independent egress IPs
+
+- **Status**: Accepted
+- **Date**: 2026-06-11
+
+### Context
+
+The CBO ingestor walks the full cbo.gov sitemap pid universe (~25k publications,
+ADR-032) fetching each body from the Wayback Machine. Internet Archive throttles
+`id_/` content replay by **egress IP** on a rolling window; the measured
+sustained-safe single-IP rate is ~1 request / 9–12 s. At ~18 s/pid observed
+(fetch + earliest-ts fallback), the recoverable ~25k-pid walk is ≈130 h — roughly
+four sequential 36 h caslake jobs (the QOS cap, ADR-023). That is the dominant
+long pole in the corpus build.
+
+The only lever on wall time is parallelism across **distinct egress IPs** — a
+single IP cannot safely go faster. An `srun` two-node probe (2026-06-11) showed
+both Midway3 compute nodes egress through the **same** NAT IP (`128.135.34.94`),
+so sharding *within RCC buys nothing*: N RCC streams share one per-IP throttle.
+The user's laptop is an independent IP (`136.56.213.171`). So the realistic
+parallelism ceiling is the number of genuinely independent IPs available
+(RCC NAT + laptop = 2), not the number of nodes/cores.
+
+### Decision
+
+Make the CBO walk shardable by a residue partition and deploy it across whatever
+independent IPs exist:
+
+1. **`CBOIngestor(shard_index=k, shard_count=N)`** — `fetch()` processes only pids
+   where `pid % N == k`. The partition is on the raw pid (not a contiguous id
+   range): sitemap ids are interleaved across eras (ADR-032), so `pid % N` gives
+   every shard a balanced old/new mix and roughly equal work. `N=1` is the
+   unsharded default and is a no-op.
+2. **Shared, pre-built CDX cache.** The `{pid: (earliest, latest)}` enumeration is
+   the full pid universe — identical for every shard. It is built **once** by an
+   unsharded warm-up run and read-only thereafter; `_cdx_cache_path()` strips the
+   `_shard{k}of{N}` token so all shards resolve to the same `cdxcache.json`. A
+   sharded run with **no** cache present **raises** (`_build_or_load_cdx_map`):
+   N shards must never race to rebuild it (they would collide on one IP and
+   re-establish the ADR-037 ban, and waste N × the ~44 min enumeration).
+3. **Disjoint per-shard output + checkpoint.** Each shard writes
+   `cbo_<win>_shard{k}of{N}.jsonl` with its own `_shard{k}of{N}_checkpoint.txt`,
+   so independent runs never touch shared resume state and each resumes its own
+   slice across 36 h job cycles.
+4. **`cbo-merge-shards` reassembles the canonical file.** After all shards finish,
+   `run_pipeline.py cbo-merge-shards --start --end` concatenates the shard files,
+   dedups on `article_id` (shards are disjoint by construction; dedup is defensive
+   against a window-roll re-crawl), writes the canonical `cbo_<win>.jsonl`, and
+   renames the shard files `.merged` so the filter-pre-embed glob sees exactly one
+   CBO file and a stale shard can never double-count.
+
+### Consequences
+
+- Wall time scales with the count of independent egress IPs, not RCC parallelism.
+  With RCC + laptop (2 IPs) the ~130 h walk halves to ~65 h. More IPs would help
+  linearly, but RCC's shared NAT means extra RCC nodes do not count.
+- Operational sequence is fixed: (a) one unsharded warm-up run builds the cache;
+  (b) launch shard `k/N` per independent IP, each pinned to the **same** window so
+  they share the cache and merge cleanly; (c) `cbo-merge-shards` once all complete.
+- `--shard` is gated to `--sources cbo` only — no other ingestor has the per-IP
+  throttle problem or the pid partition, and sharding them would just fragment
+  output for no gain.
+- No corpus-definition or selection change: identical pids fetched, identical
+  bodies, identical dedup — only the *order and host* of the walk differ. This is
+  throughput plumbing, not methodology.
 
 ---
 

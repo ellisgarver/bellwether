@@ -2668,15 +2668,34 @@ class CBOIngestor(Ingestor):
 
     _PUBLICATION_RE = re.compile(r"/publication/(\d+)\b")
 
-    def __init__(self, checkpoint_path: "Path | None" = None) -> None:
-        # Optional per-pid resume checkpoint. The full Wayback walk (~13.6k
-        # pids at the measured IA-safe ~1 req/9-12s) exceeds the 36h caslake
+    def __init__(
+        self,
+        checkpoint_path: "Path | None" = None,
+        *,
+        shard_index: int = 0,
+        shard_count: int = 1,
+    ) -> None:
+        # Optional per-pid resume checkpoint. The full Wayback walk (~25k pids
+        # at the measured IA-safe ~1 req/9-12s) far exceeds the 36h caslake
         # QOS cap, so CBO must be able to resume across sequential SLURM jobs
         # without re-fetching. The checkpoint is a flat one-pid-per-line file
         # (ext "txt" via run_pipeline's _make_ingestor); each pid is appended
         # only AFTER its article has been yielded and flushed by the caller
         # (ADR-023 resume addendum). When no path is given (the composite
         # InstitutionalIngestor path) the walk is uncheckpointed as before.
+        #
+        # Sharding (ADR-038): IA throttles by egress IP, so a single stream is
+        # capped at ~1 req/12s → ~100h for the full walk. An N-way shard lets N
+        # *independent* egress IPs (distinct RCC nodes and/or a laptop) each
+        # walk the disjoint slice ``pid % N == shard_index`` at the per-IP safe
+        # pace, cutting wall time ~N×. shard_count=1 is the unsharded default.
+        if shard_count < 1 or not (0 <= shard_index < shard_count):
+            raise ValueError(
+                f"invalid CBO shard {shard_index}/{shard_count}: need "
+                "shard_count >= 1 and 0 <= shard_index < shard_count"
+            )
+        self._shard_index = shard_index
+        self._shard_count = shard_count
         self._checkpoint_path = checkpoint_path
         self._done_pids: set[int] = self._load_checkpoint()
 
@@ -2719,6 +2738,14 @@ class CBOIngestor(Ingestor):
             # skip without spending a Wayback GET. No-op when uncheckpointed.
             if pid in self._done_pids:
                 skipped_done += 1
+                continue
+            # Shard partition (ADR-038): in an N-way run each shard owns only
+            # the pids where ``pid % N == shard_index``, so N independent egress
+            # IPs walk disjoint slices in parallel. Modulo — not contiguous id
+            # bands — so every shard draws a balanced mix of old/new ids (and
+            # thus a balanced in-window yield, since ids are not chronological).
+            # Costs no fetch and is not marked done (a no-op when shard_count=1).
+            if self._shard_count > 1 and (pid % self._shard_count) != self._shard_index:
                 continue
             snap_date = self._ts_to_date(earliest_ts)
             # Cheap lower-bound pre-filter ONLY. A snapshot can never predate
@@ -2812,6 +2839,18 @@ class CBOIngestor(Ingestor):
                 len(cached), self._cdx_cache_path(),
             )
             return cached
+        # Sharded runs MUST share a pre-built cache (ADR-038). If N shards each
+        # ran the enumeration sweep they would (a) collide on the same egress IP
+        # and re-establish the replay ban the pacing exists to avoid, and (b)
+        # waste N × ~44min re-enumerating the identical pid universe. The cache
+        # is built once by an unsharded warm-up run; shards only fetch.
+        if self._shard_count > 1:
+            raise RuntimeError(
+                f"CBO shard {self._shard_index}/{self._shard_count}: no CDX cache "
+                f"at {self._cdx_cache_path()}. A sharded run requires the cache to "
+                "exist — build it first with an unsharded run (shard_count=1) over "
+                "the same window, then launch the shards. See ADR-038."
+            )
         sitemap_pids = self._fetch_sitemap_pids()
         id_lo, id_hi = min(sitemap_pids), max(sitemap_pids)
         prefixes = list(range(id_lo // 100, id_hi // 100 + 1))
@@ -2917,11 +2956,19 @@ class CBOIngestor(Ingestor):
 
         ``.cbo_<start>_<end>_checkpoint.txt`` → ``.cbo_<start>_<end>_cdxcache.json``.
         None when uncheckpointed (then there is no cache).
+
+        The ``_shard{k}of{N}`` token (if present on a sharded checkpoint name)
+        is stripped so ALL shards resolve to the SAME cache file: the CDX map is
+        the full pid universe, identical for every shard, so it is built once
+        and shared read-only (ADR-038). This is also why a sharded run requires
+        the cache to already exist — see ``_build_or_load_cdx_map``.
         """
         if not self._checkpoint_path:
             return None
+        base = re.sub(r"_shard\d+of\d+_checkpoint\.txt$", "_checkpoint.txt",
+                      self._checkpoint_path.name)
         return self._checkpoint_path.with_name(
-            self._checkpoint_path.name.replace("_checkpoint.txt", "_cdxcache.json")
+            base.replace("_checkpoint.txt", "_cdxcache.json")
         )
 
     def _load_cdx_cache(self) -> "dict[int, tuple[str, str]] | None":
