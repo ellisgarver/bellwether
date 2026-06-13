@@ -384,18 +384,61 @@ _CBO_META_DATE_RE = re.compile(
     r"(?:name|property)\s*=\s*['\"](?P<key2>[^'\"]+)['\"]",
     re.IGNORECASE,
 )
+# Post-2025 cbo.gov redesign: the dcterms.* tags are gone from current
+# captures; the publication date now renders as an OpenGraph-style
+# `book:release_date` meta ("Thu, 06/20/2024 - 12:00", US MM/DD/YYYY) plus a
+# corroborating `<time datetime="2024-06-20T12:00:00Z">`. Because the walk
+# fetches the LATEST real capture, every in-window pid now hits the redesign
+# markup — so these are the primary date sources, with dcterms.* kept as the
+# fallback for the pre-redesign earliest-ts captures (verified 2026-06-13).
+_CBO_RELEASE_META_RE = re.compile(
+    r"<meta\b[^>]*?(?:name|property)\s*=\s*['\"]book:release_date['\"][^>]*?"
+    r"content\s*=\s*['\"](?P<v>[^'\"]+)['\"]"
+    r"|<meta\b[^>]*?content\s*=\s*['\"](?P<v2>[^'\"]+)['\"][^>]*?"
+    r"(?:name|property)\s*=\s*['\"]book:release_date['\"]",
+    re.IGNORECASE,
+)
+_CBO_TIME_RE = re.compile(
+    r"<time\b[^>]*?\bdatetime\s*=\s*['\"](?P<dt>[^'\"]+)['\"]",
+    re.IGNORECASE,
+)
+_US_MDY_RE = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")
 
 
 def _cbo_publication_date_from_html(html: str) -> date | None:
-    """Authoritative CBO publication date from Drupal Dublin Core meta tags.
+    """Authoritative CBO publication date, read explicitly from page metadata.
 
-    Scans for the structured dcterms/dc.date fields and returns the first one
-    present in ``_CBO_DATE_META_KEYS`` priority order. Returns ``None`` when no
-    such field exists, so the caller drops the record rather than trusting
-    trafilatura's order-dependent ``article:published_time`` migration stamp.
+    Source precedence (first hit wins), all bypassing trafilatura's
+    order-dependent ``article:published_time`` migration stamp:
+
+      1. ``book:release_date`` meta — the post-2025 redesign's OpenGraph-style
+         release field ("Thu, 06/20/2024 - 12:00"); we pull the US MM/DD/YYYY.
+      2. ``<time datetime="…">`` — the redesign's corroborating ISO stamp.
+      3. Legacy Drupal ``dcterms.*``/``dc.date.*`` meta tags — present only on
+         pre-redesign captures (the earliest-ts fallback).
+
+    Returns ``None`` when none is present, so the caller drops the record
+    rather than fabricating a date (methodology principle 1).
     """
     if not html:
         return None
+    # 1. Post-2025 OpenGraph book:release_date ("Day, MM/DD/YYYY - HH:MM").
+    m = _CBO_RELEASE_META_RE.search(html)
+    if m:
+        mdy = _US_MDY_RE.search(m.group("v") or m.group("v2") or "")
+        if mdy:
+            mm, dd, yyyy = (int(g) for g in mdy.groups())
+            try:
+                return date(yyyy, mm, dd)
+            except ValueError:
+                pass
+    # 2. Corroborating <time datetime="ISO"> (first occurrence is the release).
+    t = _CBO_TIME_RE.search(html)
+    if t:
+        parsed = _parse_date_flexible(t.group("dt")[:10])
+        if parsed is not None:
+            return parsed
+    # 3. Legacy Dublin Core meta tags (pre-redesign earliest-ts captures).
     found: dict[str, str] = {}
     for m in _CBO_META_DATE_RE.finditer(html):
         key = (m.group("key") or m.group("key2") or "").strip().lower()
