@@ -1,80 +1,76 @@
-"""Media Cloud detection layer (Layer 2 per MND_PROJECT_SPEC.md Section 4).
+"""Media Cloud press-volume overlay (ADR-042).
 
-Media Cloud provides daily story count time series by keyword/topic query
-across thousands of outlets. Its sole role is to detect when a topic is
-receiving anomalous volume attention before institutional sources have
-characterized it in embeddable text.
+Media Cloud provides free daily *story counts over time* for a keyword query
+across large news collections — aggregate counts only, no article text. Its role
+here is a **display/validation overlay**: for a given narrative we plot broad/
+premium press volume against the institutional discourse volume to make the
+"narratives form upstream in institutional/academic discourse, surface later in
+the press" dynamic visible.
+
+This layer is **display/validation only**. It must NEVER feed embedding,
+clustering, or dynamics fitting — Media Cloud text is not in the ADR-020 basis
+set and these counts are a post-hoc overlay (ADR-042, ADR-020). Press counts may
+serve as a *secondary* cross-check of the institutional fit; the SIR/logistic
+fit target stays institutional volume (ADR-019 §E).
+
+Coverage caveat: the Online News Archive thins before ~2017, so pre-2017
+narratives may have sparse or absent counts. Callers should degrade gracefully
+("press coverage data unavailable before ~2017") rather than show a misleading
+flat line.
+
+Migration note: the old `api.mediacloud.org/api/v2` REST API was retired
+(Dec 2023). This module uses the current `mediacloud` PyPI package
+(`SearchApi.story_count_over_time`). The separate Media Cloud "Wayback Machine"
+title-search API is a different product and is NOT used here.
 
 Output schema (one record per query per day):
     {
         "query": "...",
         "date": "YYYY-MM-DD",
         "story_count": 123,
-        "outlet_tier": "all | prestige_national | regional | trade",
+        "total_count": 98765,        # all stories that day in the collection
+        "ratio": 0.00124,            # story_count / total_count (attention share)
+        "collection_ids": [34412234],
         "retrieved_at": "ISO8601"
     }
 
-API documentation: https://mediacloud.org/support/query-guide
-API key required: MEDIACLOUD_API_KEY in .env
+API key required: MEDIACLOUD_API_KEY in .env (free signup at search.mediacloud.org).
 """
 from __future__ import annotations
 
 import json
 import os
-import time
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Iterator
 
-import requests
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random_exponential
+from tenacity import retry, stop_after_attempt, wait_random_exponential
 
 from mnd.utils.logging import get_logger
 
 log = get_logger(__name__)
 
-_API_BASE = "https://api.mediacloud.org/api/v2"
-_STORY_COUNT_ENDPOINT = f"{_API_BASE}/stories/count"
+# US National collection — the broad US news proxy for macro discourse (ADR-042).
+US_NATIONAL_COLLECTION = 34412234
 
-USER_AGENT = "MacroNarrativeDynamics/0.1 (academic research; contact via project repo)"
-
-
-def _is_retryable(exc: Exception) -> bool:
-    if isinstance(exc, requests.exceptions.HTTPError):
-        resp = getattr(exc, "response", None)
-        return resp is not None and resp.status_code >= 500
-    return True
-
-
-@retry(
-    stop=stop_after_attempt(4),
-    wait=wait_random_exponential(multiplier=1, max=30),
-    retry=retry_if_exception(_is_retryable),
-)
-def _get(url: str, params: dict, api_key: str, *, timeout: float = 30.0) -> dict:
-    resp = requests.get(
-        url,
-        params={**params, "key": api_key},
-        headers={"User-Agent": USER_AGENT},
-        timeout=timeout,
-    )
-    resp.raise_for_status()
-    return resp.json()
+# Counts are unreliable before roughly this year; surfaced so callers can caption.
+RELIABLE_SINCE_YEAR = 2017
 
 
 class MediaCloudDetector:
-    """Query Media Cloud for daily story counts by keyword query.
+    """Query Media Cloud for daily story counts by keyword query (ADR-042).
 
     Usage:
         detector = MediaCloudDetector.from_env()
         records = list(detector.fetch_story_counts(
-            query="inflation OR 'monetary policy'",
+            query="inflation OR \\"monetary policy\\"",
             start=date(2023, 1, 1),
             end=date(2023, 3, 31),
         ))
 
-    The output is a list of dicts with daily story counts. Anomaly detection
-    is done downstream; this class only handles API retrieval.
+    Output is a list of daily story-count dicts (see module docstring). This
+    class only retrieves; the press overlay and any anomaly flagging are done
+    downstream.
     """
 
     def __init__(self, api_key: str, output_dir: Path | None = None) -> None:
@@ -91,6 +87,29 @@ class MediaCloudDetector:
             )
         return cls(api_key=api_key, output_dir=output_dir)
 
+    def _search_api(self):
+        """Lazily build the SearchApi so importing this module needs no package."""
+        try:
+            import mediacloud.api
+        except ImportError as exc:  # pragma: no cover - environment guard
+            raise ImportError(
+                "The 'mediacloud' package is required for the press overlay "
+                "(ADR-042). Install it: pip install mediacloud"
+            ) from exc
+        return mediacloud.api.SearchApi(self.api_key)
+
+    @retry(
+        stop=stop_after_attempt(4),
+        wait=wait_random_exponential(multiplier=1, max=30),
+        reraise=True,
+    )
+    def _story_count_over_time(
+        self, query: str, start: date, end: date, collection_ids: list[int]
+    ) -> list[dict]:
+        return self._search_api().story_count_over_time(
+            query, start, end, collection_ids=collection_ids
+        )
+
     def fetch_story_counts(
         self,
         query: str,
@@ -98,69 +117,54 @@ class MediaCloudDetector:
         end: date,
         *,
         collections: list[int] | None = None,
-        outlet_tier: str = "all",
-        chunk_days: int = 30,
     ) -> Iterator[dict]:
-        """Yield daily story count records for the given keyword query.
+        """Yield daily story-count records for the given keyword query.
 
         Parameters
         ----------
         query:
-            Media Cloud solr query string. E.g. "inflation OR 'monetary policy'".
+            Media Cloud query string, e.g. ``inflation OR "monetary policy"``.
         start, end:
-            Date range (inclusive).
+            Date range (inclusive). The new API returns the full daily series in
+            one call, so no chunking is needed.
         collections:
-            Optional list of Media Cloud collection IDs to restrict outlet scope.
-            None = all indexed outlets.
-        outlet_tier:
-            Label for the outlet scope (for bookkeeping; not sent to API).
-        chunk_days:
-            Number of days per API request. Media Cloud aggregates by day within
-            the requested range.
+            Media Cloud collection IDs to scope the outlets. Defaults to the US
+            National collection (broad US news proxy for macro discourse).
         """
-        current = start
-        while current <= end:
-            chunk_end = min(current + timedelta(days=chunk_days - 1), end)
-            try:
-                params: dict = {
-                    "q": query,
-                    "fq": (
-                        f"publish_date:[{current.isoformat()}T00:00:00Z "
-                        f"TO {chunk_end.isoformat()}T23:59:59Z]"
-                    ),
-                    "split": "day",
-                    "split_start_date": current.isoformat(),
-                    "split_end_date": chunk_end.isoformat(),
-                }
-                if collections:
-                    params["fq"] += f" AND tags_id_media:({' OR '.join(str(c) for c in collections)})"
+        collection_ids = collections or [US_NATIONAL_COLLECTION]
+        if start.year < RELIABLE_SINCE_YEAR:
+            log.warning(
+                "MediaCloud: range starts %s — coverage thins before ~%d; "
+                "early counts may be sparse or absent.",
+                start.isoformat(), RELIABLE_SINCE_YEAR,
+            )
+        try:
+            rows = self._story_count_over_time(query, start, end, collection_ids)
+        except Exception as exc:
+            log.warning(
+                "MediaCloud query failed for %s→%s: %s",
+                start.isoformat(), end.isoformat(), exc,
+            )
+            return
 
-                data = _get(_STORY_COUNT_ENDPOINT, params, self.api_key)
-                split_counts: dict = data.get("split", {})
-
-                for date_str, count in split_counts.items():
-                    if date_str in ("gap", "start", "end"):
-                        continue
-                    try:
-                        record_date = date.fromisoformat(date_str[:10])
-                    except ValueError:
-                        continue
-                    if not (start <= record_date <= end):
-                        continue
-                    yield {
-                        "query": query,
-                        "date": record_date.isoformat(),
-                        "story_count": int(count),
-                        "outlet_tier": outlet_tier,
-                        "retrieved_at": _now_utc_iso(),
-                    }
-            except Exception as exc:
-                log.warning(
-                    "MediaCloud query failed for chunk %s→%s: %s",
-                    current.isoformat(), chunk_end.isoformat(), exc,
-                )
-            current = chunk_end + timedelta(days=1)
-            time.sleep(0.5)
+        for row in rows:
+            record_date = _coerce_date(row.get("date"))
+            if record_date is None or not (start <= record_date <= end):
+                continue
+            total = int(row.get("total_count", 0) or 0)
+            count = int(row.get("count", 0) or 0)
+            ratio = row.get("ratio")
+            if ratio is None:
+                ratio = (count / total) if total else 0.0
+            yield {
+                "query": query,
+                "date": record_date.isoformat(),
+                "story_count": count,
+                "total_count": total,
+                "ratio": float(ratio),
+                "collection_ids": collection_ids,
+                "retrieved_at": _now_utc_iso(),
+            }
 
     def fetch_and_save(
         self,
@@ -169,7 +173,7 @@ class MediaCloudDetector:
         end: date,
         *,
         query_slug: str | None = None,
-        outlet_tier: str = "all",
+        collections: list[int] | None = None,
     ) -> Path:
         """Fetch story counts and write JSONL to output_dir. Returns output path."""
         if self.output_dir is None:
@@ -182,7 +186,9 @@ class MediaCloudDetector:
 
         count = 0
         with open(output_path, "w") as f:
-            for record in self.fetch_story_counts(query, start, end, outlet_tier=outlet_tier):
+            for record in self.fetch_story_counts(
+                query, start, end, collections=collections
+            ):
                 f.write(json.dumps(record) + "\n")
                 count += 1
 
@@ -198,14 +204,18 @@ class MediaCloudDetector:
     ) -> list[dict]:
         """Flag records where story_count exceeds baseline mean + threshold_sigma * std.
 
-        Returns a list of anomalous records with 'is_anomaly' and 'z_score' added.
-        This is a simple z-score detector; more sophisticated methods (e.g., ARIMA
-        residuals) can be substituted without changing the upstream interface.
+        A simple z-score detector over a leading baseline window. Returns every
+        record with 'is_anomaly' and 'z_score' added. This is a convenience for
+        the overlay (highlighting press spikes); it is not part of the core
+        analysis and never feeds clustering (ADR-042).
         """
         import statistics
 
         if len(records) < baseline_days:
-            log.debug("Too few records for anomaly detection (%d < %d)", len(records), baseline_days)
+            log.debug(
+                "Too few records for anomaly detection (%d < %d)",
+                len(records), baseline_days,
+            )
             return [{**r, "is_anomaly": False, "z_score": 0.0} for r in records]
 
         counts = [r["story_count"] for r in records]
@@ -217,6 +227,18 @@ class MediaCloudDetector:
             z = (r["story_count"] - mean) / stdev
             result.append({**r, "is_anomaly": z > threshold_sigma, "z_score": round(z, 3)})
         return result
+
+
+def _coerce_date(value) -> date | None:
+    """Accept a datetime.date, datetime, or ISO string from the API."""
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
 
 
 def _now_utc_iso() -> str:
