@@ -3259,9 +3259,15 @@ A naive all-nodes-all-edges plot becomes a hairball. The map must stay legible b
 
 - The artifact contract must carry, per narrative, the **UMAP 2-D coordinates** (the
   `umap_xy` field already reserved in `IndexEntry`) **and the semantic top-k edges**
-  (a new field — list of `(neighbor_cluster_id, weight)` — to be added to the index
-  schema). Lexical/morphological similarities stay available on the narrative page; the
-  *map* uses the semantic edges only, to keep one clear meaning per visual.
+  (`IndexEntry.similar_edges` — list of `(neighbor_cluster_id, weight)`). The *map*
+  uses the semantic edges only, to keep one clear meaning per visual.
+- **All three** ADR-019 §H measures (semantic / lexical / morphological) stay
+  available on the **narrative page**, carried in a separate
+  `NarrativeArtifact.similar` field (a `SimilarNarratives` record of three ranked
+  neighbor-id lists). This is the per-narrative "related narratives" panel — distinct
+  from the map's semantic-only edges: the panel is for reading ("what resembles this,
+  by meaning vs. wording vs. shape"), the edges are for drawing the graph. The front
+  end resolves neighbor ids → labels via the index, so the panel stores ids only.
 - Rendering is client-side over baked data (ADR-043) — Plotly.js or a lightweight
   force/graph layer reading the index JSON; no server.
 - All encodings are derived from existing pipeline outputs (JEL, stage, emerging flag,

@@ -19,6 +19,13 @@ Two things are derived here rather than received:
 * **The map's semantic edges** — top-k cosine neighbors with weights, from the
   cluster centroids (ADR-044). ``umap_xy`` positions are passed through.
 
+The narrative-page **similar-narratives panel** (all three ADR-019 §H measures) is
+*received*, not derived: pass ``compute_similar_narratives(...)`` output as
+``similar``. That keeps the builder a pure assembler and avoids recomputing the
+lexical/morphological measures it has no inputs for. The map's semantic edges and
+the panel's semantic list use the same measure but different ``top_k`` (3 for graph
+legibility, 5 for the panel) — intentional, not a bug.
+
 "Curves not parameters" (ADR-039): each ``FitResult`` already carries its display
 ``curve`` evaluated on the daily grid; we copy it straight across so the front end
 plots curve-vs-observed without touching parameters.
@@ -45,6 +52,7 @@ from mnd.dashboard.artifacts import (
     MarketsArtifact,
     NarrativeArtifact,
     SeriesArtifact,
+    SimilarNarratives,
 )
 from mnd.dashboard.story_card import NOISE_TOPIC, build_story_card
 from mnd.dynamics.fitting import ClusterDynamics, FitResult
@@ -137,6 +145,15 @@ def _jel_artifact(a: ClusterJELAssignment) -> JELArtifact:
     )
 
 
+def _similar_artifact(d: dict[str, list[Any]]) -> SimilarNarratives:
+    """Map a compute_similar_narratives entry → SimilarNarratives (ADR-019 §H)."""
+    return SimilarNarratives(
+        semantic=[int(x) for x in d.get("semantic", [])],
+        lexical=[int(x) for x in d.get("lexical", [])],
+        morphological=[int(x) for x in d.get("morphological", [])],
+    )
+
+
 def _compute_emerging(
     date_range: tuple[str, str] | None, frontier: str | None, weeks: int
 ) -> bool:
@@ -165,6 +182,7 @@ def build_dashboard_artifacts(
     stages: dict[int, StageClassification],
     topic_info: pd.DataFrame | None = None,
     jel: dict[int, ClusterJELAssignment] | None = None,
+    similar: dict[int, dict[str, list[int]]] | None = None,
     ordered_cluster_ids: list[int] | None = None,
     centroids: np.ndarray | None = None,
     umap_xy: dict[int, tuple[float, float]] | None = None,
@@ -183,6 +201,7 @@ def build_dashboard_artifacts(
     """
     cfg = cfg or load_config()
     jel = jel or {}
+    similar = similar or {}
     umap_xy = umap_xy or {}
     markets = markets or {}
     mediacloud = mediacloud or {}
@@ -238,6 +257,7 @@ def build_dashboard_artifacts(
                 shape_facts={k: float(v) for k, v in cd.shape_facts.items()},
                 stage_detail=_json_safe(stage_detail),
                 jel=_jel_artifact(jel_obj) if jel_obj else None,
+                similar=_similar_artifact(similar[cid]) if cid in similar else None,
                 mediacloud=mediacloud.get(cid),
                 markets=markets.get(cid),
             )
