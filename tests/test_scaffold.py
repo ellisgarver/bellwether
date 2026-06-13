@@ -25,7 +25,7 @@ def test_master_config_loads():
     cfg = load_config()
     assert cfg["schema_version"].startswith("2."), f"expected schema 2.x; got {cfg['schema_version']}"
     assert cfg["temporal"]["historical_start"] == "2010-01-01"
-    assert cfg["temporal"]["train_test_split"] == "2020-01-01"
+    assert "train_test_split" not in cfg["temporal"], "ADR-040: held-out split removed"
 
 
 def test_embedding_single_model_post_adr019():
@@ -38,7 +38,7 @@ def test_embedding_single_model_post_adr019():
         "comparator embedder removed by ADR-019"
     )
     assert cfg["embedding"]["primary"]["model"].startswith("Qwen/Qwen3-Embedding")
-    assert cfg["embedding"]["primary"]["dimensions"] == 1024
+    assert cfg["embedding"]["primary"]["dimensions"] == 4096  # ADR-036: 0.6B→8B
     assert cfg["embedding"]["primary"]["max_seq_len"] == 1024
 
 

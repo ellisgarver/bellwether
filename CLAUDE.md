@@ -16,9 +16,10 @@ ODEs to per-cluster volume curves → classify lifecycle stage.
 
 - Every threshold/hyperparameter lives in `config/config.yaml`. Never hardcode.
 - Every random seed flows from `config.reproducibility.global_random_seed` (42).
-- Never hand-tune any parameter to improve anchor recovery.
-- Never load held-out (2020+) data into clustering or hyperparameter search before Phase 4.
-- No closed-source or paid-API dependencies in the core pipeline.
+- Never hand-tune any parameter to improve anchor recovery. (This no-tuning rule is
+  the sole basis for credibility — there is no train/test split, ADR-040.)
+- No closed-source or paid-API dependencies in the core pipeline (data fetching +
+  analysis). The display/presentation layer is exempt — paid-LLM story prose is OK.
 - **Corpus = the ADR-020 basis set:** 12 sub-ingestors mapping 1:1 to the 8
   independent dimensions of US macro discourse (dimension table in ADR-020).
   The source selection is the *only* macro-scope constraint at ingest.
@@ -91,7 +92,7 @@ SOURCES="<src>" SKIP_DOWNSTREAM=1 SKIP_CLEANUP=1 bash scripts/rcc/submit_paralle
 - [/] Phase 3 — embedding + clustering. First run 2026-05-18 (Qwen3, BERTopic,
   outlier 25.4%, stability NMI=0.880±0.003, anchor recovery 6/10 on the pre-fix
   corpus). Re-validation deferred until after the re-ingest.
-- [ ] Phase 4 — pre-registration finalized; full anchor + fizzled validation.
+- [ ] Phase 4 — full-corpus anchor + fizzled validation (reported, not gated; no prereg/split — ADR-040).
 - [ ] Phase 5 — Streamlit dashboard, Hugging Face Spaces deploy.
 - [ ] Phase 6 — weekly re-ingest of the basis set + Media Cloud Premium live (ADR-016).
 - [ ] Phase 7 — technical report, reproducibility audit.
@@ -123,4 +124,3 @@ SOURCES="<src>" SKIP_DOWNSTREAM=1 SKIP_CLEANUP=1 bash scripts/rcc/submit_paralle
 | Per-source coverage tests | `tests/integration/test_source_coverage.py` |
 | Captured-side coverage verifier | `scripts/verify_coverage.py` |
 | Project spec (planning artifact) | `MND_PROJECT_SPEC.md` |
-| Pre-registration draft | `prereg/PREREGISTRATION.md` |
