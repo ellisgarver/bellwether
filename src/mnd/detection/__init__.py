@@ -13,6 +13,7 @@ API key: MEDIACLOUD_API_KEY in .env (free signup at search.mediacloud.org)
 Output: data/detection/mediacloud/
 """
 
+from mnd.detection.markets import MarketsOverlay
 from mnd.detection.mediacloud import MediaCloudDetector
 
-__all__ = ["MediaCloudDetector"]
+__all__ = ["MarketsOverlay", "MediaCloudDetector"]
