@@ -19,7 +19,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 |---|---|---|
 | 001 | Two-model embedding (Qwen3 primary + mpnet comparator) | Live (as amended by 011) |
 | 002 | Logistic growth as MVP fallback for SIR | Live |
-| 003 | Streamlit for the dashboard | Live (Phase 5) |
+| 003 | Streamlit for the dashboard | Superseded by 043 (static Astro/GH Pages) |
 | 004 | GDELT as discovery layer only | Superseded by 005 |
 | 005 | Wayback CDX replaces GDELT discovery | Superseded by 010/020 (basis-set ingestors) |
 | 006 | `max_seq_len` 512 for local MPS | Live |
@@ -59,6 +59,8 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 040 | **Drop 2010-2019/2020+ held-out split; no formal pre-registration (credibility via anchored values + no tuning)** | Live (supersedes prereg draft) |
 | 041 | Markets + bidirectional Granger labeled display overlay (timing-not-cause; drop Bloomberg CPI) | Live (display only) |
 | 042 | Media Cloud press volume as display/validation overlay only (never feeds clustering) | Live (relates 016/020) |
+| 043 | **Static publishing — Astro on GitHub Pages, precompute everything** | Live (supersedes 003, amends 041) |
+| 044 | **Narrative map — hybrid node-link UMAP graph (shape=JEL, color=stage+emerging)** | Live (relates 019/020/039/043) |
 
 ---
 
@@ -3042,6 +3044,11 @@ on the hard rules, not a registered analysis plan.
 
 - **Status**: Accepted
 - **Date**: 2026-06-12
+- **Amended**: 2026-06-13 by ADR-043 — Granger is **precomputed** into the
+  per-narrative artifact for a fixed market-series menu, not run live on click
+  (static hosting has no Python server). The "on demand (on click)" wording in the
+  Consequences below is superseded; the user still picks a series via a toggle, but
+  the readout is baked, not computed in-browser.
 
 ### Context
 
@@ -3132,6 +3139,134 @@ secondary cross-validation signal for dynamics — **display/validation only**:
   misleading flat line).
 - A forward-looking Media Cloud early-detector (press as a leading signal) is a
   deferred add-on, not part of this ADR.
+
+---
+
+## ADR-043: Static publishing — Astro on GitHub Pages, precompute everything
+
+- **Status**: Accepted
+- **Date**: 2026-06-13
+- **Supersedes**: ADR-003 (Streamlit for the dashboard)
+- **Amends**: ADR-041 (Granger precomputed, not on-click-live)
+
+### Context
+
+Phase 5 is the public face of the project: a "cool, educational tool/page" (not a
+paper) showing how macro narratives form upstream in institutional discourse and
+surface later in the press. ADR-003 picked Streamlit. Two constraints have since
+hardened:
+
+1. **Cost must be zero and hosting reproducible** — the no-paid-dependency spirit
+   extends to hosting. The user wants something "entirely free" with no server bill.
+2. **Streamlit is a Python *server* app.** It cannot run on GitHub Pages (static
+   file host, no Python runtime). Keeping Streamlit would force a paid/managed host
+   (Streamlit Community Cloud sleeps; HF Spaces is a container that still runs a
+   server) and couples the front end to the heavy analysis stack (pymc/bertopic/torch)
+   we deliberately quarantined behind the artifact contract (ADR-039 companion,
+   `src/mnd/dashboard/artifacts.py`).
+
+The artifact contract already bakes everything the screen needs into small plain
+JSON ("curves not parameters"). If the JSON is complete, the front end needs **no
+server at all** — every view can render client-side.
+
+### Decision
+
+Publish a **fully static site built with [Astro](https://astro.build), deployed to
+GitHub Pages** via the repo's CI. Take **Clarity-Template** (lorenmt/clarity-template,
+CC BY-SA 4.0) as *visual inspiration only* — clean, paper-like, research-y, modular —
+not as a code dependency (it is single-page; we are multi-page).
+
+- **Astro** renders static HTML at build time with "islands" of client-side
+  interactivity (Plotly.js charts, the map, lens tabs, overlay toggles). No runtime
+  server, no Python on the host. Deploys as plain files to `gh-pages`.
+- **Precompute everything** into the ADR-039 artifact JSON. Specifically, this ADR
+  resolves the one live-compute hole in ADR-041: **bidirectional Granger is
+  precomputed** for a *fixed, small menu of the most-popular market series* (e.g.
+  VIX, 10y yield, yield spread — not the full FRED catalogue) and baked into each
+  `narrative_<id>.json`. The user toggles a series; the readout is already there. No
+  in-browser statistics, no API calls at view time.
+- The front end **only ever reads the baked JSON** — it never imports the analysis
+  stack and makes no network calls to FRED / Media Cloud / any API at view time.
+- Supersede ADR-003: Streamlit is dropped as the dashboard technology.
+
+### Consequences
+
+- **All interactivity survives static hosting** because it is data-driven (Plotly.js
+  over baked arrays) rather than compute-driven. Lens tabs, overlay checkboxes
+  (ADR-041/042), the narrative map, and the Granger readout all work client-side.
+- The artifact builder (task 41) becomes the single integration seam and must emit
+  the fixed-menu Granger results and the map's coordinates/edges (see ADR-044). The
+  build is reproducible and re-runs only when the corpus changes.
+- Cost is zero; hosting is a public GitHub Pages site. No secrets ship to the client
+  (all API keys are used only at build/precompute time, server-side in CI or locally).
+- Trade-off accepted: no live/user-typed queries (e.g. arbitrary FRED series, live
+  Media Cloud search). This is fine — the tool is a curated educational artifact, not
+  a query console, and the fixed menu keeps results deterministic and no-tuning-clean.
+
+---
+
+## ADR-044: Narrative map — hybrid node-link UMAP graph (shape=JEL, color=stage)
+
+- **Status**: Accepted
+- **Date**: 2026-06-13
+- **Relates to**: ADR-039 (lenses), ADR-019 §H (similar-narratives edges), ADR-020
+  (JEL scope), ADR-043 (static front end)
+
+### Context
+
+The landing page needs an interactive overview that conveys the *shape of the corpus*
+— which narratives exist, how they relate, what lifecycle stage they are in, and
+which are newly emerging — and lets a reader click through to any narrative. A flat
+2-D UMAP scatter shows *position* (semantic neighborhood) and can encode *size*
+(volume), but it does not show *similarity structure* (which clusters are kin) and
+gets visually muddy at the cluster counts we expect ("a fair amount"). We already
+compute pairwise similarity (`similar_narratives.py`, ADR-019 §H: semantic / lexical /
+morphological top-k), so the relationship edges exist for free.
+
+### Decision
+
+Render the overview as a **hybrid node-link graph seeded by 2-D UMAP positions** —
+nodes placed at their UMAP coordinates, with explicit **edges drawn from the semantic
+top-k** similarity already computed. Visual encoding:
+
+- **Shape = JEL primary code** (ADR-020 scope: E / F / G / H families) — a small,
+  fixed shape vocabulary.
+- **Color = lifecycle stage + emerging**, a **four-color** scheme: growth, decay,
+  dormant, plus *newly-emerging* as its own color (the ADR-019 recency flag), with an
+  added ring/glow on emerging nodes so the status reads even for color-blind users.
+- **Size = discourse volume** (article count).
+- **Click a node → navigate to that narrative's page** (or the emerging feed for
+  emerging nodes). The map is the primary navigation surface, not just a picture.
+- **No literal 3-D.** A z-axis hurts legibility and click-accuracy more than it helps;
+  similarity is conveyed by edges and proximity, not depth.
+
+### Clutter mitigation (explicit, since cluster count is unknown but likely non-trivial)
+
+A naive all-nodes-all-edges plot becomes a hairball. The map must stay legible by:
+
+- **Edge thresholding / top-k only** — draw at most the top-k semantic edges per node
+  (k small, e.g. 3), above a similarity floor; never the full pairwise matrix.
+- **Degree-aware edge fading** — edges rendered low-opacity so dense regions read as
+  texture, not noise; hover/selection highlights a node's own edges at full opacity.
+- **Label-on-demand** — only top-volume nodes label by default; the rest reveal labels
+  on hover, avoiding overlapping text.
+- **Optional stage/JEL filter toggles** — the reader can isolate one stage or one JEL
+  family to declutter (client-side, over the baked index).
+- **Deterministic layout seeded from the global seed** (UMAP coords are precomputed and
+  baked, so the map is stable across loads and reproducible — no per-load jitter).
+
+### Consequences
+
+- The artifact contract must carry, per narrative, the **UMAP 2-D coordinates** (the
+  `umap_xy` field already reserved in `IndexEntry`) **and the semantic top-k edges**
+  (a new field — list of `(neighbor_cluster_id, weight)` — to be added to the index
+  schema). Lexical/morphological similarities stay available on the narrative page; the
+  *map* uses the semantic edges only, to keep one clear meaning per visual.
+- Rendering is client-side over baked data (ADR-043) — Plotly.js or a lightweight
+  force/graph layer reading the index JSON; no server.
+- All encodings are derived from existing pipeline outputs (JEL, stage, emerging flag,
+  volume, UMAP, similar-narratives); the map introduces **no new analysis and no
+  tuning**, only display.
 
 ---
 
