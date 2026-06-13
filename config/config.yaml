@@ -18,7 +18,8 @@ project_name: "macro-narrative-dynamics"
 temporal:
   historical_start: "2010-01-01"
   historical_end: "auto"            # "auto" = today minus 7d (handled in code)
-  train_test_split: "2020-01-01"    # Walk-forward boundary; 2010-2019 train, 2020-now test
+  # No train/test split — ADR-040: zero hand-tuning removes the overfitting risk a
+  # held-out boundary would guard against; full 2010-present series is used throughout.
   live_update_frequency: "weekly"   # cron: weekly batch
   live_update_day: "monday"         # day of week for the cron trigger
 

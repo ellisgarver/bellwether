@@ -459,23 +459,22 @@ Report what exists. Then proceed in this order:
 
 ### Phase 4 — Validation
 
-Do not begin until Phase 3 NMI and ARI results are confirmed and pass kill criteria.
+No pre-registration, no kill criteria, no train/test split (ADR-040). Every quantity
+below is **reported as a diagnostic, never gated** — credibility rests on
+field-anchored parameters + zero hand-tuning (ADR-019), not on passing thresholds.
+Runs over the full 2010-present corpus.
 
-1. **Pre-registration first:** Commit `prereg/PREREGISTRATION.md` to a public timestamp (GitHub or OSF) before examining any outcome data. Must specify all hypotheses, variables, statistical tests, decision criteria before any FRED or EPU data is correlated against narrative clusters.
+1. **Anchor narrative recovery:** report how many of the 10 anchor narratives the
+   pipeline recovers within 14-day tolerance (Section 10). A diagnostic of whether
+   clustering/dynamics work — not a pass/fail gate, and never tuned toward.
 
-2. **Anchor narrative recovery:** System must recover all 10 anchor narratives within 14-day tolerance (Section 10).
+2. **Fizzled-narrative validation:** for each anchor, check that contemporaneous
+   narratives that did not crystallize receive appropriately different stage
+   classifications. Reported, not gated.
 
-3. **Fizzled-narrative validation:** For each anchor, validate that contemporaneous narratives that did not crystallize receive appropriately different stage classifications.
-
-4. **Sensitivity analysis:** Three pre-specified parameter settings (strict: `min_cluster_size=10`, default: `20`, permissive: `40`). Core conclusions must hold across all three.
-
-5. **Exploratory predictive analysis (compressible):** Granger causality testing in both directions; Benjamini-Hochberg FDR correction across all reported hypotheses. Null results reported honestly — not a project killer.
-
-**Kill criteria for Phase 4:**
-- Fewer than 7/10 anchors recovered within 14-day tolerance → debug; if persistent, shift to novelty-velocity framework
-- Median R² < 0.30 OR R₀ posterior CIs > 2 units across validation narratives → drop SIR; fall back to logistic or non-parametric curve features
-
-**Out-of-sample discipline:** Training data 2010–2019. Held-out validation 2020–present. Held-out period not examined until final analysis. All hyperparameters locked before held-out evaluation.
+3. **Markets lead-lag (display feature):** bidirectional Granger causality on
+   first-differenced series, per-narrative, captioned "timing, not cause" (ADR-041).
+   Null results reported honestly.
 
 ### Phase 5 — Dashboard Build
 
@@ -491,7 +490,7 @@ Weekly cron job. Pulls past week's documents from all active basis-set sources (
 
 ### Phase 7 — Writeup and Reproducibility
 
-1. GitHub: pinned dependencies (`requirements.txt`), clear README, replication instructions, pre-registration document, anchor narrative ground truth as CSV/JSONL
+1. GitHub: pinned dependencies (`requirements.txt`), clear README, replication instructions, anchor narrative ground truth as CSV/JSONL
 2. Short technical report: 5–8 pages covering methodology and findings
 3. Stretch: 12–15 page workshop-paper quality writeup for ACL Economics and NLP or NeurIPS ML for Finance workshop
 

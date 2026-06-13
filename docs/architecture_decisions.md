@@ -10,8 +10,10 @@ references and supersedes the old one.
 
 ADRs are append-only history. This index is the fast path: it shows which
 decisions are still live. The **current methodology lock-in is ADR-019 +
-ADR-020** (cite these, plus the per-source ADRs they reference, for
-pre-registration). Bodies below are preserved verbatim for that defense.
+ADR-020**, as amended by ADR-039 (four dynamics lenses) and ADR-040 (no held-out
+split, no formal pre-registration). Cite these plus the per-source ADRs they
+reference; credibility rests on field-anchored values + no hand-tuning (ADR-040),
+not a registered plan. Bodies below are preserved verbatim for that defense.
 
 | ADR | Decision | Status |
 |---|---|---|
@@ -53,6 +55,10 @@ pre-registration). Bodies below are preserved verbatim for that defense.
 | 036 | **Primary embedder Qwen3-Embedding-0.6B → 8B (4096-dim, A100); BERTopic unchanged** | Live |
 | 037 | CBO Wayback: replayed-archived 429 is a dead snapshot to skip, not a live throttle | Live |
 | 038 | CBO walk shardable by `pid % N` across independent egress IPs (RCC + laptop) | Live |
+| 039 | **Dynamics shown as four complementary lenses (logistic/SIR/Bass/shape-facts), not AICc best-of-N** | Live (amends 019 §E) |
+| 040 | **Drop 2010-2019/2020+ held-out split; no formal pre-registration (credibility via anchored values + no tuning)** | Live (supersedes prereg draft) |
+| 041 | Markets + bidirectional Granger labeled display overlay (timing-not-cause; drop Bloomberg CPI) | Live (display only) |
+| 042 | Media Cloud press volume as display/validation overlay only (never feeds clustering) | Live (relates 016/020) |
 
 ---
 
@@ -2909,6 +2915,223 @@ independent IPs exist:
 - No corpus-definition or selection change: identical pids fetched, identical
   bodies, identical dedup — only the *order and host* of the walk differ. This is
   throughput plumbing, not methodology.
+
+---
+
+## ADR-039: Dynamics shown as four complementary lenses, not an AICc best-of-N pick
+
+- **Status**: Accepted
+- **Date**: 2026-06-12
+- **Amends**: ADR-019 §E (which fit `["sir", "logistic"]` and selected one by AICc)
+
+### Context
+
+ADR-019 locked the dynamics layer to two ODE models (logistic = Verhulst 1838,
+SIR = Kermack & McKendrick 1927) and selected the better fit per cluster by AICc.
+That made sense when the deliverable was framed as a paper with one reported model
+per narrative. The project's primary deliverable is now an **educational tool/web
+page** (see `project_goal_intent` in working memory): people explore how macro
+narratives form and develop. For that audience a single AICc winner throws away
+the most interesting part — *each model answers a different question about the same
+volume curve*. AICc best-of-N is a model-selection ritual that serves a paper, not
+a reader who wants to understand the shape of a narrative.
+
+### Decision
+
+Fit and display **four lenses side by side** for every in-scope cluster. Each lens
+is framed on the dashboard as the plain-language question it answers (front-end
+clarity is first-class, see `feedback_frontend_clarity`):
+
+1. **Logistic** (Verhulst 1838) — "how fast did it take off, and where did it level
+   off?" Reports growth rate *k* and carrying capacity *L*.
+2. **SIR** (Kermack & McKendrick 1927) — "was it contagious, and did it burn out?"
+   Reports R₀ (with 94% credible interval) and peak time.
+3. **Bass diffusion** (Bass 1969) — "was this driven by an external shock or by
+   word-of-mouth?" Reports the coefficient of innovation *p* (external) vs.
+   imitation *q* (internal). Bass is the field-standard diffusion model in
+   marketing/innovation and has a primary-literature anchor, satisfying the
+   ADR-019 "anchored or removed" rule.
+4. **Shape-facts** — model-free descriptive statistics straight off the smoothed
+   weekly curve: total volume, peak height, time-to-peak, duration above
+   half-peak, and **wave count** (number of distinct re-emergence humps). Answers
+   "how big, how fast, how long, and how many comebacks?" No fitting, no
+   assumptions — the honest baseline a reader can always trust.
+
+All four are reported together; **no AICc selection gate**. Per-model fit
+diagnostics (R², CI width) are shown as honesty signals next to each lens, never as
+a pass/fail filter (consistent with ADR-019's removal of kill criteria).
+
+Stage classification (growth/decay/dormant, ADR-019 §F) continues to key off the
+**SIR R₀ posterior**, unchanged — the four-lens display does not alter staging.
+
+### Consequences
+
+- `config.dynamics.models_to_fit` grows to include `bass`; `models/models.py` gains
+  a Bass parameterization + a model-free `shape_facts` extractor. AICc is retained
+  only as a displayed diagnostic, not a selector.
+- The dashboard life-cycle viewer shows four small framed panels per narrative
+  instead of one "winning" curve. Each panel carries its one-line question and a
+  plain-language reading of its headline parameter.
+- This is a display + fitting change, not a corpus or clustering change. The volume
+  signal fit by all four lenses remains institutional discourse volume (ADR-019
+  §E), with press volume as a secondary overlay (ADR-042).
+- More compute per cluster (four fits vs. an AICc race over two), but cluster count
+  is ~70–120 and the fits are cheap relative to embedding.
+
+---
+
+## ADR-040: Drop the 2010-2019/2020+ held-out split; no formal pre-registration
+
+- **Status**: Accepted
+- **Date**: 2026-06-12
+- **Amends**: ADR-019 (look-ahead apparatus already removed there); supersedes the
+  `prereg/PREREGISTRATION.md` draft and the `train_test_split` config key
+
+### Context
+
+The pipeline carried a walk-forward train/test boundary (`train_test_split:
+"2020-01-01"`, CLAUDE.md invariant "never load held-out 2020+ data before Phase 4")
+and a draft `prereg/PREREGISTRATION.md` with kill criteria, FDR control, and 5-stage
+/ 4-model language. Both are vestiges of a falsification-style paper framing. The
+held-out split exists to detect **overfitting from tuning** — but ADR-019 already
+established the project's core discipline: *every threshold is a field-accepted
+library default or primary-literature value, and nothing is hand-tuned* (esp. never
+tuned to improve anchor recovery). With zero tuning, there is no fitted-on-train
+quantity that a held-out test could catch overfitting on. The split guards against a
+risk the no-tuning rule already eliminates, while complicating the pipeline and the
+narrative-formation analysis (which wants the full 2010-present series, not a
+truncated training window). The user confirmed (2026-06-12): "since we don't tune at
+all, we don't need the split."
+
+The pre-registration likewise served reviewers, not the tool. The user is "not
+pursuing a formal pre-registration" (no OSF, no locked timestamp). Credibility rests
+on the hard rules, not a registered analysis plan.
+
+### Decision
+
+1. **Remove the held-out split.** Delete `train_test_split` from `config/config.yaml`
+   and the "never load held-out 2020+ data" invariant from CLAUDE.md. Clustering,
+   dynamics, and validation all run over the full 2010-present corpus. Anchor
+   narratives remain **validation diagnostics** (does the pipeline recover known
+   episodes?), reported, never gated — and never tuned toward.
+2. **No formal pre-registration.** Delete `prereg/PREREGISTRATION.md`. The useful,
+   non-stale content — the field-anchored value list and the no-tuning honesty
+   statement — folds into `docs/METHODOLOGY.md` as a short "methodological
+   commitments" section. Credibility is sourced from: (a) every parameter anchored
+   to a published default or primary-literature value (ADR-019), and (b) the
+   standing no-hand-tuning rule, especially against anchor recovery.
+
+### Consequences
+
+- The "held-out discipline" survives in spirit as the **no-retro-tuning rule**: we
+  still do not adjust parameters after seeing anchor results — that honesty is what
+  keeps the tool credible about what it can actually detect, and is itself
+  educational. What changes is that we no longer *withhold* post-2020 data from the
+  pipeline to enforce it.
+- CLAUDE.md Phase 4 line ("Pre-registration finalized; full anchor + fizzled
+  validation") is rewritten to drop the pre-registration gate; Phase 4 becomes the
+  full-corpus anchor + fizzled validation pass, reported not gated.
+- `MND_PROJECT_SPEC.md` and `docs/METHODOLOGY.md` references to a train/test split or
+  pre-registration are corrected. The project stays "paper-writeable" (anchored to
+  respected methods) without a registered plan.
+- One less invariant to honor at ingest/cluster time; simpler reproduction story.
+
+---
+
+## ADR-041: Markets + bidirectional Granger as a labeled display overlay
+
+- **Status**: Accepted
+- **Date**: 2026-06-12
+
+### Context
+
+A recurring question a reader brings to a macro narrative is "did the discourse move
+before or after the market did?" The pipeline already has FRED access
+(`FRED_API_KEY`, validation only). A prior framing (ADR-016-era) considered a
+Bloomberg CPI-surprise control series; Bloomberg is a removed paid source (ADR-010)
+and the surprise series is not reproducible for free. The lead-lag question is
+genuinely insightful for the tool and was explicitly kept (not cut) as a labeled
+feature, so it needs its own ADR rather than living as scattered intent.
+
+### Decision
+
+Add a **markets overlay** on the per-narrative life-cycle view, plus an on-demand
+**bidirectional Granger** readout:
+
+- Overlay a relevant free FRED market series (e.g., VIX, 10y yield, equity index)
+  against the narrative's weekly discourse volume on the same time axis.
+- On click, run **bidirectional Granger causality** (VAR on the first-differenced
+  series, both directions tested) and report which direction, if any, shows
+  statistically significant precedence, at what lag.
+- Every markets/lead-lag element carries the caption **"this shows timing, not
+  cause"** (per `feedback_frontend_clarity`) — Granger precedence is temporal
+  ordering, not causation, and the UI must say so to avoid mis-educating.
+- **Drop the Bloomberg CPI-surprise control** entirely; it is paid + removed-source.
+
+### Consequences
+
+- This is a display/diagnostic feature only. Market series **never feed clustering,
+  embedding, or dynamics fitting** — they are an overlay computed after the corpus
+  is built, so the no-paid-dep core invariant and ADR-020 (no external signal into
+  clustering) are untouched. FRED is free.
+- Granger is run per-narrative on demand (on click), not precomputed for all
+  clusters, keeping it cheap and clearly user-initiated.
+- Lives in the detection/display layer, not the core pipeline; first-differencing
+  handles the non-stationarity Granger requires.
+
+---
+
+## ADR-042: Media Cloud press volume as a display/validation overlay only
+
+- **Status**: Accepted
+- **Date**: 2026-06-12
+- **Relates to**: ADR-016 (Media Cloud as dynamics layer), ADR-020 (no external
+  signal into clustering)
+
+### Context
+
+The corpus is locked to the ADR-020 institutional/academic basis set; premium press
+(NYT, WSJ, Bloomberg) is excluded because it is paid and not reproducibly fetchable
+(ADR-010). But premium and broad press are obviously where macro narratives become
+*public*, and the central intellectual claim of the project is that narratives form
+upstream in institutional/academic discourse and surface later in the press. Showing
+both side by side makes that dynamic visible and is pedagogically valuable. Media
+Cloud provides free aggregate **story counts over time** (not full text) for large
+news collections — exactly a volume overlay, with no text to embed. The legacy
+integration (`src/mnd/detection/mediacloud.py`) targets the dead
+`api.mediacloud.org/api/v2` (retired Dec 2023); the live interface is the
+`mediacloud` PyPI package (`SearchApi.story_count_over_time(query, start, end,
+collection_ids=[34412234])`, US National collection). Historical depth thins before
+~2017.
+
+### Decision
+
+Use Media Cloud as a **press-volume overlay** on the life-cycle view, and as a
+secondary cross-validation signal for dynamics — **display/validation only**:
+
+- For a given narrative, overlay Media Cloud weekly story counts (broad/premium
+  press proxy) against the institutional discourse volume, captioned to make the
+  institutional-vs-press timing contrast explicit ("this shows timing, not cause").
+- Migrate `mediacloud.py` from the dead v2 REST API to the `mediacloud` PyPI
+  package; query the US National collection (`34412234`).
+- Press counts may be reported as a **secondary** signal that cross-checks the
+  institutional fit; they are **never the SIR/logistic fit target** (institutional
+  volume is, per ADR-019 §E).
+
+### Consequences
+
+- **Media Cloud must never feed clustering, embedding, or dynamics fitting** — it is
+  not in the embedded corpus (ADR-020) and remains a post-hoc overlay. This keeps the
+  basis-set corpus definition and the no-external-signal-into-clustering rule intact.
+- Media Cloud is free; story-count-over-time needs only `MEDIACLOUD_API_KEY` (free
+  signup at search.mediacloud.org). It is currently absent from `.env` — the press
+  overlay is blocked until a key is added and a historical-depth probe confirms
+  usable coverage back to the narrative's window (reliable ~2017+).
+- Pre-2017 narratives may have thin or absent press counts; the overlay must degrade
+  gracefully (show "press coverage data unavailable before ~2017" rather than a
+  misleading flat line).
+- A forward-looking Media Cloud early-detector (press as a leading signal) is a
+  deferred add-on, not part of this ADR.
 
 ---
 

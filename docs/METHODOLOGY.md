@@ -1,6 +1,6 @@
 # Macro Narrative Dynamics — Methodology
 
-A plain-English walkthrough of how the system works and why each step is built the way it is. This document sits between the engineering-focused `CLAUDE.md` (what to do when writing code) and the comprehensive `MND_PROJECT_SPEC.md` (full project specification). It is the canonical reference for "how does this project actually work?" — useful for collaborators, reviewers, the pre-registration, and future development sessions.
+A plain-English walkthrough of how the system works and why each step is built the way it is. This document sits between the engineering-focused `CLAUDE.md` (what to do when writing code) and the comprehensive `MND_PROJECT_SPEC.md` (full project specification). It is the canonical reference for "how does this project actually work?" — useful for collaborators, reviewers, and future development sessions.
 
 The methodology is designed to be **defensible without relying on researcher judgment**. Every parameter is either a published library default, a citation from primary literature, or removed because no field-accepted anchor existed. There are no sensitivity sweeps. There are no hand-tuned thresholds. This is a stated design constraint, not an aspiration — see "Methodological principles" at the bottom.
 
@@ -70,7 +70,7 @@ The filter stage does exactly two things:
 
 **No topical keyword filter is applied.** The basis-set source selection (Stage 1) is the only macro-scope constraint at ingest time. Topical relevance is decided post-clustering by a JEL-classifier step (Stage 5b below), applied symmetrically across sources using the AEA's published JEL taxonomy.
 
-**Why no keyword filter at this stage.** The previous design (ADR-015 → 016 → 018) used a 213-keyword JEL-anchored gate to determine macro relevance over title + body. That design had two problems. First, every basis-set source's institutional mandate is already in macro scope by construction, so the keyword gate was a second filter applied on top of the source filter — double-filtering. Second, mapping JEL categories to specific keywords required researcher judgment about which keywords represent each code — exactly the kind of judgment that's hard to defend in pre-registration. ADR-020 dropped the apparatus and shifted JEL classification post-clustering, where the cluster level provides enough content to apply a published taxonomy without intermediate keyword choices.
+**Why no keyword filter at this stage.** The previous design (ADR-015 → 016 → 018) used a 213-keyword JEL-anchored gate to determine macro relevance over title + body. That design had two problems. First, every basis-set source's institutional mandate is already in macro scope by construction, so the keyword gate was a second filter applied on top of the source filter — double-filtering. Second, mapping JEL categories to specific keywords required researcher judgment about which keywords represent each code — exactly the kind of judgment that's hard to defend without a field-standard anchor. ADR-020 dropped the apparatus and shifted JEL classification post-clustering, where the cluster level provides enough content to apply a published taxonomy without intermediate keyword choices.
 
 The pre-reg sentence becomes: *"No pre-clustering topical filter is applied. The basis-set source selection is the only macro-scope constraint at ingest. Topic relevance is decided post-clustering by assigning each BERTopic cluster a primary JEL code from the AEA's published taxonomy, applied symmetrically across sources."*
 
@@ -248,7 +248,7 @@ These are the standing rules that govern every methodology choice. Adopted to ma
 
 3. **No pass/fail kill criteria with arbitrary thresholds.** Quantities (anchor recovery rate, NMI, R², R₀ confidence width) are reported, not gated. Reviewers can apply their own thresholds.
 
-4. **No two-stage filters.** Topic relevance is decided in exactly one place — Stage 2's keyword filter — over the article's title plus body. Per-source pre-fetch filters were removed because they were researcher-curated and asymmetric across sources.
+4. **No pre-clustering topic filter (ADR-020).** Topic relevance is decided in exactly one place — the post-clustering JEL classifier (`jel_classifier.py`), which assigns each cluster to its nearest AEA JEL prototype and drops clusters outside {E,F,G,H} from *dynamics only*. The only ingest-time filters are the 2010-present window and URL/content dedup; per-source keyword/title gates were removed because they were researcher-curated and asymmetric across sources.
 
 5. **No hierarchy tiers.** One granularity, BERTopic default output. Multi-tier merging was researcher-introduced structure.
 
@@ -257,6 +257,10 @@ These are the standing rules that govern every methodology choice. Adopted to ma
 7. **Field-standard taxonomies over researcher-curated lists.** The JEL Classification System anchors the filter. The BEIR convention anchors the chunk size. The BERTopic library defaults anchor the clustering.
 
 8. **Anchored or removed applies to abandoned pieces too.** Source ingestors, code paths, config blocks, and architectural pieces that have been abandoned are deleted from the active pipeline, not left commented out.
+
+9. **No formal pre-registration; no train/test split (ADR-040).** Credibility rests entirely on principles 1–8 above — every parameter field-anchored, nothing hand-tuned (especially never toward anchor recovery). With zero tuning there is no fitted-on-train quantity a held-out boundary could catch overfitting on, so the pipeline runs over the full 2010-present corpus with no 2010-2019/2020+ split, and there is no registered analysis plan (no OSF, no locked timestamp). The project stays paper-writeable — tied to respected methods and citations — without that apparatus.
+
+10. **Dynamics are shown as four complementary lenses, not a single selected model (ADR-039).** Every in-scope cluster is fit by logistic (Verhulst 1838), SIR (Kermack & McKendrick 1927), and Bass diffusion (Bass 1969), plus model-free shape-facts; all four are reported side by side, each framed as the plain-language question it answers. AICc is a displayed diagnostic, never a selection gate. Stage classification keys off the SIR R₀ posterior.
 
 ---
 
@@ -274,7 +278,7 @@ These are the standing rules that govern every methodology choice. Adopted to ma
 
 ## 9. Phase structure
 
-The project runs through seven phases. We are currently in Phase 2 (corpus ingestion and lock-in) heading into Phase 4 (pre-registration finalization).
+The project runs through seven phases. We are currently in Phase 2 (corpus ingestion and lock-in) heading into Phase 4 (full-corpus anchor validation).
 
 | Phase | What happens | Status |
 |---|---|---|
@@ -282,7 +286,7 @@ The project runs through seven phases. We are currently in Phase 2 (corpus inges
 | 1 | Filtering, clustering, dynamics, validation pilot | Complete |
 | 2 | Full corpus ingestion, methodology lock-in | In progress |
 | 3 | Embedding + clustering at corpus scale | Initial run complete; re-run with locked methodology pending |
-| 4 | Pre-registration finalized, full anchor validation | Blocked on Phase 2/3 completion |
+| 4 | Full-corpus anchor + fizzled validation (reported, not gated) | Blocked on Phase 2/3 completion |
 | 5 | Streamlit dashboard, public deploy | Blocked on Phase 4 |
 | 6 | Weekly cron update pipeline | Blocked on Phase 5 |
 | 7 | Technical report, reproducibility audit | Final |

@@ -108,7 +108,6 @@ scripts/
   run_pipeline.py        CLI dispatching every stage
   preflight_check.py     Pre-flight environment validator
   rcc/                   SLURM job scripts for UChicago Midway3
-prereg/                Pre-registration document
 docs/                  Architecture decisions, methodology, project plan PDF
 tests/                 pytest suite
 ```
@@ -161,8 +160,10 @@ every ingest job:
 - Random seeds pinned in `config/config.yaml`.
 - All configuration changes require a documented ADR in
   `docs/architecture_decisions.md`.
-- `prereg/PREREGISTRATION.md` is committed to a public timestamp before any
-  held-out (2020+) validation run.
+- Credibility rests on field-anchored parameters + zero hand-tuning (ADR-019,
+  ADR-040), not a registered analysis plan. There is no train/test split and no
+  formal pre-registration; anchor recovery is reported as a diagnostic, never gated
+  or tuned toward.
 
 ## License
 
