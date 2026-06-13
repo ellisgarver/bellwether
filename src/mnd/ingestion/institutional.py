@@ -96,16 +96,22 @@ _HEADERS = {"User-Agent": USER_AGENT}
 
 
 class _WaybackBanned(RuntimeError):
-    """Sustained HTTP 429 from Internet Archive replay — a ban, not a blip.
+    """Sustained *live* HTTP 429 from Internet Archive replay — a ban, not a blip.
 
-    IA's replay throttle is a *cumulative request-count* cap on the egress IP,
-    not a burst limiter: once tripped it stays tripped for the rest of the job
-    regardless of pacing (observed 2026-06-09: the CBO walk dies at the same pid
-    after ~172 fetches whether spaced 0.3s or 12s, and re-firing escalates the
-    ban). Riding it out inside one run is therefore futile and only deepens the
-    flag. The CBO fetch loop catches this to PAUSE cleanly — bank the checkpoint
-    and exit 0 — so a later run from a fresh egress IP or after a cooldown
-    resumes from where it stopped instead of crashing and re-paying from zero.
+    Defensive: raised only when _wayback_get exhausts its patient cooldown budget
+    on IA's own 429 (no x-archive-orig-* headers). The CBO fetch loop catches it
+    to PAUSE cleanly — bank the checkpoint, exit 0 — so a later run resumes rather
+    than crashing and re-paying from zero.
+
+    History correction (2026-06-13): the 2026-06-09 observation that "the walk
+    dies at the same pid after ~172 fetches whether spaced 0.3s or 12s" was
+    originally read as a cumulative request-count ban — but dying at the SAME pid
+    regardless of pacing is the signature of a frozen archived-429 block page at
+    that pid (pub/41672), now skipped via the x-archive-orig-* path, not a rate
+    ban. A rate probe over the replay endpoint saw ZERO live 429s at any pace;
+    its real throttle is TCP connection refusal under burst, handled by
+    _wayback_get's network-error retry. This exception remains as correct
+    defense should IA ever issue a genuine sustained live 429.
     """
 
 
@@ -2698,16 +2704,23 @@ class CBOIngestor(Ingestor):
     # full sitemap and let the post-fetch page-date gate decide membership.
     _SITEMAP_INDEX = "https://www.cbo.gov/sitemap.xml"
 
-    # Seconds to sleep between per-publication Wayback fetches. Set to IA's
-    # MEASURED sustained-safe replay rate (~1 req/9-12s; probed 2026-06-09).
-    # This is the load-bearing knob: IA's replay throttle is a count-in-window
-    # ban (~15-30 fast requests → block), and hammering through each cooldown
-    # makes the bans ESCALATE until one exceeds the _wayback_get retry budget
-    # (this is why three 0.3s-paced runs all died at pub/41672, ~170 pids in).
-    # Pacing at the safe rate keeps the rolling-window count under the threshold
-    # so the ban never trips; the walk then runs to its 36h walltime and the
-    # checkpoint carries the ~45h remainder into a second job (ADR-023 resume).
-    _REQUEST_SPACING_S = 12.0
+    # Seconds to sleep between per-publication Wayback fetches. The load-bearing
+    # knob, re-measured 2026-06-13 after the prior 12s figure proved to rest on
+    # a misdiagnosis: IA does NOT 429-rate-ban this replay endpoint. A paced
+    # probe (escalating 3s→1.5s→0.75s→0.3s over real snapshots) saw ZERO 429s at
+    # any rate; the throttle is TCP-level — IA's single edge IP starts
+    # REFUSING/RESETTING connections under burst (and stays in a refuse-all
+    # "recovery" state once crossed). Measured boundary: 3s clean (12/12), 1.5s
+    # stressed (4/12 connection resets), ≤0.75s a total wall. The old 12s was
+    # calibrated against three 0.3s runs that all died at the SAME pid (41672) —
+    # the signature of a frozen archived-429 block page (now skipped via the
+    # x-archive-orig-* path in _wayback_get), not a rate ban.
+    #
+    # Set to 3s: the fastest empirically-clean tier, ~2x margin above the 1.5s
+    # stress onset. ~4x faster than 12s → the full ~25k-pid walk lands ~26h, a
+    # single 36h job. _wayback_get's retry/backoff absorbs the occasional reset;
+    # a sustained-stress spill is covered by the ADR-023 checkpoint resume.
+    _REQUEST_SPACING_S = 3.0
 
     _PUBLICATION_RE = re.compile(r"/publication/(\d+)\b")
 
@@ -3254,16 +3267,17 @@ class CBOIngestor(Ingestor):
           soundness rule — the fail-loud body classification in
           ``_fetch_page_full`` is only sound if one blip can't trip it).
 
-        - **429** = IA's replay throttle, a *rolling-window request count* ban
-          (~15-30 fast requests trips it; see ``_REQUEST_SPACING_S``). At the
-          12s sustained pace this should never trip on a clean egress IP — but
-          if IA hiccups we ride it out PATIENTLY rather than give up: honor
+        - **429** = a (rare) live IA replay throttle. Note (2026-06-13 probe):
+          this replay endpoint does NOT in practice 429 at any pace — its real
+          throttle is TCP connection refusal under burst (the 5xx/network branch
+          above), and the ``_REQUEST_SPACING_S`` pace is set below that refusal
+          onset. This branch is kept as correct defense should IA ever issue a
+          genuine live 429: we ride it out PATIENTLY rather than give up — honor
           ``Retry-After`` (IA names its own cooldown) over up to ``ban_cooldowns``
           multi-minute waits and CONTINUE the same request once the window
           clears. Patient cooldowns are what IA asks for and do NOT escalate the
-          ban — only the prior *rapid* 10-attempt hammer did (2026-06-09: three
-          0.3s runs escalated an IP into a hard ban). Only after the full
-          patience budget is exhausted — a genuine hard ban needing a human
+          throttle. Only after the full patience budget is exhausted — a genuine
+          sustained live ban needing a human
           (fresh IP / long cooldown) — do we raise ``_WaybackBanned``, which the
           fetch loop catches to pause-and-resume (bank the checkpoint, exit
           clean) rather than crash. Genuine 4xx (404/403/410) returns for the
