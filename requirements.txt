@@ -54,9 +54,11 @@ beautifulsoup4==4.12.3
 lxml==5.3.0
 lxml_html_clean==0.4.1    # Required by trafilatura/justext with lxml>=5.0 (lxml.html.clean split out)
 tenacity==9.0.0           # Retry logic for flaky scraping
+mediacloud==5.1.0         # Press-volume overlay (ADR-042); Online News Archive SearchApi. Display/validation only — never feeds clustering
 
-# Layer 1B journalism dynamics is now Media Cloud Premium (ADR-016).
-# The prior RavenPack-via-WRDS plan was abandoned; no WRDS dependencies needed.
+# Media Cloud press volume is a display/validation overlay (ADR-042), not an
+# embedded source. The prior RavenPack-via-WRDS plan was abandoned (ADR-016);
+# no WRDS dependencies needed.
 
 # Dashboard -----------------------------------------------------------------
 streamlit==1.39.0
