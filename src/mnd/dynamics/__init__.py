@@ -3,8 +3,11 @@
 from mnd.dynamics.fitting import ClusterDynamics, DynamicsFitter, FitResult
 from mnd.dynamics.models import (
     aicc,
+    bass,
+    bass_peak_time,
     logistic,
     logistic_r0,
+    shape_facts,
     sir_prevalence,
     sir_r0,
 )
@@ -18,6 +21,9 @@ __all__ = [
     "ClusterDynamics",
     "logistic",
     "sir_prevalence",
+    "bass",
+    "bass_peak_time",
+    "shape_facts",
     "logistic_r0",
     "sir_r0",
     "aicc",

@@ -115,9 +115,13 @@ dynamics:
                                    # Natural weekly cycle for daily count data
                                    # (Shumway & Stoffer). Source-stratified
                                    # smoothing removed by ADR-019.
+  # Four lenses shown side by side, NOT selected by AICc (ADR-039). shape-facts
+  # is model-free (no entry here -- always computed). Staging keys off SIR R_0,
+  # logistic as fallback (ADR-002).
   models_to_fit:
-    - "sir"                        # Kermack & McKendrick 1927
-    - "logistic"                   # Verhulst 1838
+    - "sir"                        # Kermack & McKendrick 1927 — "contagious? burn out?"
+    - "logistic"                   # Verhulst 1838 — "how fast / where level off?"
+    - "bass"                       # Bass 1969 — "external shock vs word-of-mouth?"
   inference:
     framework: "pymc"
     draws: 2000
@@ -140,6 +144,15 @@ dynamics:
       L_log_sd: 2.0
       k_mean: 0.2
       k_sd: 0.1
+    bass:
+      # Anchored to Sultan, Farley & Lehmann 1990 meta-analysis of 213 Bass
+      # applications: mean p (innovation) ~= 0.03, mean q (imitation) ~= 0.38.
+      # LogNormal keeps p, q strictly positive as the Bass model requires.
+      p_log_mean: -3.5             # log(0.03) ~= -3.5; coefficient of innovation
+      p_log_sd: 1.0
+      q_log_mean: -0.97            # log(0.38) ~= -0.97; coefficient of imitation
+      q_log_sd: 0.5
+      m_log_sd: 2.0                # market potential; centered on observed total volume in code
   # min_r_squared and max_r0_ci_width kill criteria removed by ADR-019.
   # R^2 and R_0 credible interval width are reported as diagnostics, not gated.
 
