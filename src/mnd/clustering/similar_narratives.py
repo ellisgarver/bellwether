@@ -63,6 +63,31 @@ def semantic_similarity(
     return out
 
 
+def semantic_similarity_weighted(
+    cluster_ids: list[int | str],
+    centroids: np.ndarray,
+    top_k: int = DEFAULT_TOP_K,
+) -> dict[int | str, list[tuple[int | str, float]]]:
+    """Top-k semantic neighbors with their cosine weights, for the map graph (ADR-044).
+
+    Same cosine-on-centroids measure as ``semantic_similarity`` but returns
+    ``(neighbor_cluster_id, weight)`` pairs (weight = cosine similarity in
+    [-1, 1]) so the narrative map can draw and shade edges. Self-pairs excluded.
+    """
+    if len(cluster_ids) != centroids.shape[0]:
+        raise ValueError("cluster_ids length must equal centroids.shape[0]")
+    norms = np.linalg.norm(centroids, axis=1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)
+    normed = centroids / norms
+    sims = normed @ normed.T
+
+    out: dict[int | str, list[tuple[int | str, float]]] = {}
+    for i, cid in enumerate(cluster_ids):
+        idxs = _topk_indices(sims[i], top_k, self_idx=i)
+        out[cid] = [(cluster_ids[j], float(sims[i, j])) for j in idxs]
+    return out
+
+
 def lexical_similarity(
     cluster_ids: list[int | str],
     top_terms: dict[int | str, Iterable[str]],

@@ -60,6 +60,7 @@ class FitResult:
     peak_time_ci_low: float | None = None
     peak_time_ci_high: float | None = None
     param_summary: dict[str, Any] = field(default_factory=dict)
+    curve: list[float] | None = None   # model prediction on the fit's daily grid (ADR-039)
     failure_reason: str | None = None
 
 
@@ -69,7 +70,8 @@ class ClusterDynamics:
     staging_fit: FitResult        # the fit staging keys off (SIR, else logistic)
     all_fits: list[FitResult] = field(default_factory=list)  # the fitted lenses
     shape_facts: dict[str, float] = field(default_factory=dict)
-    time_series: pd.Series | None = None
+    time_series: pd.Series | None = None    # smoothed daily series the fits were trained on
+    raw_series: pd.Series | None = None     # observed (unsmoothed) daily volume, same index
 
 
 class DynamicsFitter:
@@ -127,6 +129,7 @@ class DynamicsFitter:
             all_fits=all_fits,
             shape_facts=facts,
             time_series=smoothed,
+            raw_series=daily_counts,
         )
 
     @staticmethod
@@ -222,7 +225,8 @@ class DynamicsFitter:
         k_hi = float(summary.loc["k", "hdi_97%"])
         L_mean = float(summary.loc["L", "mean"])
         t0_mean = float(summary.loc["t0", "mean"])
-        ll = _gaussian_loglik(y, logistic(t, L_mean, k_mean, t0_mean))
+        curve = logistic(t, L_mean, k_mean, t0_mean)
+        ll = _gaussian_loglik(y, curve)
 
         return FitResult(
             cluster_id=cluster_id,
@@ -236,6 +240,7 @@ class DynamicsFitter:
             peak_time_ci_low=float(summary.loc["t0", "hdi_3%"]),
             peak_time_ci_high=float(summary.loc["t0", "hdi_97%"]),
             param_summary=summary.to_dict(),
+            curve=[float(v) for v in curve],
         )
 
     # ------------------------------------------------------------------
@@ -303,6 +308,7 @@ class DynamicsFitter:
             r0_ci_high=sir_r0(beta_hi, max(gamma_lo, 1e-6)),
             peak_time_mean=peak,
             param_summary={**summary_bg.to_dict(), **summary_I0.to_dict()},
+            curve=[float(v) for v in y_hat],
         )
 
     # ------------------------------------------------------------------
@@ -356,6 +362,7 @@ class DynamicsFitter:
                 "q_imitation": q_mean,
                 "external_vs_internal": p_mean / max(q_mean, 1e-9),
             },
+            curve=[float(v) for v in y_hat],
         )
 
     # ------------------------------------------------------------------

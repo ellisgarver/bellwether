@@ -159,7 +159,9 @@ class IndexEntry:
     in_scope: bool = True
     jel_code: str | None = None
     is_emerging: bool = False                    # 4-week recency flag (ADR-019)
-    umap_xy: tuple[float, float] | None = None   # 2-D display projection (reserved)
+    umap_xy: tuple[float, float] | None = None   # 2-D display projection (ADR-044)
+    similar_edges: list[tuple[int, float]] = field(default_factory=list)
+    # semantic top-k neighbors for the map graph: (neighbor_cluster_id, weight) (ADR-044)
 
 
 @dataclass
