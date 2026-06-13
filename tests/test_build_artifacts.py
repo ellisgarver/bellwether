@@ -110,6 +110,13 @@ def _centroids() -> tuple[list[int], np.ndarray]:
     return [0, 1], np.array([[1.0, 0.0], [0.6, 0.8]], dtype=float)
 
 
+def _similar() -> dict[int, dict[str, list[int]]]:
+    return {
+        0: {"semantic": [1], "lexical": [1], "morphological": []},
+        1: {"semantic": [0], "lexical": [], "morphological": [0]},
+    }
+
+
 def _build(**overrides):
     ids, cents = _centroids()
     kwargs = dict(
@@ -118,6 +125,7 @@ def _build(**overrides):
         stages=_stages(),
         topic_info=_topic_info(),
         jel=_jel(),
+        similar=_similar(),
         ordered_cluster_ids=ids,
         centroids=cents,
         umap_xy={0: (0.1, 0.2), 1: (0.9, -0.3)},
@@ -185,6 +193,29 @@ class TestBuild:
         assert n0.jel is not None and n0.jel.code == "E" and n0.jel.in_scope
         e0 = next(e for e in index.narratives if e.cluster_id == 0)
         assert e0.jel_code == "E" and e0.in_scope is True
+
+    def test_similar_panel_all_three_measures(self):
+        _, narratives = _build()
+        n0 = next(n for n in narratives if n.cluster_id == 0)
+        assert n0.similar is not None
+        assert n0.similar.semantic == [1]
+        assert n0.similar.lexical == [1]
+        assert n0.similar.morphological == []
+        n1 = next(n for n in narratives if n.cluster_id == 1)
+        assert n1.similar.morphological == [0]
+
+    def test_similar_panel_distinct_from_map_edges(self):
+        # Panel (NarrativeArtifact.similar) carries 3 measures; map edges
+        # (IndexEntry.similar_edges) carry semantic-only weighted pairs.
+        index, narratives = _build()
+        n0 = next(n for n in narratives if n.cluster_id == 0)
+        e0 = next(e for e in index.narratives if e.cluster_id == 0)
+        assert hasattr(n0.similar, "lexical")          # reading panel
+        assert e0.similar_edges == [(1, pytest.approx(0.6, abs=1e-9))]  # graph edges
+
+    def test_similar_panel_none_when_absent(self):
+        _, narratives = _build(similar=None)
+        assert all(n.similar is None for n in narratives)
 
     def test_umap_passthrough(self):
         index, _ = _build()

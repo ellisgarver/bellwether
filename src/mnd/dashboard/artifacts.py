@@ -30,9 +30,9 @@ Design rules baked into the contract:
 * **Overlays are display/validation only** (ADR-041/042), surfaced as opt-in
   toggles in the UI. They carry their own "timing not cause" / pre-2017 captions
   so they can never render uncaptioned.
-* **Nullable by design.** ``jel``, ``mediacloud``, ``markets`` and ``umap_xy``
-  are ``None`` when unavailable; the builder degrades gracefully rather than
-  omitting keys, so the front end can rely on the shape.
+* **Nullable by design.** ``jel``, ``similar``, ``mediacloud``, ``markets`` and
+  ``umap_xy`` are ``None`` when unavailable; the builder degrades gracefully rather
+  than omitting keys, so the front end can rely on the shape.
 
 Bump ``SCHEMA_VERSION`` on any breaking change; the front end should refuse a
 mismatched major version rather than mis-render.
@@ -89,6 +89,21 @@ class JELArtifact:
 
 
 @dataclass
+class SimilarNarratives:
+    """Top-k related narratives by the three ADR-019 §H measures (narrative page).
+
+    Each list is neighbor ``cluster_id``s in descending similarity. Distinct from
+    the map's ``IndexEntry.similar_edges`` (semantic-only, weighted): this is the
+    per-narrative "related narratives" reading panel showing all three measures.
+    The front end resolves ids → labels via ``index.json``.
+    """
+
+    semantic: list[int] = field(default_factory=list)
+    lexical: list[int] = field(default_factory=list)
+    morphological: list[int] = field(default_factory=list)
+
+
+@dataclass
 class MediaCloudArtifact:
     """Broad-press story-count overlay (ADR-042) — display/validation only."""
 
@@ -129,6 +144,7 @@ class NarrativeArtifact:
     shape_facts: dict[str, float]                # model-free (ADR-039)
     stage_detail: dict[str, Any]
     jel: JELArtifact | None = None
+    similar: SimilarNarratives | None = None    # ADR-019 §H panel (ADR-044)
     mediacloud: MediaCloudArtifact | None = None
     markets: MarketsArtifact | None = None
     schema_version: str = SCHEMA_VERSION
