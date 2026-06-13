@@ -28,6 +28,21 @@ logging.basicConfig(
     format="%(levelname)-7s | %(name)s | %(message)s",
 )
 
+
+class _Capture(logging.Handler):
+    """Buffer mnd.* log records so each pid's drop reason can be shown inline."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.msgs: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.msgs.append(record.getMessage())
+
+
+_CAP = _Capture()
+logging.getLogger("mnd").addHandler(_CAP)
+
 CKPT = Path(
     sys.argv[1] if len(sys.argv) > 1
     else "data/raw/articles/.cbo_2010-01-01_2026-06-11_checkpoint.txt"
@@ -67,11 +82,14 @@ def main() -> None:
     rows: list[str] = []
     for band, pid in sample:
         earliest_ts, latest_ts = cdx[pid]
+        mark = len(_CAP.msgs)
         try:
             art = ing._fetch_and_build(pid, earliest_ts, latest_ts, START, END)
         except Exception as exc:  # _WaybackBanned or fail-loud 5xx
             rows.append(f"  [{band}] pub/{pid}: RAISED {type(exc).__name__}: {exc}")
             break
+        # Reason = the log lines this call emitted that name this pid.
+        why = "; ".join(m for m in _CAP.msgs[mark:] if f"pub/{pid}" in m) or "(no log)"
         if art is not None:
             kept += 1
             rows.append(
@@ -79,7 +97,7 @@ def main() -> None:
                 f"words={len(art.body.split())}  title={art.title[:50]!r}"
             )
         else:
-            rows.append(f"  [{band}] pub/{pid}: dropped (see DEBUG line above)")
+            rows.append(f"  [{band}] pub/{pid}: dropped — {why}")
 
     print("\n===== PROBE RESULTS =====")
     for r in rows:
