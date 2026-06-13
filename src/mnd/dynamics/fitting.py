@@ -1,17 +1,23 @@
-"""Bayesian dynamics fitting with PyMC (ADR-019).
+"""Bayesian dynamics fitting with PyMC (ADR-019, ADR-039).
 
-Fits the two configured models (logistic, SIR) to a cluster's daily
-article-count series and selects the best by AICc, preferring logistic at
-ties (ADR-002).
+Fits every configured lens (logistic, SIR, Bass) to a cluster's daily
+article-count series and returns them all side by side -- ADR-039 removed the
+AICc best-of-N selection gate; AICc is retained only as a displayed diagnostic
+on each FitResult. Model-free shape-facts are computed alongside.
+
+Stage classification still needs a single R_0: it keys off the SIR fit, falling
+back to the logistic fit when SIR did not converge (ADR-002 keeps logistic as
+the SIR fallback). Bass has no R_0 (its headline is the innovation/imitation
+balance), so it never drives staging.
 
 SIR model: uses a pytensor.scan discrete-time Euler loop so the ODE is
 differentiable through PyMC's NUTS sampler without an external ODE solver.
 
 Graceful failure: convergence failures (low ESS, high R-hat, exceptions) are
-recorded in FitResult.failure_reason; the pipeline continues. AICc = inf for
-failed fits so they never win selection. The prior min_r_squared and
-max_r0_ci_width kill-criterion thresholds were removed by ADR-019 -- R^2 and
-R_0 credible-interval width are reported as diagnostics, not gated.
+recorded in FitResult.failure_reason; the pipeline continues. The prior
+min_r_squared and max_r0_ci_width kill-criterion thresholds were removed by
+ADR-019 -- R^2 and R_0 credible-interval width are reported as diagnostics,
+not gated.
 
 Configuration: config.dynamics.{inference, priors, models_to_fit}.
 """
@@ -26,8 +32,11 @@ import pandas as pd
 
 from mnd.dynamics.models import (
     aicc,
+    bass,
+    bass_peak_time,
     logistic,
     logistic_r0,
+    shape_facts,
     sir_peak_time,
     sir_prevalence,
     sir_r0,
@@ -36,8 +45,6 @@ from mnd.utils.config import load_config
 from mnd.utils.logging import get_logger
 
 log = get_logger(__name__)
-
-_PREFERRED_ORDER = ["logistic", "sir"]
 
 
 @dataclass
@@ -59,9 +66,9 @@ class FitResult:
 @dataclass
 class ClusterDynamics:
     cluster_id: int | str
-    best_model: str
-    best_fit: FitResult
-    all_fits: list[FitResult] = field(default_factory=list)
+    staging_fit: FitResult        # the fit staging keys off (SIR, else logistic)
+    all_fits: list[FitResult] = field(default_factory=list)  # the fitted lenses
+    shape_facts: dict[str, float] = field(default_factory=dict)
     time_series: pd.Series | None = None
 
 
@@ -92,7 +99,7 @@ class DynamicsFitter:
     def fit_cluster(
         self, cluster_id: int | str, daily_counts: pd.Series
     ) -> ClusterDynamics:
-        """Fit all configured models; return best by AICc."""
+        """Fit every configured lens; return all side by side (ADR-039)."""
         smoothed = self.smooth_series(daily_counts)
         t = np.arange(len(smoothed), dtype=float)
         y = smoothed.values.astype(float)
@@ -103,32 +110,52 @@ class DynamicsFitter:
             fit = self._fit_model(cluster_id, model_name, t, y)
             all_fits.append(fit)
 
-        converged = [f for f in all_fits if f.converged]
-        pool = converged if converged else all_fits
-        best = min(
-            pool,
-            key=lambda f: (
-                f.aicc,
-                _PREFERRED_ORDER.index(f.model_name)
-                if f.model_name in _PREFERRED_ORDER
-                else 99,
-            ),
-        )
+        staging = self._select_staging_fit(cluster_id, all_fits)
+        facts = shape_facts(t, y)
 
         log.info(
-            "Cluster %s best: %s (AICc=%.1f, R0=%s, converged=%s)",
+            "Cluster %s staging: %s (R0=%s, converged=%s); waves=%s",
             cluster_id,
-            best.model_name,
-            best.aicc,
-            f"{best.r0_mean:.2f}" if best.r0_mean is not None else "n/a",
-            best.converged,
+            staging.model_name,
+            f"{staging.r0_mean:.2f}" if staging.r0_mean is not None else "n/a",
+            staging.converged,
+            facts.get("wave_count"),
         )
         return ClusterDynamics(
             cluster_id=cluster_id,
-            best_model=best.model_name,
-            best_fit=best,
+            staging_fit=staging,
             all_fits=all_fits,
+            shape_facts=facts,
             time_series=smoothed,
+        )
+
+    @staticmethod
+    def _select_staging_fit(
+        cluster_id: int | str, all_fits: list[FitResult]
+    ) -> FitResult:
+        """SIR R_0 drives staging; fall back to logistic when SIR fails (ADR-002).
+
+        Bass carries no R_0 and never stages. If neither SIR nor logistic was
+        fit/converged, return SIR (or any fit) so the cluster lands 'dormant'.
+        """
+        by_name = {f.model_name: f for f in all_fits}
+        sir_fit = by_name.get("sir")
+        log_fit = by_name.get("logistic")
+        if sir_fit is not None and sir_fit.converged:
+            return sir_fit
+        if log_fit is not None and log_fit.converged:
+            return log_fit
+        if sir_fit is not None:
+            return sir_fit
+        if log_fit is not None:
+            return log_fit
+        if all_fits:
+            return all_fits[0]
+        return FitResult(
+            cluster_id=cluster_id,
+            model_name="none",
+            converged=False,
+            failure_reason="no models configured",
         )
 
     # ------------------------------------------------------------------
@@ -143,6 +170,8 @@ class DynamicsFitter:
                 return self._fit_logistic(cluster_id, t, y)
             if model_name == "sir":
                 return self._fit_sir(cluster_id, t, y)
+            if model_name == "bass":
+                return self._fit_bass(cluster_id, t, y)
             return FitResult(
                 cluster_id=cluster_id,
                 model_name=model_name,
@@ -274,6 +303,59 @@ class DynamicsFitter:
             r0_ci_high=sir_r0(beta_hi, max(gamma_lo, 1e-6)),
             peak_time_mean=peak,
             param_summary={**summary_bg.to_dict(), **summary_I0.to_dict()},
+        )
+
+    # ------------------------------------------------------------------
+    # Bass diffusion (Bass 1969) — closed form, no ODE solver needed
+    # ------------------------------------------------------------------
+
+    def _fit_bass(
+        self, cluster_id: int | str, t: np.ndarray, y: np.ndarray
+    ) -> FitResult:
+        import pymc as pm
+
+        priors = self._cfg["dynamics"]["priors"]["bass"]
+        inf_cfg = self._cfg["dynamics"]["inference"]
+        m_guess = max(float(y.sum()), 1.0)
+
+        with pm.Model():
+            m = pm.LogNormal(
+                "m", mu=float(np.log(m_guess)), sigma=priors["m_log_sd"]
+            )
+            p = pm.LogNormal("p", mu=priors["p_log_mean"], sigma=priors["p_log_sd"])
+            q = pm.LogNormal("q", mu=priors["q_log_mean"], sigma=priors["q_log_sd"])
+            sigma = pm.HalfNormal("sigma", sigma=float(y.std() + 1.0))
+
+            s = p + q
+            e = pm.math.exp(-s * t)
+            mu = m * (s**2 / p) * e / (1.0 + (q / p) * e) ** 2
+            pm.Normal("obs", mu=mu, sigma=sigma, observed=y)
+            trace = self._sample(inf_cfg)
+
+        import arviz as az
+
+        summary = az.summary(trace, var_names=["m", "p", "q"], hdi_prob=0.94)
+        converged = _check_convergence(trace)
+        m_mean = float(summary.loc["m", "mean"])
+        p_mean = float(summary.loc["p", "mean"])
+        q_mean = float(summary.loc["q", "mean"])
+        y_hat = bass(t, m_mean, p_mean, q_mean)
+        ll = _gaussian_loglik(y, y_hat)
+
+        # Bass has no R_0; its headline is the innovation/imitation balance.
+        return FitResult(
+            cluster_id=cluster_id,
+            model_name="bass",
+            converged=converged,
+            aicc=aicc(ll, k=3, n=len(y)),
+            r0_mean=None,
+            peak_time_mean=bass_peak_time(p_mean, q_mean),
+            param_summary={
+                **summary.to_dict(),
+                "p_innovation": p_mean,
+                "q_imitation": q_mean,
+                "external_vs_internal": p_mean / max(q_mean, 1e-9),
+            },
         )
 
     # ------------------------------------------------------------------

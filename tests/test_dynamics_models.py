@@ -6,8 +6,11 @@ import pytest
 
 from mnd.dynamics.models import (
     aicc,
+    bass,
+    bass_peak_time,
     logistic,
     logistic_r0,
+    shape_facts,
     sir_peak_time,
     sir_prevalence,
     sir_r0,
@@ -67,14 +70,100 @@ class TestSIR:
         assert pt > 0
 
 
+class TestBass:
+    def test_shape(self):
+        y = bass(T, m=1000.0, p=0.03, q=0.38)
+        assert y.shape == T.shape
+
+    def test_non_negative(self):
+        y = bass(T, m=1000.0, p=0.03, q=0.38)
+        assert (y >= 0).all()
+
+    def test_interior_peak_when_imitation_dominates(self):
+        # q > p → the adoption rate peaks at an interior point, not at t=0
+        y = bass(T, m=1000.0, p=0.03, q=0.38)
+        assert 0 < int(np.argmax(y)) < len(T) - 1
+
+    def test_peak_time_formula_when_q_gt_p(self):
+        p, q = 0.03, 0.38
+        expected = np.log(q / p) / (p + q)
+        assert bass_peak_time(p, q) == pytest.approx(expected)
+
+    def test_peak_time_zero_when_innovation_dominates(self):
+        # q <= p → monotonically decreasing, no interior peak
+        assert bass_peak_time(p=0.4, q=0.1) == 0.0
+
+    def test_peak_time_matches_curve_argmax(self):
+        p, q = 0.03, 0.38
+        t_dense = np.linspace(0, 120, 1201)
+        y = bass(t_dense, m=1000.0, p=p, q=q)
+        assert t_dense[int(np.argmax(y))] == pytest.approx(
+            bass_peak_time(p, q), abs=1.0
+        )
+
+
+class TestShapeFacts:
+    def test_keys_present(self):
+        facts = shape_facts(T, logistic(T, 100.0, 0.3, 30.0))
+        assert set(facts) == {
+            "total_volume",
+            "peak_height",
+            "time_to_peak",
+            "duration_above_half_peak",
+            "wave_count",
+        }
+
+    def test_total_volume_is_sum(self):
+        y = logistic(T, 100.0, 0.3, 30.0)
+        assert shape_facts(T, y)["total_volume"] == pytest.approx(float(y.sum()))
+
+    def test_single_hump_one_wave(self):
+        # A clean single bump → exactly one wave
+        y = bass(T, m=1000.0, p=0.03, q=0.38)
+        assert shape_facts(T, y)["wave_count"] == 1
+
+    def test_monotone_curve_one_wave(self):
+        # Rising logistic peaks at the boundary; find_peaks misses it but a single
+        # hump still counts as one wave.
+        y = logistic(T, 100.0, 0.3, 30.0)
+        f = shape_facts(T, y)
+        assert f["wave_count"] == 1
+        assert f["time_to_peak"] == pytest.approx(T[-1])
+
+    def test_two_humps_two_waves(self):
+        # Two well-separated equal bumps above half-max → two waves
+        y = (
+            bass(T, m=1000.0, p=0.05, q=0.5)
+            + bass(T - 35.0, m=1000.0, p=0.05, q=0.5) * (T >= 35.0)
+        )
+        assert shape_facts(T, y)["wave_count"] == 2
+
+    def test_flat_zero_curve(self):
+        f = shape_facts(T, np.zeros_like(T))
+        assert f["wave_count"] == 0
+        assert f["peak_height"] == 0.0
+        assert f["total_volume"] == 0.0
+
+    def test_empty_series(self):
+        f = shape_facts(np.array([]), np.array([]))
+        assert f["wave_count"] == 0
+        assert f["total_volume"] == 0.0
+
+
 class TestModelSurfaceAreaPostADR019:
-    """ADR-019 removed gompertz and exponential models."""
+    """ADR-019 removed gompertz and exponential; ADR-039 added bass + shape-facts."""
 
     def test_gompertz_removed(self):
         import mnd.dynamics.models as m
         assert not hasattr(m, "gompertz")
         assert not hasattr(m, "exponential")
         assert not hasattr(m, "exponential_r0")
+
+    def test_bass_and_shape_facts_present(self):
+        import mnd.dynamics.models as m
+        assert hasattr(m, "bass")
+        assert hasattr(m, "bass_peak_time")
+        assert hasattr(m, "shape_facts")
 
 
 class TestAICc:

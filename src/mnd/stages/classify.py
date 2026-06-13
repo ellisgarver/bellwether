@@ -89,7 +89,7 @@ def classify_all(
     if cfg is None:
         cfg = load_config()
     return [
-        classify_stage(cd.cluster_id, cd.best_fit, cd.time_series, cfg)
+        classify_stage(cd.cluster_id, cd.staging_fit, cd.time_series, cfg)
         for cd in cluster_dynamics_list
         if cd.time_series is not None
     ]
