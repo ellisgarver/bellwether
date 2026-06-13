@@ -41,6 +41,9 @@ class _Capture(logging.Handler):
 
 
 _CAP = _Capture()
+# mnd's logger pins itself to INFO (utils.logging._configure_root); force DEBUG
+# so _fetch_and_build's per-drop debug lines actually reach the capture handler.
+logging.getLogger("mnd").setLevel(logging.DEBUG)
 logging.getLogger("mnd").addHandler(_CAP)
 
 CKPT = Path(
