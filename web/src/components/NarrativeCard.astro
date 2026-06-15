@@ -1,0 +1,54 @@
+---
+import StageBadge from "./StageBadge.astro";
+import { JEL_NAME, STAGE_COLOR, type IndexEntry } from "@lib/data";
+interface Props { entry: IndexEntry; spark?: number[]; }
+const { entry, spark } = Astro.props;
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const span = entry.date_range ? `${entry.date_range[0]} → ${entry.date_range[1]}` : "";
+
+// build an inline SVG sparkline path from the (build-time) volume series
+const W = 132, H = 34, PAD = 2;
+let path = "";
+if (spark && spark.length > 1) {
+  const max = Math.max(1, ...spark);
+  const step = (W - PAD * 2) / (spark.length - 1);
+  path = spark
+    .map((v, i) => `${i === 0 ? "M" : "L"}${(PAD + i * step).toFixed(1)},${(H - PAD - (v / max) * (H - PAD * 2)).toFixed(1)}`)
+    .join(" ");
+}
+const col = STAGE_COLOR[entry.stage];
+---
+<a class="card" href={`${base}/narratives/${entry.cluster_id}`}>
+  <div class="card-main">
+    <h3>{entry.label}</h3>
+    <div class="meta">
+      {entry.n_articles} articles{span && <> · {span}</>}
+      {entry.jel_code && <> · <abbr title={JEL_NAME[entry.jel_code] ?? entry.jel_code}>JEL {entry.jel_code}</abbr></>}
+    </div>
+    <div class="terms">
+      {entry.top_terms.slice(0, 5).map((t) => <span class="term">{t}</span>)}
+    </div>
+  </div>
+  <div class="card-side">
+    {path && (
+      <svg class="spark" width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
+        <path d={path} fill="none" stroke={col} stroke-width="1.6"
+          stroke-linejoin="round" stroke-linecap="round" />
+      </svg>
+    )}
+    <div class="badges">
+      <StageBadge stage={entry.stage} emerging={entry.is_emerging} inScope={entry.in_scope} />
+    </div>
+  </div>
+</a>
+
+<style>
+  .card-main { min-width: 0; }
+  .card-side {
+    display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;
+  }
+  .spark { display: block; opacity: 0.9; }
+  /* tags sit in a single row beneath the sparkline so a second tag (emerging /
+     out-of-scope) widens the row instead of stacking and lengthening the cell. */
+  .badges { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
+</style>

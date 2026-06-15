@@ -1,0 +1,298 @@
+---
+import Base from "../../layouts/Base.astro";
+import StageBadge from "@components/StageBadge.astro";
+import { loadIndex, loadNarrative, labelMap, JEL_NAME } from "@lib/data";
+
+export function getStaticPaths() {
+  const index = loadIndex();
+  return index.narratives.map((e) => ({
+    params: { id: String(e.cluster_id) },
+    props: { entry: e },
+  }));
+}
+
+const { entry } = Astro.props;
+const n = loadNarrative(entry.cluster_id);
+const index = loadIndex();
+const labels = labelMap(index);
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+const fmt = (x: number | null, d = 2) =>
+  x === null || x === undefined ? "—" : x.toFixed(d);
+const sd = n.stage_detail || {};
+const facts = n.shape_facts || {};
+const factOrder: [string, string][] = [
+  ["total_volume", "total volume"],
+  ["peak_volume", "peak volume"],
+  ["time_to_peak_days", "time to peak (days)"],
+  ["active_days", "active days"],
+  ["wave_count", "wave count"],
+];
+const linkList = (ids: number[]) =>
+  ids.length
+    ? ids.map((id) => ({ id, label: labels[id] ?? `#${id}` }))
+    : null;
+
+const SERIES_LABEL: Record<string, string> = {
+  vix: "VIX",
+  "10y_yield": "10-year yield",
+  yield_spread: "yield spread (10y–2y)",
+};
+const fmtSeries = (s: string | null | undefined) =>
+  !s ? "market" : SERIES_LABEL[s] ?? s.replace(/_/g, " ");
+const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
+---
+
+<Base title={n.label} active="narratives">
+  <p class="back reveal"><a href={`${base}/narratives`}>← all narratives</a></p>
+  <h1 class="reveal">{n.label}</h1>
+  <p class="lede reveal" style="margin-bottom:0.4rem">
+    {n.card.n_articles} articles
+    {n.card.date_range && <> · {n.card.date_range[0]} → {n.card.date_range[1]}</>}
+    {n.jel && <> · <abbr title={JEL_NAME[n.jel.code] ?? n.jel.code}>JEL {n.jel.code}</abbr></>}
+    <span class="sep">|</span>
+    <StageBadge stage={n.stage} emerging={entry.is_emerging} inScope={n.jel?.in_scope ?? true} />
+  </p>
+
+  <!-- life-cycle chart -->
+  <section class="section reveal">
+    <p class="eyebrow">life-cycle</p>
+    <h2>how the volume rose and fell</h2>
+    <p class="caption">
+      bars are article volume adjusted for the size of the whole corpus that day, so
+      growth in coverage overall doesn't masquerade as a rising narrative; the line is
+      one fitted lens. switch lenses with the tabs — each reads the same curve a
+      different way.
+    </p>
+    <div class="lens-bar">
+      <div class="tabs" id="lens-tabs"></div>
+      {(n.mediacloud || n.markets) && (
+        <div class="toggle-row" id="overlay-toggles">
+          {n.mediacloud && (
+            <label class="toggle"><input type="checkbox" id="t-press" /> broad-press volume (Media Cloud)</label>
+          )}
+          {n.markets && (
+            <label class="toggle"><input type="checkbox" id="t-market" /> {mlabel} (markets)</label>
+          )}
+        </div>
+      )}
+    </div>
+    <div id="vol-chart" class="chart"></div>
+    {(n.mediacloud || n.markets) && (
+      <p class="caption" id="overlay-caption">
+        overlays are scaled to the bar axis — compare shape and timing, not height.
+      </p>
+    )}
+  </section>
+
+  <!-- stage + shape facts -->
+  <section class="section reveal">
+    <div class="cols-2">
+      <div>
+        <p class="eyebrow">where it sits now</p>
+        <h3>{n.stage}</h3>
+        <dl class="kv">
+          <dt>staging lens</dt><dd>{n.staging_model}</dd>
+          <dt>R₀ (mean)</dt><dd>{fmt(sd.r0_mean)}</dd>
+          <dt>R₀ 95% interval</dt><dd>{sd.r0_ci_low != null ? `${fmt(sd.r0_ci_low)} – ${fmt(sd.r0_ci_high)}` : "—"}</dd>
+          <dt>growth threshold</dt><dd>R₀ ≥ {fmt(sd.threshold, 1)}</dd>
+        </dl>
+        <p class="caption">
+          R₀ above 1 means the story was still spreading; below 1 it was fading.
+          the interval is how wide the estimate actually is.
+        </p>
+      </div>
+      <div>
+        <p class="eyebrow">shape facts</p>
+        <h3>read straight off the curve</h3>
+        <table class="facts">
+          {factOrder.filter(([k]) => k in facts).map(([k, lbl]) => (
+            <tr><td>{lbl}</td><td>{facts[k].toLocaleString(undefined, { maximumFractionDigits: 1 })}</td></tr>
+          ))}
+        </table>
+      </div>
+    </div>
+  </section>
+
+  {n.markets && (
+    <section class="section reveal">
+      <p class="eyebrow">markets</p>
+      <h2>did the discourse lead or lag {mlabel}?</h2>
+      <p class="note">{n.markets.granger.verdict}</p>
+      <dl class="kv" style="margin-top:0.8rem;max-width:38rem">
+        <dt>discourse → {mlabel}</dt>
+        <dd>{n.markets.granger.volume_leads_market?.significant ? "significant" : "not significant"}
+          {n.markets.granger.volume_leads_market && <> (p = {fmt(n.markets.granger.volume_leads_market.min_p, 3)}, lag {n.markets.granger.volume_leads_market.best_lag})</>}</dd>
+        <dt>{mlabel} → discourse</dt>
+        <dd>{n.markets.granger.market_leads_volume?.significant ? "significant" : "not significant"}
+          {n.markets.granger.market_leads_volume && <> (p = {fmt(n.markets.granger.market_leads_volume.min_p, 3)}, lag {n.markets.granger.market_leads_volume.best_lag})</>}</dd>
+      </dl>
+    </section>
+  )}
+
+  <!-- representative articles -->
+  <section class="section reveal">
+    <p class="eyebrow">in the corpus</p>
+    <h2>representative writing</h2>
+    <ul class="reps">
+      {n.card.representative_articles.map((a) => (
+        <li>
+          <a href={a.url} target="_blank" rel="noopener">{a.title}</a>
+          <div class="meta">{a.source} · {a.published_at}</div>
+          {a.excerpt && <p class="excerpt">{a.excerpt}</p>}
+        </li>
+      ))}
+    </ul>
+    {n.card.source_mix?.length > 0 && (
+      <p class="caption">sources: {n.card.source_mix.slice(0, 6).map(([s, c]) => `${s} (${c})`).join(", ")}</p>
+    )}
+  </section>
+
+  {n.similar && (n.similar.semantic.length + n.similar.lexical.length + n.similar.morphological.length > 0) && (
+    <section class="section reveal">
+      <p class="eyebrow">nearby</p>
+      <h2>related narratives</h2>
+      <dl class="kv related">
+        <dt>by meaning</dt>
+        <dd>{linkList(n.similar.semantic)
+          ? linkList(n.similar.semantic).map((x, i) => <>{i ? ", " : ""}<a href={`${base}/narratives/${x.id}`}>{x.label}</a></>)
+          : "—"}</dd>
+        <dt>by terms</dt>
+        <dd>{linkList(n.similar.lexical)
+          ? linkList(n.similar.lexical).map((x, i) => <>{i ? ", " : ""}<a href={`${base}/narratives/${x.id}`}>{x.label}</a></>)
+          : "—"}</dd>
+        <dt>by curve shape</dt>
+        <dd>{linkList(n.similar.morphological)
+          ? linkList(n.similar.morphological).map((x, i) => <>{i ? ", " : ""}<a href={`${base}/narratives/${x.id}`}>{x.label}</a></>)
+          : "—"}</dd>
+      </dl>
+    </section>
+  )}
+
+  <script id="narr-data" type="application/json" set:html={JSON.stringify(n)}></script>
+  <script>
+    import { Plotly, baseLayout, CHART_CONFIG, COL, seriesLabel } from "@lib/chart";
+    const n = JSON.parse(document.getElementById("narr-data").textContent);
+    const chartEl = document.getElementById("vol-chart");
+    const tabsEl = document.getElementById("lens-tabs");
+    const dates = n.volume.dates;
+    const vol = n.volume.values;
+    const maxVol = Math.max(1, ...vol);
+
+    function normalise(arr) {
+      const xs = arr.filter((v) => v != null && isFinite(v));
+      if (!xs.length) return arr.map(() => null);
+      const lo = Math.min(...xs), hi = Math.max(...xs);
+      const span = hi - lo || 1;
+      return arr.map((v) => (v == null || !isFinite(v) ? null : ((v - lo) / span) * maxVol));
+    }
+    function alignTo(grid, oDates, oVals) {
+      const m = new Map(oDates.map((d, i) => [d, oVals[i]]));
+      return grid.map((d) => (m.has(d) ? m.get(d) : null));
+    }
+
+    const fits = n.fits;
+    let activeFit = fits.findIndex((f) => f.model === n.staging_model);
+    if (activeFit < 0) activeFit = 0;
+
+    fits.forEach((f, i) => {
+      const b = document.createElement("button");
+      b.className = "tab" + (i === activeFit ? " active" : "");
+      b.textContent = f.model + (f.converged ? "" : " (no fit)");
+      b.disabled = !f.converged || !f.curve;
+      if (b.disabled) b.title = f.failure_reason || "fit did not converge";
+      b.addEventListener("click", () => {
+        activeFit = i; render();
+        [...tabsEl.children].forEach((c, j) => c.classList.toggle("active", j === i));
+      });
+      tabsEl.appendChild(b);
+    });
+
+    const pressEl = document.getElementById("t-press");
+    const marketEl = document.getElementById("t-market");
+    pressEl && pressEl.addEventListener("change", render);
+    marketEl && marketEl.addEventListener("change", render);
+    render();
+
+    function render() {
+      const traces = [
+        { x: dates, y: vol, type: "bar", name: "adjusted volume",
+          marker: { color: "rgba(47,75,124,0.22)" } },
+      ];
+      const f = fits[activeFit];
+      if (f && f.curve) {
+        traces.push({ x: dates, y: f.curve, type: "scatter", mode: "lines",
+          name: `${f.model} fit`, line: { color: COL.accent, width: 2.6 } });
+      }
+      if (pressEl && pressEl.checked && n.mediacloud) {
+        const aligned = alignTo(dates, n.mediacloud.dates, n.mediacloud.story_count);
+        traces.push({ x: dates, y: normalise(aligned), type: "scatter", mode: "lines",
+          name: "press (scaled)", connectgaps: true,
+          line: { color: COL.ember, width: 2, dash: "dot" } });
+      }
+      if (marketEl && marketEl.checked && n.markets) {
+        const aligned = alignTo(dates, n.markets.dates, n.markets.market);
+        traces.push({ x: dates, y: normalise(aligned), type: "scatter", mode: "lines",
+          name: `${seriesLabel(n.markets.series_label)} (scaled)`, connectgaps: true,
+          line: { color: COL.decay, width: 2, dash: "dash" } });
+      }
+      const layout = baseLayout({
+        bargap: 0.06,
+        dragmode: "pan",
+        margin: { l: 56, r: 16, t: 8, b: 48 },
+        xaxis: { type: "date", gridcolor: "rgba(226,220,207,0.6)", automargin: true },
+        yaxis: { title: { text: "corpus-size-adjusted volume", standoff: 12 }, rangemode: "tozero",
+          gridcolor: "rgba(226,220,207,0.6)", automargin: true },
+        legend: { orientation: "h", y: 1.16, x: 0 },
+      });
+      Plotly.react(chartEl, traces, layout, CHART_CONFIG);
+    }
+
+    // Clamp pan/zoom to the data after the fact (kept out of the layout because
+    // axis-level minallowed/maxallowed aborts the initial render here): x can't
+    // wander past the first/last day, y can't drop below zero.
+    const xLo = Date.parse(dates[0]);
+    const xHi = Date.parse(dates[dates.length - 1]);
+    let clamping = false;
+    chartEl.on("plotly_relayout", (e) => {
+      if (clamping) return;
+      const upd = {};
+      const x0 = e["xaxis.range[0]"], x1 = e["xaxis.range[1]"];
+      if (x0 != null && Date.parse(x0) < xLo) upd["xaxis.range[0]"] = dates[0];
+      if (x1 != null && Date.parse(x1) > xHi) upd["xaxis.range[1]"] = dates[dates.length - 1];
+      const y0 = e["yaxis.range[0]"];
+      if (y0 != null && y0 < 0) upd["yaxis.range[0]"] = 0;
+      if (Object.keys(upd).length) {
+        clamping = true;
+        Plotly.relayout(chartEl, upd).then(() => { clamping = false; });
+      }
+    });
+  </script>
+</Base>
+
+<style>
+  /* the index/emerging/about page titles use the larger homepage --fs-title,
+     but a single narrative's name is a label, not a page banner — keep it at
+     the pre-change h1 size so it doesn't dwarf the meta line beneath it. */
+  h1 { font-size: clamp(2rem, 4vw, 3.1rem); }
+  .back { margin: 0 0 0.6rem; }
+  /* a single divider between the JEL code and the colour-bubble tags, replacing
+     the gray dot separators around them. */
+  .sep { color: var(--line); margin: 0 0.5rem; }
+  .lede :global(.badge) { vertical-align: middle; margin-right: 0.3rem; }
+  .section:first-of-type { padding-top: 1rem; }
+  /* lens tabs on the left, overlay checkboxes pinned to the right, one line */
+  .lens-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 1.5rem 2rem; flex-wrap: wrap;
+    border-bottom: 1px solid var(--line); margin: 1.2rem 0 0.4rem;
+  }
+  .lens-bar :global(.tabs) { border-bottom: none; margin: 0; }
+  .lens-bar :global(.toggle-row) { margin: 0; }
+  .reps { list-style: none; margin: 0; padding: 0; }
+  .reps li { padding: 0.9rem 0; border-bottom: 1px solid var(--line-soft); }
+  .reps a { font-weight: 600; }
+  .reps .meta { color: var(--muted); font-size: var(--fs-meta); margin-top: 0.15rem; }
+  .reps .excerpt { color: var(--muted); font-size: var(--fs-ui); margin: 0.35rem 0 0; max-width: none; }
+  .related dd { line-height: 1.7; }
+</style>

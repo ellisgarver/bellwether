@@ -1,0 +1,11 @@
+---
+import { STAGE_LABEL, type Stage } from "@lib/data";
+interface Props { stage: Stage; emerging?: boolean; inScope?: boolean; }
+const { stage, emerging = false, inScope = true } = Astro.props;
+---
+<span class={`badge ${stage}`} title={STAGE_LABEL[stage]}>
+  <span class="dot" style={`background:var(--${stage})`}></span>
+  {stage}
+</span>
+{emerging && <span class="badge emerging" title="onset within four weeks of the corpus frontier">emerging</span>}
+{!inScope && <span class="badge oos" title="JEL field outside the macro-finance set E/F/G/H">out of scope</span>}
