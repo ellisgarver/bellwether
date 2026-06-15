@@ -61,6 +61,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 042 | Media Cloud press volume as display/validation overlay only (never feeds clustering) | Live (relates 016/020) |
 | 043 | **Static publishing — Astro on GitHub Pages, precompute everything** | Live (supersedes 003, amends 041) |
 | 044 | **Narrative map — hybrid node-link UMAP graph (shape=JEL, color=stage+emerging)** | Live (relates 019/020/039/043) |
+| 045 | **Corpus-base-rate volume normalization (fit + display); cross-narrative & lead-lag deferred but unblocked** | Live (supersedes 008 normalizer; relates 016/019/039) |
 
 ---
 
@@ -3273,6 +3274,125 @@ A naive all-nodes-all-edges plot becomes a hairball. The map must stay legible b
 - All encodings are derived from existing pipeline outputs (JEL, stage, emerging flag,
   volume, UMAP, similar-narratives); the map introduces **no new analysis and no
   tuning**, only display.
+
+---
+
+## ADR-045: Corpus-base-rate volume normalization (and what it means for cross-narrative + lead-lag analysis)
+
+- **Status**: Accepted
+- **Date**: 2026-06-15
+- **Relates to / amends**: ADR-008 (original RavenPack denominator — now dead),
+  ADR-016 (RavenPack/WRDS dropped; Media Cloud Premium replaced it), ADR-019
+  (report-don't-gate; staging off SIR R₀), ADR-039 (four lenses, "curves not
+  parameters"), ADR-042 (Media Cloud overlay), ADR-043 (precompute → static site)
+
+### Context
+
+A pre-downstream audit (2026-06-15) found that every volume curve the dashboard
+plots — and every series the SIR/logistic/Bass lenses are fit to — is a **raw
+weekly article count**. The embedded corpus is not stationary: more basis-set
+sources are active in 2024 than in 2013, and per-source publishing cadence
+drifts. So a narrative's apparent rise is confounded with **corpus growth**: a
+2024 narrative sits on a larger denominator of total discourse than a 2013 one,
+inflating its raw count and its fitted growth. This is a validity hole, not a
+cosmetic one — it changes the meaning of every curve and biases cross-narrative
+comparison toward recent narratives.
+
+The original normalizer (`dynamics/normalize.py`, ADR-008) already anticipated
+this — it expressed weekly cluster counts as a fraction of a total-corpus
+denominator — but that denominator was the **RavenPack** weekly volume, and
+RavenPack/WRDS was removed in ADR-016. The module has been dead code coupled to
+a removed dependency ever since.
+
+Three audited gaps are entangled here: (#1) base-rate normalization is absent;
+(#2) cross-narrative dynamics (seeding/competition/transition) is absent; (#3)
+source-provenance / lead-lag ("forms upstream in institutions, surfaces later in
+press") is unquantified. All three recompute from the persisted
+`clusters.parquet` / `embeddings.npy` — only embed+cluster is irreversible — so
+this ADR is a scope decision taken **before** the one-shot downstream run, not a
+re-embed.
+
+### Decision
+
+**1. Normalize by a single, global, whole-corpus base rate — expressed back in
+count units.** For each day *d*:
+
+- `N(d)` = unique articles published that day across the **entire embedded
+  corpus** (all clusters, including the BERTopic outlier bucket and out-of-scope
+  clusters — it is the denominator of *all* discourse, not just in-scope).
+- Smooth the denominator with a centered 7-day mean → `N̄(d)` (kills weekend
+  zero-division and the institutional Mon–Fri sawtooth; same window as the
+  dynamics smoother, `dynamics.smoothing_window_days`).
+- `N̄_mean` = mean of `N̄` over the corpus span (a single scalar for the run).
+- Adjusted volume for cluster *c*: **`adj_c(d) = c(d) / N̄(d) × N̄_mean`** —
+  the count cluster *c* *would* have if the corpus were always at its average
+  daily size. Where `N̄(d) = 0`, `adj_c(d) = 0`.
+
+Indexing the share back to `N̄_mean` (rather than fitting on the bare fraction
+`c(d)/N̄(d)`) is deliberate: it removes the corpus-growth trend **while keeping
+the series in article-count units**, so the existing PyMC priors (logistic `L`,
+SIR `N_pop`/`I0` heuristics — all in count units, anchored in ADR-019/config)
+and the AICc diagnostics stay valid **unchanged**. No prior re-anchoring, no
+schema bump to the dynamics block.
+
+**2. The adjusted series is what both the fit AND the display use.** The
+dynamics fitter is trained on `adj_c`, and the dashboard plots `adj_c` as the
+observed volume (the fitted `curve` is already on the same daily grid, ADR-039).
+There is no second "raw" curve on the headline chart — a corpus-confounded curve
+is exactly what this ADR removes, so it must not remain the thing a reader sees.
+The y-axis is labeled as **corpus-size-adjusted discourse volume** (front-end
+caption), not "articles/week", so the normalization is self-explanatory per the
+front-end clarity rule. (True raw counts remain trivially recoverable from
+`clusters.parquet` for any audit; they are not a dashboard series.)
+
+**3. The base rate is global and singular — one `N̄(d)`, one `N̄_mean` for all
+narratives.** This is the specific change that makes gap #2 (cross-narrative
+dynamics) *valid when it is built*: every narrative's adjusted curve is on the
+same yardstick, so seeding/competition/transition between narratives can be
+measured directly later without re-deriving comparability. Building the
+cross-narrative model itself is **deferred** — it is a new analysis that
+recomputes from persisted artifacts (no re-embed), and shipping it is not
+required for the one-shot run. This ADR's obligation to #2 is to not foreclose
+it; a per-narrative denominator *would* have foreclosed it, so we don't use one.
+
+**4. Source provenance / lead-lag (#3) is deferred, with one binding
+constraint.** When built, any institutional-vs-press lead-lag (cross-correlation
+against the ADR-042 Media Cloud series) and any "which source moved first"
+first-appearance statistic must consume the **adjusted** institutional series,
+not raw counts — otherwise corpus growth re-enters as a fake lead. Per-source
+first-appearance recomputes from `clusters.parquet`'s `source_id`. No code now;
+the constraint is recorded so the future implementation is correct by default.
+
+**5. Rewrite `normalize.py` to the live contract.** Drop the RavenPack
+denominator (ADR-016) and the `above_threshold` count gate (3/wk over 4wk AND 50
+cumulative) — the gate predates and conflicts with ADR-019's report-don't-gate
+stance (low-volume clusters get a fit with a wide credible interval, which is the
+honest signal, not a hard cutoff). Keep `compute_source_contamination` as a
+diagnostic. The module's new surface is the base-rate computation + per-cluster
+adjustment.
+
+### Consequences
+
+- **Closes #1 everywhere** — both the fitted series and the displayed series are
+  corpus-growth-adjusted; R₀ and stage no longer inherit the confound.
+- **#2 and #3 stay out of the one-shot** but are unblocked: the global single
+  denominator is the enabling invariant, recorded so a later pass is comparable
+  and lag-honest by construction. The memory note `project_analysis_gaps.md`
+  tracks #4 (stage-confidence) and #5 (anchor-recovery surfacing) — untouched
+  here.
+- **Priors / config unchanged** — units are preserved, so no `dynamics` schema
+  bump and no re-tuning (the no-tuning rule, ADR-040, is respected: the
+  adjustment is a fixed deterministic transform, not a fitted knob).
+- **One denominator choice is a judgment call**: counting the outlier bucket and
+  out-of-scope clusters in `N(d)` treats "total written discourse" as the base
+  of spread (a narrative competes for attention against *everything* published,
+  not only against in-scope macro). The alternative (in-scope-only denominator)
+  would measure share-of-macro-discourse instead; we choose total-corpus because
+  the SIR contagion framing is about penetration of the whole stream. Revisiting
+  this is a new ADR.
+- **The fix lands via the new analysis driver** (the CLI-gap subcommand, separate
+  task) — normalization is computed there and fed to the fitter, so the one-shot
+  downstream run produces adjusted curves with no further wiring.
 
 ---
 

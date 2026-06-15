@@ -8,6 +8,8 @@ Dispatches pipeline stages:
   cluster             — BERTopic single-granularity clustering (ADR-019)
   stability           — bootstrap stability diagnostic (mean NMI reported, not gated)
   validate            — anchor narrative recovery (reported as rate, not gated)
+  analyze             — clusters → normalize (ADR-045) → JEL → dynamics → stages →
+                        similar → dashboard artifacts (the pipeline→front-end seam)
   corpus-composition  — report article counts per source per year (Phase 2 QA step)
 
 All paths default to config.paths.*. Override with --input / --output flags.
@@ -747,6 +749,63 @@ def validate(ctx: click.Context, anchors: str, clusters: str | None) -> None:
         click.echo(f"  {mark} {r['anchor_id']}: {r['note']}")
 
     click.echo(f"\n  Recovered : {n_recovered}/{len(results)}  (reported, not gated -- ADR-019)")
+
+
+# ---------------------------------------------------------------------------
+# analyze  (ADR-043/045 — the pipeline→front-end seam)
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--clusters", default=None, help="Clusters parquet path (default: config paths.processed_clusters)")
+@click.option("--embeddings", default=None, help="Embeddings .npy path (default: config paths.processed_embeddings)")
+@click.option("--topic-info", default=None, help="topic_info parquet (default: alongside clusters)")
+@click.option("--output-dir", default=None, help="Dashboard artifacts dir (default: config paths.dashboard_artifacts)")
+@click.pass_context
+def analyze(
+    ctx: click.Context,
+    clusters: str | None,
+    embeddings: str | None,
+    topic_info: str | None,
+    output_dir: str | None,
+) -> None:
+    """Recompute the analysis layer from clustering and write dashboard artifacts.
+
+    Runs the full downstream chain — corpus-base-rate normalization (ADR-045),
+    JEL scope (ADR-020), four-lens dynamics (ADR-039), stage classification
+    (ADR-019), similar narratives + UMAP map (ADR-044) — and bakes the artifact
+    JSON the static front end reads (ADR-043). No re-embedding: recomputes
+    entirely from the persisted clusters.parquet / embeddings.npy.
+
+    Loads the production Qwen3 embedder (for JEL prototype similarity) and runs
+    PyMC sampling per in-scope cluster — run on RCC, not a laptop.
+    """
+    from mnd.dashboard.run import run_analysis
+
+    cfg = ctx.obj["cfg"]
+    root = project_root()
+    clusters_path = Path(clusters) if clusters else root / cfg["paths"]["processed_clusters"]
+    emb_path = Path(embeddings) if embeddings else root / cfg["paths"]["processed_embeddings"]
+    ti_path = (
+        Path(topic_info) if topic_info
+        else clusters_path.parent / "topic_info.parquet"
+    )
+    out_dir = Path(output_dir) if output_dir else root / cfg["paths"]["dashboard_artifacts"]
+
+    if not clusters_path.exists():
+        log.error("Clusters parquet not found at %s — run `cluster` first.", clusters_path)
+        sys.exit(1)
+    if not emb_path.exists():
+        log.error("Embeddings not found at %s — run `embed` first.", emb_path)
+        sys.exit(1)
+
+    out = run_analysis(
+        clusters_path=clusters_path,
+        embeddings_path=emb_path,
+        topic_info_path=ti_path if ti_path.exists() else None,
+        out_dir=out_dir,
+        cfg=cfg,
+    )
+    log.info("analyze: wrote dashboard artifacts → %s", out)
 
 
 # ---------------------------------------------------------------------------
