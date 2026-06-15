@@ -1,0 +1,123 @@
+---
+import Base from "../layouts/Base.astro";
+import NarrativeCard from "@components/NarrativeCard.astro";
+import { loadIndex, loadNarrative } from "@lib/data";
+
+const index = loadIndex();
+
+function spark(values: number[], n = 44): number[] {
+  if (values.length <= n) return values;
+  const out: number[] = [];
+  const step = values.length / n;
+  for (let i = 0; i < n; i++) {
+    const a = Math.floor(i * step);
+    const b = Math.floor((i + 1) * step);
+    const slice = values.slice(a, Math.max(a + 1, b));
+    out.push(slice.reduce((s, v) => s + v, 0) / slice.length);
+  }
+  return out;
+}
+
+// load each emerging narrative once (also used for sparks) so we can order by
+// how fast it's changing: the staging-model fit's R₀ distance from 1 (the
+// stationary point — R₀=1 is steady, far in either direction is fast growth or
+// fast decay). missing R₀ sorts last.
+const narrs = index.narratives
+  .filter((e) => e.is_emerging)
+  .map((e) => loadNarrative(e.cluster_id));
+const speed = (n: ReturnType<typeof loadNarrative>): number => {
+  const f = n.fits.find((x) => x.model === n.staging_model) ?? n.fits[0];
+  return f?.r0_mean == null ? -Infinity : Math.abs(f.r0_mean - 1);
+};
+const emerging = index.narratives
+  .filter((e) => e.is_emerging)
+  .sort((a, b) => {
+    const na = narrs.find((n) => n.cluster_id === a.cluster_id)!;
+    const nb = narrs.find((n) => n.cluster_id === b.cluster_id)!;
+    return speed(nb) - speed(na);
+  });
+const sparks: Record<number, number[]> = Object.fromEntries(
+  narrs.map((n) => [n.cluster_id, spark(n.volume.values)]),
+);
+---
+
+<Base title="emerging" active="emerging">
+  <p class="eyebrow reveal">the frontier</p>
+  <h1 class="reveal">emerging narratives</h1>
+  <p class="lede reveal">
+    the freshest threads — narratives whose onset falls within four weeks of the
+    corpus frontier. note that emerging classification is a recency flag, not a distinct stage: a narrative here can
+    already be growing or fading. fastest first.
+  </p>
+
+  {emerging.length > 0 ? (
+    <>
+      <div class="toolbar reveal">
+        <input id="search" type="search" placeholder="filter by name or term…" />
+        <label class="toggle"><input type="checkbox" id="f-growth" checked /> growth</label>
+        <label class="toggle"><input type="checkbox" id="f-decay" checked /> decay</label>
+        <label class="toggle"><input type="checkbox" id="f-dormant" checked /> dormant</label>
+      </div>
+
+      <div class="grid reveal" id="gallery">
+        {emerging.map((e) => (
+          <div class="card-wrap" data-label={e.label.toLowerCase()}
+            data-terms={e.top_terms.join(" ").toLowerCase()}
+            data-stage={e.stage}>
+            <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
+          </div>
+        ))}
+      </div>
+      <p id="empty" class="muted hidden">no narratives match that filter.</p>
+    </>
+  ) : (
+    <p class="muted reveal">nothing is within the emerging window for this corpus build.</p>
+  )}
+
+  <script>
+    const search = document.getElementById("search");
+    if (search) {
+      const flags = {
+        growth: document.getElementById("f-growth"),
+        decay: document.getElementById("f-decay"),
+        dormant: document.getElementById("f-dormant"),
+      };
+      const cards = [...document.querySelectorAll(".card-wrap")];
+      const empty = document.getElementById("empty");
+      function applyFilter() {
+        const q = (search.value || "").trim().toLowerCase();
+        // each stage checkbox is an independent facet, unioned together. with
+        // nothing checked we treat it as no filter rather than hiding all.
+        const anyChecked = Object.values(flags).some((f) => f.checked);
+        let shown = 0;
+        for (const c of cards) {
+          const okText = !q || c.dataset.label.includes(q) || c.dataset.terms.includes(q);
+          const okCat = !anyChecked || flags[c.dataset.stage]?.checked;
+          const vis = okText && okCat;
+          c.classList.toggle("hidden", !vis);
+          if (vis) shown++;
+        }
+        empty.classList.toggle("hidden", shown !== 0);
+      }
+      [search, ...Object.values(flags)].forEach((el) =>
+        el.addEventListener("input", applyFilter),
+      );
+    }
+  </script>
+</Base>
+
+<style>
+  .toolbar {
+    display: flex; gap: 1.2rem; flex-wrap: wrap; align-items: center;
+    margin: 1.4rem 0 0.6rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .toolbar input[type="search"] {
+    flex: 1; min-width: 220px; padding: 0.55rem 0.2rem;
+    border: none; border-bottom: 1px solid var(--line);
+    background: transparent; font: inherit; color: var(--ink);
+  }
+  .toolbar input[type="search"]:focus {
+    outline: none; border-bottom-color: var(--accent);
+  }
+</style>

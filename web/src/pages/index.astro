@@ -1,0 +1,188 @@
+---
+import Base from "../layouts/Base.astro";
+import { loadIndex } from "@lib/data";
+
+const index = loadIndex();
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const entries = index.narratives;
+const hasMap = entries.some((e) => e.umap_xyz || e.umap_xy);
+const stageCount = (s: string) => entries.filter((e) => e.stage === s).length;
+
+// epidemic-style curves for the hero backdrop (decorative, on-theme).
+// rise is a Gaussian up to the peak; the fall decays toward `floor` — 0 returns
+// the line all the way to the x-axis, a positive floor levels it off at a
+// plateau. wide widths + per-pixel sampling keep the curves smooth, not jagged.
+function curve(cx: number, h: number, wL: number, wR: number, floor = 0): string {
+  const pts: string[] = [];
+  for (let x = 0; x <= 100; x += 0.5) {
+    const z = (x - cx) / (x < cx ? wL : wR);
+    const g = Math.exp(-0.5 * z * z);
+    const amp = x < cx ? h * g : floor + (h - floor) * g;
+    pts.push(`${x === 0 ? "M" : "L"}${x.toFixed(1)},${(70 - amp).toFixed(2)}`);
+  }
+  return pts.join(" ");
+}
+// same tall, smooth peak shape across all three; the tails differ — gray falls
+// fully back to the axis, red levels out at a mid plateau, green peaks near the
+// right edge and runs off with barely any decay shown.
+const curves = [
+  { d: curve(95, 64, 8, 20, 0), c: "var(--growth)" },
+  { d: curve(76, 52, 8, 11, 25), c: "var(--decay)" },
+  { d: curve(57, 43, 7, 8, 0), c: "var(--dormant)" },
+];
+---
+
+<Base title="home" active="home">
+  <!-- slide 1 — title, author, thesis -->
+  <section class="hero">
+    <p class="eyebrow reveal">ellis garver · macro narrative dynamics</p>
+    <h1 class="hero-title reveal">stories spread like epidemics.</h1>
+    <p class="hero-thesis reveal">
+      the US macro-finance world develops theme-stories, and those stories rise and
+      fade in quantifiable waves. this project reads the institutional and academic
+      records — the Fed, IMF, BIS, NBER and their peers — clusters them into
+      narratives, and analyzes each similarly to how epidemiologists analyze
+      outbreaks.
+    </p>
+    <div class="hero-stats reveal">
+      <div><span class="num">{index.n_narratives}</span><span class="lbl">narratives</span></div>
+      <div><span class="num" style="color:var(--growth)">{stageCount("growth")}</span><span class="lbl">growing</span></div>
+      <div><span class="num" style="color:var(--decay)">{stageCount("decay")}</span><span class="lbl">fading</span></div>
+      <div><span class="num" style="color:var(--dormant)">{stageCount("dormant")}</span><span class="lbl">dormant</span></div>
+    </div>
+    <p class="hero-since reveal">tracked across U.S. macro-finance discourse since 2010</p>
+    <div class="hero-cta reveal">
+      <a class="scroll-cue" href="#landscape">explore the landscape ↓</a>
+      <a href={`${base}/narratives`}>browse all narratives →</a>
+    </div>
+
+    <svg class="hero-bg" viewBox="0 0 100 70" preserveAspectRatio="none" aria-hidden="true">
+      {curves.map((c, i) => (
+        <path d={c.d} fill="none" stroke={c.c} stroke-width="0.6"
+          stroke-linecap="round" class="hero-curve" style={`--i:${i}`} />
+      ))}
+    </svg>
+  </section>
+
+  <!-- slide 2 — the 3-D narrative landscape -->
+  {hasMap && (
+    <section class="mapslide" id="landscape">
+      <p class="eyebrow reveal">the landscape</p>
+      <h2 class="reveal">every narrative, mapped by attributes</h2>
+      <p class="caption reveal">
+        each point is one narrative; nearby points read about similar things. colour
+        is the life-cycle — <span style="color:var(--growth)">growing</span>,
+        <span style="color:var(--decay)">fading</span>,
+        <span style="color:var(--dormant)">dormant</span> — shape is the JEL field,
+        size is how much was written. pinch/scroll to zoom, drag to orbit, click to open.
+      </p>
+      <div id="map" class="map3d reveal" data-base={base}></div>
+      <script id="map-data" type="application/json" set:html={JSON.stringify(entries)}></script>
+    </section>
+  )}
+
+  <script>
+    import { mountMap3d } from "@lib/chart";
+    const el = document.getElementById("map");
+    const dataEl = document.getElementById("map-data");
+    if (el && dataEl) {
+      const pts = JSON.parse(dataEl.textContent).filter((d) => d.umap_xyz || d.umap_xy);
+      mountMap3d(el, pts, el.dataset.base || "");
+    }
+  </script>
+</Base>
+
+<style>
+  .hero {
+    padding: 1.2rem 0 3rem;
+    /* fill the viewport (below the 64px sticky header) so slide 2's divider and
+       heading stay below the fold at the top of the page. safe here because the
+       graphic is a fixed-height block, not a flex child — the extra space lands
+       below it rather than stretching it. */
+    min-height: calc(100vh - 64px);
+  }
+  /* a normal-flow, fixed-height block sitting directly under the text — no
+     viewport-fill, no absolute positioning, no svh, so it can't drift down the
+     page or break under Chrome zoom. Baseline below the words, peaks rising
+     into the empty space on the right. */
+  .hero-bg {
+    display: block;
+    /* viewBox is 70 tall with the baseline pinned to its bottom, so ~6 units of
+       headroom above the tallest (green) peak keep it from clipping at the top.
+       Render the box at 2.042x and pull it up by 1.042x so the baseline (box
+       bottom) stays exactly where it was — identical per-unit scale to the old
+       1.75x/0.75x pair (70/60×), just with top headroom added. */
+    height: calc(clamp(210px, 30vh, 360px) * 2.042);
+    margin: calc(-10rem - clamp(210px, 30vh, 360px) * 1.042) 0 0;
+    width: 100%;
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  /* the eyebrow is small enough that the big heading's left side-bearing makes
+     it look inset; nudge it right a hair so the left edges read as aligned. */
+  .hero .eyebrow { padding-left: 0.12em; }
+  .hero-curve {
+    stroke-dasharray: 220;
+    stroke-dashoffset: 220;
+    animation: draw 2.2s var(--ease) forwards;
+    animation-delay: calc(0.25s + var(--i) * 0.35s);
+  }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .hero-curve { animation: none; stroke-dashoffset: 0; }
+  }
+
+  .hero-title {
+    font-size: var(--fs-title);
+    line-height: 1.04;
+    margin: 0.4rem 0 1.4rem;
+    letter-spacing: -0.02em;
+  }
+  .hero-thesis {
+    max-width: 40ch;
+    font-size: var(--fs-lede);
+    line-height: 1.55;
+    color: var(--muted);
+  }
+  .hero-stats { display: flex; gap: 2.6rem; margin: 2.2rem 0 2rem; flex-wrap: wrap; }
+  .hero-stats .num {
+    display: block; font-size: 2.4rem; font-weight: 600; line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .hero-stats .lbl { font-size: var(--fs-meta); color: var(--faint); letter-spacing: 0.03em; }
+  .hero-since { color: var(--faint); font-size: var(--fs-meta); margin: 0 0 1.6rem; }
+  .hero-cta { display: flex; gap: 1.8rem; align-items: center; font-size: var(--fs-body); }
+  .scroll-cue { font-weight: 600; }
+
+  /* scroll target: land with the divider tucked just under the sticky header so
+     the eyebrow + heading sit at the top of the view (header height is 64px). */
+  .mapslide {
+    border-top: 1px solid var(--line);
+    padding: var(--space-4) 0 0;
+    scroll-margin-top: 50px;
+  }
+  .mapslide h2 { font-size: var(--fs-title); letter-spacing: -0.02em; }
+  /* keep the longer landscape title on one line where it fits; let it wrap on
+     narrow screens rather than overflow. */
+  @media (min-width: 700px) { .mapslide h2 { white-space: nowrap; } }
+  .mapslide .caption { font-size: var(--fs-lede); max-width: none; }
+  .map3d { width: 100%; height: min(56vh, 540px); margin-top: 1rem; cursor: grab; }
+  .map3d:active { cursor: grabbing; }
+
+  /* mobile: the hero text is tall and full-width, so the desktop graphic's big
+     negative pull-up lands its peaks on top of the stats. Drop the viewport
+     fill, shrink the stat numbers so all four sit on one or two tidy rows, and
+     turn the graphic into a short, faint band tucked low behind the CTA. */
+  @media (max-width: 640px) {
+    .hero { min-height: 0; padding-bottom: 1.5rem; }
+    .hero-stats { gap: 1.3rem 1.8rem; margin: 1.8rem 0 1.4rem; }
+    .hero-stats .num { font-size: 2rem; }
+    .hero-bg { height: clamp(150px, 42vw, 240px); margin: -2rem 0 0; opacity: 0.4; }
+  }
+
+  .hero .reveal:nth-of-type(1) { transition-delay: 0.05s; }
+  .hero .reveal:nth-of-type(2) { transition-delay: 0.12s; }
+  .hero .reveal:nth-of-type(3) { transition-delay: 0.20s; }
+  .hero .reveal:nth-of-type(4) { transition-delay: 0.28s; }
+  .hero .reveal:nth-of-type(5) { transition-delay: 0.36s; }
+</style>

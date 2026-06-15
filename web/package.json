@@ -1,0 +1,18 @@
+{
+  "name": "mnd-dashboard",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Macro Narrative Dynamics — static educational dashboard (ADR-043)",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@fontsource-variable/space-grotesk": "^5.2.10",
+    "astro": "^4.16.18",
+    "plotly.js-dist-min": "^2.35.3"
+  }
+}
