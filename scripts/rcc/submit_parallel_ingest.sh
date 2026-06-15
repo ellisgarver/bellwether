@@ -10,7 +10,7 @@
 #     | cea | voxeu | brookings | piie | cbo | nber ]  (all parallel)
 #                              │  (afterok: every ingest job)
 #                              ▼
-#         filter-pre-embed → filter → embed (primary) → cluster
+#         filter-pre-embed → filter → embed (primary) → cluster → analyze
 #
 # Why parallel instead of a single chained composite job:
 # the composite runs all 12 sources sequentially in one job, so a long pole
@@ -77,7 +77,7 @@ echo "=========================================="
 echo "MND — PARALLEL ingest submit"
 echo "Window:   $START → $END"
 echo "Sources:  $SOURCES"
-echo "Downstream: $([[ $SKIP_DOWNSTREAM == 1 ]] && echo skip || echo "filter→embed→cluster")"
+echo "Downstream: $([[ $SKIP_DOWNSTREAM == 1 ]] && echo skip || echo "filter→embed→cluster→analyze")"
 echo "Cleanup:  $([[ $SKIP_CLEANUP == 1 ]] && echo skip || ([[ $NUKE_PRIOR == 1 ]] && echo nuke || echo archive))$([[ $NUKE_RAW == 1 ]] && echo " +raw" || true)"
 echo "Started:  $(date)"
 echo "=========================================="
@@ -167,6 +167,9 @@ fi
 CLUSTER=$(sbatch --parsable --dependency=afterok:$EMBED_PRIMARY scripts/rcc/cluster_rcc.sh)
 echo "   cluster:          $CLUSTER"
 
+ANALYZE=$(sbatch --parsable --dependency=afterok:$CLUSTER scripts/rcc/analyze_rcc.sh)
+echo "   analyze:          $ANALYZE"
+
 cat <<EOF
 
 ==========================================
@@ -181,6 +184,7 @@ Downstream (afterok-chained):
   embed primary:    $EMBED_PRIMARY
 $( [[ "$COMPARATOR" == "1" ]] && echo "  embed comparator: $EMBED_COMPARATOR" )
   cluster:          $CLUSTER
+  analyze:          $ANALYZE
 
 If any single source fails (0 articles → job exits 1), the afterok chain holds.
 Re-run just that source, then re-launch downstream:

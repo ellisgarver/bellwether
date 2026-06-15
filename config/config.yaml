@@ -45,7 +45,7 @@ temporal:
 embedding:
   primary:
     model: "Qwen/Qwen3-Embedding-8B"  # ADR-036 (was 0.6B); top-tier MTEB, A100-only
-    revision: "main"               # Pin to specific commit hash before Phase 2
+    revision: "1d8ad4ca9b3dd8059ad90a75d4983776a23d44af"  # pinned for the one-shot run (was "main"); HF Qwen3-Embedding-8B main @ 2026-06-15
     dimensions: 4096               # ADR-036 (was 1024); 8B native output dim
     # On RCC (CUDA A100 40 GB, gpu partition --constraint=a100): max_seq_len=1024,
     # batch_size=8, fp16 — 8B ≈ 16 GB fp16 weights, comfortable on 40 GB (ADR-036).

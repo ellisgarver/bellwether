@@ -11,7 +11,11 @@ from mnd.dynamics.models import (
     sir_prevalence,
     sir_r0,
 )
-from mnd.dynamics.normalize import normalize_cluster_volumes, compute_source_contamination
+from mnd.dynamics.normalize import (
+    adjusted_cluster_volumes,
+    compute_source_contamination,
+    corpus_base_rate,
+)
 from mnd.dynamics.smooth import smooth_combined
 from mnd.dynamics.calendar import CalendarAnnotator
 
@@ -27,7 +31,8 @@ __all__ = [
     "logistic_r0",
     "sir_r0",
     "aicc",
-    "normalize_cluster_volumes",
+    "corpus_base_rate",
+    "adjusted_cluster_volumes",
     "compute_source_contamination",
     "smooth_combined",
     "CalendarAnnotator",
