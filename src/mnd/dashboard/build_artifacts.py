@@ -186,6 +186,7 @@ def build_dashboard_artifacts(
     ordered_cluster_ids: list[int] | None = None,
     centroids: np.ndarray | None = None,
     umap_xy: dict[int, tuple[float, float]] | None = None,
+    umap_xyz: dict[int, tuple[float, float, float]] | None = None,
     markets: dict[int, MarketsArtifact] | None = None,
     mediacloud: dict[int, MediaCloudArtifact] | None = None,
     cfg: dict[str, Any] | None = None,
@@ -203,6 +204,7 @@ def build_dashboard_artifacts(
     jel = jel or {}
     similar = similar or {}
     umap_xy = umap_xy or {}
+    umap_xyz = umap_xyz or {}
     markets = markets or {}
     mediacloud = mediacloud or {}
     recency_weeks = int(cfg["stages"]["newly_emerging_recency_weeks"])
@@ -276,6 +278,7 @@ def build_dashboard_artifacts(
                 jel_code=jel_obj.primary_code if jel_obj else None,
                 is_emerging=_compute_emerging(card.date_range, frontier, recency_weeks),
                 umap_xy=umap_xy.get(cid),
+                umap_xyz=umap_xyz.get(cid),
                 similar_edges=edges.get(cid, []),
             )
         )

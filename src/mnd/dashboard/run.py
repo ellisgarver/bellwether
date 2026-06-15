@@ -64,31 +64,41 @@ def _cluster_centroids(
 
 
 def _umap_positions(
-    centroids: np.ndarray, ordered_ids: list[int], cfg: dict[str, Any]
-) -> dict[int, tuple[float, float]]:
-    """2-D UMAP of the cluster centroids for the narrative map (ADR-044).
+    centroids: np.ndarray,
+    ordered_ids: list[int],
+    cfg: dict[str, Any],
+    n_components: int = 3,
+) -> dict[int, tuple[float, ...]]:
+    """UMAP of the cluster centroids for the narrative map (ADR-044).
 
-    Mirrors the clustering UMAP params (cosine, min_dist) but at n_components=2 and
-    seeded from the global seed for reproducibility. ``n_neighbors`` is clamped
-    below the cluster count (UMAP requires n_neighbors < n_samples); with too few
-    clusters for a meaningful embedding we fall back to a deterministic line.
+    Mirrors the clustering UMAP params (cosine, min_dist) but at the requested
+    ``n_components`` and seeded from the global seed for reproducibility. The home
+    map renders in 3-D, so the default is 3 components (the front end derives the
+    2-D position from the first two). ``n_neighbors`` is clamped below the cluster
+    count (UMAP requires n_neighbors < n_samples); with too few clusters for a
+    meaningful embedding we fall back to a deterministic line.
     """
     n = len(ordered_ids)
-    if n < 4:
-        return {cid: (float(i), 0.0) for i, cid in enumerate(ordered_ids)}
+    if n <= n_components:
+        return {
+            cid: (float(i),) + (0.0,) * (n_components - 1)
+            for i, cid in enumerate(ordered_ids)
+        }
     from umap import UMAP
 
     uc = cfg["clustering"]["umap"]
     seed = int(cfg["reproducibility"]["global_random_seed"])
     reducer = UMAP(
-        n_components=2,
+        n_components=n_components,
         n_neighbors=min(int(uc["n_neighbors"]), n - 1),
         min_dist=float(uc["min_dist"]),
         metric=uc["metric"],
         random_state=seed,
     )
-    xy = reducer.fit_transform(centroids)
-    return {cid: (float(xy[i, 0]), float(xy[i, 1])) for i, cid in enumerate(ordered_ids)}
+    coords = reducer.fit_transform(centroids)
+    return {
+        cid: tuple(float(v) for v in coords[i]) for i, cid in enumerate(ordered_ids)
+    }
 
 
 def run_analysis(
@@ -163,8 +173,10 @@ def run_analysis(
     stages = {sc.cluster_id: sc for sc in classify_all(list(dynamics.values()), cfg)}
 
     # 4. Centroids → UMAP positions → similar narratives (ADR-044 / ADR-019 §H).
+    # The home map is 3-D; derive the 2-D position from the first two components.
     centroids = _cluster_centroids(clusters_df, embeddings, fit_ids)
-    umap_xy = _umap_positions(centroids, fit_ids, cfg)
+    umap_xyz = _umap_positions(centroids, fit_ids, cfg, n_components=3)
+    umap_xy = {cid: xyz[:2] for cid, xyz in umap_xyz.items()}
     similar = compute_similar_narratives(
         fit_ids,
         centroids=centroids,
@@ -183,6 +195,7 @@ def run_analysis(
         ordered_cluster_ids=fit_ids,
         centroids=centroids,
         umap_xy=umap_xy,
+        umap_xyz=umap_xyz,
         cfg=cfg,
     )
     return write_dashboard_artifacts(index, narratives, out_dir)
