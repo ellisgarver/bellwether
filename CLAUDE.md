@@ -25,9 +25,10 @@ ODEs to per-cluster volume curves → classify lifecycle stage.
   The source selection is the *only* macro-scope constraint at ingest.
 - **No pre-clustering topic filter (ADR-020).** Scope is decided post-clustering
   by `src/mnd/clustering/jel_classifier.py` (AEA JEL taxonomy, nearest-prototype
-  in Qwen3 space); out-of-scope clusters (JEL ∉ {E,F,G,H}) are dropped from
-  *dynamics only*, not from the embedded corpus. Do not reintroduce any
-  per-source keyword/title gate.
+  in Qwen3 space). The JEL code is a per-narrative **display flag, not a gate**
+  (ADR-046): every non-noise cluster is fit, staged, and shown; out-of-scope
+  clusters (JEL ∉ {E,F,G,H}) are flagged with their code, not dropped. Do not
+  reintroduce any per-source keyword/title gate.
 - **Removed sources — do not reinstate without a new ADR:** ProQuest, Factiva,
   Bloomberg, AP News, Reuters, MarketWatch (journalism; ADR-010), arXiv and the
   separate Jackson Hole ingestor (ADR-012), CFR (ADR-020). RavenPack/WRDS is not

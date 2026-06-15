@@ -12,11 +12,12 @@ Pipeline assembled here, in order:
   1. corpus-base-rate normalization of per-cluster daily volume (ADR-045) — the
      series both the fit and the dashboard use, so corpus growth no longer
      confounds either.
-  2. JEL scope classification of each cluster (ADR-020); only in-scope clusters
-     (JEL ∈ {E,F,G,H}) are carried into dynamics — out-of-scope are dropped from
-     dynamics, not from the embedded corpus.
-  3. four-lens Bayesian dynamics fit per in-scope cluster (ADR-039) on the
-     adjusted series, and R₀→stage classification (ADR-019).
+  2. JEL scope classification of each cluster (ADR-020); the JEL code is a
+     per-narrative flag, not a gate — every non-noise cluster is carried into
+     dynamics and out-of-scope ones (JEL ∉ {E,F,G,H}) are shown flagged with
+     their code, not dropped (ADR-046).
+  3. four-lens Bayesian dynamics fit per cluster (ADR-039) on the adjusted
+     series, and R₀→stage classification (ADR-019).
   4. cluster centroids + 2-D UMAP positions + semantic/lexical/morphological
      similar-narratives (ADR-019 §H, ADR-044).
   5. assembly into the artifact contract via ``build_dashboard_artifacts`` and
@@ -137,18 +138,23 @@ def run_analysis(
     all_ids = sorted(c for c in adj if c != NOISE_TOPIC)
     cluster_terms = {cid: _terms_from_topic_info(topic_info, cid)[1] for cid in all_ids}
 
-    # 2. JEL scope (ADR-020). Only in-scope clusters enter dynamics.
+    # 2. JEL scope (ADR-020 / ADR-046). Every non-noise cluster is analyzed; the
+    # JEL label is a per-narrative flag, not a gate — out-of-scope clusters are
+    # shown with their JEL code, not dropped from dynamics (ADR-046 reverses
+    # ADR-020's "dropped from dynamics only").
     embedder = embedder if embedder is not None else _default_embedder()
     jel = classify_clusters(cluster_terms, embedder=embedder)
-    fit_ids = [cid for cid in all_ids if cid in jel and jel[cid].in_scope]
+    fit_ids = list(all_ids)
+    in_scope_n = sum(1 for cid in fit_ids if cid in jel and jel[cid].in_scope)
     log.info(
-        "JEL scope: %d/%d non-noise clusters in-scope (E/F/G/H) → dynamics",
-        len(fit_ids), len(all_ids),
+        "JEL scope: %d/%d non-noise clusters in-scope (E/F/G/H); all %d analyzed, "
+        "out-of-scope flagged by JEL code (ADR-046)",
+        in_scope_n, len(fit_ids), len(fit_ids),
     )
     if not fit_ids:
         raise RuntimeError(
-            "No in-scope clusters after JEL classification — refusing to write an "
-            "empty dashboard. Check topic_info terms and the JEL classifier."
+            "No non-noise clusters to analyze — refusing to write an empty "
+            "dashboard. Check clusters.parquet and topic_info."
         )
 
     # 3. Four-lens fit + stage on the adjusted series (ADR-039 / ADR-019).
