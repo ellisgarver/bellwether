@@ -62,6 +62,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 043 | **Static publishing — Astro on GitHub Pages, precompute everything** | Live (supersedes 003, amends 041) |
 | 044 | **Narrative map — hybrid node-link UMAP graph (shape=JEL, color=stage+emerging)** | Live (relates 019/020/039/043) |
 | 045 | **Corpus-base-rate volume normalization (fit + display); cross-narrative & lead-lag deferred but unblocked** | Live (supersedes 008 normalizer; relates 016/019/039) |
+| 046 | **Analyze every cluster; JEL scope is a display flag, not a dynamics gate (out-of-scope shown with code)** | Live (supersedes 020 "dropped from dynamics"; relates 019/044) |
 
 ---
 
@@ -3393,6 +3394,51 @@ adjustment.
 - **The fix lands via the new analysis driver** (the CLI-gap subcommand, separate
   task) — normalization is computed there and fed to the fitter, so the one-shot
   downstream run produces adjusted curves with no further wiring.
+
+---
+
+## ADR-046: JEL scope is a display flag, not a dynamics gate
+
+- **Status**: Accepted
+- **Date**: 2026-06-15
+- **Supersedes**: ADR-020's "out-of-scope clusters are dropped from *dynamics
+  only*" rule (the no-pre-clustering-filter stance of ADR-020 still stands).
+- **Relates to**: ADR-019 (report-don't-gate), ADR-044 (narrative map shape=JEL),
+  ADR-045 (the analysis driver this lands in)
+
+### Context
+
+ADR-020 decided scope post-clustering via the JEL classifier and dropped
+out-of-scope clusters (JEL ∉ {E,F,G,H}) from dynamics — they were embedded and
+clustered but never fit, staged, or shown. The downstream analysis recomputes
+cheaply from persisted `clusters.parquet` / `embeddings.npy` (no re-embed), so
+fitting an out-of-scope cluster costs one extra PyMC run and nothing irreversible.
+The artifact contract already carries `in_scope` and `jel_code` per narrative, and
+the front-end already renders an "out of scope" badge + the JEL field name
+(`StageBadge`, `NarrativeCard`). Dropping these clusters therefore discards
+information the reader could see, for no methodological gain.
+
+### Decision
+
+Analyze **every** non-noise cluster with the full four-lens dynamics + stage,
+regardless of JEL field. The JEL classification still runs, but its output is a
+**per-narrative label/flag**, not a gate: out-of-scope narratives are shown with
+their JEL code and an "out of scope" badge rather than omitted. The only hard
+exclusion remains the BERTopic noise/outlier bucket (`topic == -1`), which is not
+a narrative. Consistent with ADR-019's report-don't-gate stance — surface the
+reading with its caveat, don't silently drop it.
+
+### Consequences
+
+- `run_analysis` (ADR-045 driver) sets `fit_ids` to all non-noise clusters; JEL
+  no longer filters. One extra fit per out-of-scope cluster.
+- No artifact-schema or front-end change — `in_scope`/`jel_code` and the oos badge
+  already exist; they now appear on real out-of-scope narratives instead of only
+  in sample data.
+- A future in-scope-only filter is a display toggle, not a pipeline gate — all
+  narratives remain present in the artifacts.
+- The CLAUDE.md scope invariant is updated to match (out-of-scope flagged, not
+  dropped).
 
 ---
 

@@ -99,15 +99,17 @@ def test_run_analysis_writes_adjusted_artifacts(tmp_path, monkeypatch):
     ti_path = tmp_path / "topic_info.parquet"
     _topic_info().to_parquet(ti_path, index=False)
 
-    # Stub the JEL classifier: all three clusters in-scope (its own test covers it).
+    # Stub the JEL classifier: clusters 0/1 in-scope, cluster 2 OUT of scope (J).
+    # ADR-046: out-of-scope is a display flag, not a gate — it must still be analyzed.
     def _fake_classify(cluster_terms, **_):
-        return {
-            cid: ClusterJELAssignment(
-                cluster_id=cid, primary_code="G", in_scope=True,
+        out = {}
+        for cid in cluster_terms:
+            oos = cid == 2
+            out[cid] = ClusterJELAssignment(
+                cluster_id=cid, primary_code="J" if oos else "G", in_scope=not oos,
                 similarity=0.8, runner_up="E", runner_up_gap=0.1,
             )
-            for cid in cluster_terms
-        }
+        return out
 
     monkeypatch.setattr(driver, "classify_clusters", _fake_classify)
 
@@ -122,8 +124,14 @@ def test_run_analysis_writes_adjusted_artifacts(tmp_path, monkeypatch):
     )
 
     index = json.loads((out / "index.json").read_text())
-    assert index["n_narratives"] == 3                 # noise excluded
+    assert index["n_narratives"] == 3                 # noise excluded, oos kept (ADR-046)
     assert {e["cluster_id"] for e in index["narratives"]} == {0, 1, 2}
+
+    # Out-of-scope cluster 2 is analyzed but flagged with its JEL code (ADR-046).
+    by_id = {e["cluster_id"]: e for e in index["narratives"]}
+    assert by_id[2]["in_scope"] is False
+    assert by_id[2]["jel_code"] == "J"
+    assert by_id[0]["in_scope"] is True
 
     # Per-narrative artifacts exist, are valid JSON, and carry the volume series.
     for cid in (0, 1, 2):
