@@ -80,10 +80,24 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
       )}
     </div>
     <div id="vol-chart" class="chart"></div>
+    <div class="zoom-controls">
+      <label class="zoom">
+        <span>time zoom</span>
+        <input type="range" id="zoom-x" min="1" max="12" step="0.1" value="1" aria-label="time (horizontal) zoom" />
+      </label>
+      <label class="zoom">
+        <span>volume zoom</span>
+        <input type="range" id="zoom-y" min="1" max="12" step="0.1" value="1" aria-label="volume (vertical) zoom" />
+      </label>
+    </div>
     {(n.mediacloud || n.markets) && (
       <p class="caption" id="overlay-caption">
+        drag the chart to move; the sliders zoom time and volume independently.
         overlays are scaled to the bar axis — compare shape and timing, not height.
       </p>
+    )}
+    {!(n.mediacloud || n.markets) && (
+      <p class="caption">drag the chart to move; the sliders zoom time and volume independently.</p>
     )}
   </section>
 
@@ -169,7 +183,7 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
 
   <script id="narr-data" type="application/json" set:html={JSON.stringify(n)}></script>
   <script>
-    import { Plotly, baseLayout, CHART_CONFIG, COL, HOVER_LABEL, seriesLabel } from "@lib/chart";
+    import { Plotly, baseLayout, COL, HOVER_LABEL, seriesLabel } from "@lib/chart";
     const n = JSON.parse(document.getElementById("narr-data").textContent);
     const chartEl = document.getElementById("vol-chart");
     const tabsEl = document.getElementById("lens-tabs");
@@ -177,11 +191,16 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
     const vol = n.volume.values;
     const maxVol = Math.max(1, ...vol);
 
-    // x bounds in epoch-ms with a small pad beyond the first/last day, so the
-    // edge bars aren't flush against the frame and a zoomed-in pan has slack.
+    // x bounds in epoch-ms. give the series ~20% of its span as breathing room
+    // on the left so the rising tail and overlays aren't flush to the frame.
+    // dormant narratives are finished, so they get the same margin on the right;
+    // growth/decay are still unfolding, so we pin the right edge to the last
+    // datapoint rather than imply "future" whitespace.
     const xLoMs = Date.parse(dates[0]);
     const xHiMs = Date.parse(dates[dates.length - 1]);
-    const xPad = (xHiMs - xLoMs) * 0.02 || 864e5;
+    const xSpan = xHiMs - xLoMs || 864e5;
+    const xMarginL = xSpan * 0.2;
+    const xMarginR = n.stage === "dormant" ? xSpan * 0.2 : 0;
 
     function normalise(arr) {
       const xs = arr.filter((v) => v != null && isFinite(v));
@@ -222,7 +241,61 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
     const hov = (label) =>
       `${label} · %{x|%b %-d, %Y} · %{y:.2f}<extra></extra>`;
 
+    // ---- view state: drag pans the center, the sliders set the zoom factor ----
+    const xMin = xLoMs - xMarginL, xMax = xHiMs + xMarginR, xFull = xMax - xMin;
+    // y top is the max across every lens (not just the active one) so the
+    // vertical scale and its zoom slider stay put when you switch lenses.
+    const yTop = Math.max(
+      maxVol,
+      ...fits.flatMap((f) => (f.curve || []).filter((v) => v != null && isFinite(v))),
+    ) * 1.08;
+    let zx = 1, zy = 1;             // zoom factors (1 = the whole window)
+    let cx = (xMin + xMax) / 2;     // x center (epoch-ms)
+    let cy = yTop / 2;              // y center
+    const ms = (v) => (typeof v === "number" ? v : Date.parse(v));
+    function viewRange() {
+      const xs = xFull / zx, ys = yTop / zy;
+      cx = Math.min(xMax - xs / 2, Math.max(xMin + xs / 2, cx));
+      cy = Math.min(yTop - ys / 2, Math.max(ys / 2, cy));
+      return { x: [cx - xs / 2, cx + xs / 2], y: [cy - ys / 2, cy + ys / 2] };
+    }
+
     render();
+
+    // drag pans (dragmode: pan); read the resulting range back so the center
+    // stays in sync — a later slider zoom then stays centered where the user
+    // left it. the floor is strict: a pan can momentarily overshoot below zero,
+    // so we snap the bottom back to 0 (keeping the window height), guarded
+    // against re-entrancy so the corrective relayout doesn't loop.
+    let correcting = false;
+    chartEl.on("plotly_relayout", (e) => {
+      if (correcting) return;
+      const x0 = e["xaxis.range[0]"], x1 = e["xaxis.range[1]"];
+      if (x0 != null && x1 != null && isFinite(ms(x0)) && isFinite(ms(x1)))
+        cx = (ms(x0) + ms(x1)) / 2;
+      const y0 = e["yaxis.range[0]"], y1 = e["yaxis.range[1]"];
+      if (y0 != null && y1 != null) {
+        let lo = Number(y0), hi = Number(y1);
+        if (lo < 0) {
+          hi -= lo; lo = 0;
+          cy = (lo + hi) / 2;
+          correcting = true;
+          Plotly.relayout(chartEl, { "yaxis.range": [lo, hi] })
+            .then(() => { correcting = false; });
+        } else {
+          cy = (lo + hi) / 2;
+        }
+      }
+    });
+
+    const zxEl = document.getElementById("zoom-x");
+    const zyEl = document.getElementById("zoom-y");
+    const applyZoom = () => {
+      const vr = viewRange();
+      Plotly.relayout(chartEl, { "xaxis.range": vr.x, "yaxis.range": vr.y });
+    };
+    zxEl.addEventListener("input", () => { zx = parseFloat(zxEl.value); applyZoom(); });
+    zyEl.addEventListener("input", () => { zy = parseFloat(zyEl.value); applyZoom(); });
 
     function render() {
       const traces = [
@@ -250,38 +323,34 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
           line: { color: COL.decay, width: 2, dash: "dash" },
           hovertemplate: hov(`${seriesLabel(n.markets.series_label)} (scaled)`) });
       }
-      // bound pan/zoom natively (minallowed/maxallowed) instead of snapping the
-      // range back after each relayout — the snap-back round-trip was the source
-      // of the jitter. explicit initial ranges keep the bounds from aborting the
-      // first render. top has headroom for the fitted curve overshooting the bars.
-      const yMax = Math.max(
-        maxVol,
-        ...((f && f.curve) ? f.curve.filter((v) => v != null && isFinite(v)) : [0]),
-      );
       // fixed margins (no automargin): automargin recomputes the plot area
       // whenever the visible tick labels change width, which on a date axis
-      // happens every pan/zoom frame — that reflow was the jitter. fixed
-      // margins keep the drawing area stable so the drag stays smooth.
+      // happens every pan frame — that reflow was the jitter. the range comes
+      // from the shared view state so a lens switch keeps the current pan/zoom.
+      const vr = viewRange();
       const layout = baseLayout({
         bargap: 0.06,
         dragmode: "pan",
         margin: { l: 64, r: 18, t: 8, b: 46 },
         xaxis: {
           type: "date", gridcolor: "rgba(226,220,207,0.6)",
-          range: [xLoMs - xPad, xHiMs + xPad],
-          minallowed: xLoMs - xPad, maxallowed: xHiMs + xPad,
+          range: vr.x, minallowed: xMin, maxallowed: xMax,
         },
         yaxis: {
           title: { text: "corpus-size-adjusted volume", standoff: 14 },
           gridcolor: "rgba(226,220,207,0.6)",
-          range: [0, yMax * 1.08], minallowed: 0,
+          range: vr.y, minallowed: 0, maxallowed: yTop,
         },
         legend: { orientation: "h", y: 1.16, x: 0 },
       });
       // pin the hover chip per-trace: otherwise a translucent marker/line color
       // (e.g. the faint blue volume bars) bleeds into the chip background.
       traces.forEach((t) => (t.hoverlabel = HOVER_LABEL));
-      Plotly.react(chartEl, traces, layout, CHART_CONFIG);
+      // pan-only: no scroll-zoom, no box-zoom, no double-click reset — the two
+      // sliders own zooming, so the axes never fight over a drag gesture.
+      Plotly.react(chartEl, traces, layout, {
+        displayModeBar: false, responsive: true, scrollZoom: false, doubleClick: false,
+      });
     }
   </script>
 </Base>
@@ -305,6 +374,15 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
   }
   .lens-bar :global(.tabs) { border-bottom: none; margin: 0; }
   .lens-bar :global(.toggle-row) { margin: 0; }
+  /* two zoom sliders sitting side by side under the chart — drag pans, these
+     scale time and volume independently. accent-color matches the page toggles. */
+  .zoom-controls { display: flex; gap: 2rem; align-items: center; margin: 0.6rem 0 0; }
+  .zoom {
+    flex: 1; display: flex; align-items: center; gap: 0.6rem;
+    font-size: var(--fs-meta); color: var(--faint); letter-spacing: 0.03em;
+  }
+  .zoom span { white-space: nowrap; }
+  .zoom input[type="range"] { flex: 1; accent-color: var(--accent); cursor: pointer; }
   .reps { list-style: none; margin: 0; padding: 0; }
   .reps li { padding: 0.9rem 0; border-bottom: 1px solid var(--line-soft); }
   .reps a { font-weight: 600; }
