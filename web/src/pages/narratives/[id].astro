@@ -214,27 +214,36 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
     marketEl && marketEl.addEventListener("change", render);
     render();
 
+    // one-line hover: trace name, date, value — all in a single chip so the
+    // name never spills into Plotly's separate (white, trace-colored) box.
+    const hov = (label) =>
+      `${label} · %{x|%b %-d, %Y} · %{y:.2f}<extra></extra>`;
+
     function render() {
       const traces = [
         { x: dates, y: vol, type: "bar", name: "adjusted volume",
-          marker: { color: "rgba(47,75,124,0.22)" } },
+          marker: { color: "rgba(47,75,124,0.22)" },
+          hovertemplate: hov("adjusted volume") },
       ];
       const f = fits[activeFit];
       if (f && f.curve) {
         traces.push({ x: dates, y: f.curve, type: "scatter", mode: "lines",
-          name: `${f.model} fit`, line: { color: COL.accent, width: 2.6 } });
+          name: `${f.model} fit`, line: { color: COL.accent, width: 2.6 },
+          hovertemplate: hov(`${f.model} fit`) });
       }
       if (pressEl && pressEl.checked && n.mediacloud) {
         const aligned = alignTo(dates, n.mediacloud.dates, n.mediacloud.story_count);
         traces.push({ x: dates, y: normalise(aligned), type: "scatter", mode: "lines",
           name: "press (scaled)", connectgaps: true,
-          line: { color: COL.ember, width: 2, dash: "dot" } });
+          line: { color: COL.ember, width: 2, dash: "dot" },
+          hovertemplate: hov("press (scaled)") });
       }
       if (marketEl && marketEl.checked && n.markets) {
         const aligned = alignTo(dates, n.markets.dates, n.markets.market);
         traces.push({ x: dates, y: normalise(aligned), type: "scatter", mode: "lines",
           name: `${seriesLabel(n.markets.series_label)} (scaled)`, connectgaps: true,
-          line: { color: COL.decay, width: 2, dash: "dash" } });
+          line: { color: COL.decay, width: 2, dash: "dash" },
+          hovertemplate: hov(`${seriesLabel(n.markets.series_label)} (scaled)`) });
       }
       const layout = baseLayout({
         bargap: 0.06,
