@@ -34,7 +34,7 @@ const factOrder: [string, string][] = [
   ["peak_volume", "peak volume"],
   ["time_to_peak_days", "time to peak (days)"],
   ["active_days", "active days"],
-  ["wave_count", "wave count"],
+  ["wave_count", "peaks (≥ ½ max)"],
 ];
 const linkList = (ids: number[]) =>
   ids.length
@@ -132,6 +132,11 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
         <dd>{n.markets.granger.market_leads_volume?.significant ? "significant" : "not significant"}
           {n.markets.granger.market_leads_volume && <> (p = {fmt(n.markets.granger.market_leads_volume.min_p, 3)}, lag {n.markets.granger.market_leads_volume.best_lag})</>}</dd>
       </dl>
+      <p class="muted" style="margin-top:0.9rem;max-width:46rem">
+        {n.markets.caption} this is one of many such tests — one per narrative
+        against the same series — so an isolated &ldquo;significant&rdquo; verdict
+        is suggestive, not confirmation. read it as timing evidence, not proof.
+      </p>
     </section>
   )}
 
