@@ -20,6 +20,14 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 const fmt = (x: number | null, d = 2) =>
   x === null || x === undefined ? "—" : x.toFixed(d);
 const sd = n.stage_detail || {};
+// the threshold row mirrors the stage that was actually assigned: growth meets
+// R₀ ≥ threshold, decay falls below it, dormant has no stable fit to compare.
+const stageThreshold =
+  n.stage === "decay"
+    ? `R₀ < ${fmt(sd.threshold, 1)}`
+    : n.stage === "dormant"
+      ? "no stable fit"
+      : `R₀ ≥ ${fmt(sd.threshold, 1)}`;
 const facts = n.shape_facts || {};
 const factOrder: [string, string][] = [
   ["total_volume", "total volume"],
@@ -89,7 +97,7 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
           <tr><td>staging lens</td><td>{n.staging_model}</td></tr>
           <tr><td>R₀ (mean)</td><td>{fmt(sd.r0_mean)}</td></tr>
           <tr><td>R₀ 95% interval</td><td>{sd.r0_ci_low != null ? `${fmt(sd.r0_ci_low)} – ${fmt(sd.r0_ci_high)}` : "—"}</td></tr>
-          <tr><td>growth threshold</td><td>R₀ ≥ {fmt(sd.threshold, 1)}</td></tr>
+          <tr><td>{n.stage} threshold</td><td>{stageThreshold}</td></tr>
         </table>
       </div>
       <div>
