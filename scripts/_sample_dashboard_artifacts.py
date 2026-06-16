@@ -241,7 +241,32 @@ def _card(label, top_terms, n_articles, dates, peak_date):
     }
 
 
-def _mediacloud(grid, curve, reliable_since=2017):
+def _granger(n_obs, label, other_label):
+    """Fabricate a bidirectional-Granger readout (ADR-041 shape).
+
+    "market"/"discourse" are the generic slots: ``other_label`` is "market" for
+    the FRED overlay (ADR-047) and "press" for the Media Cloud lead-lag (ADR-048).
+    < 20 weekly obs → the test can't run, so it reports "insufficient data".
+    """
+    base = {"max_lag": 4, "alpha": 0.05, "caption": TIMING_NOT_CAUSE, "n_obs": n_obs}
+    if n_obs < 20:
+        return {**base, "verdict": "insufficient data",
+                "volume_leads_market": None, "market_leads_volume": None}
+    verdicts = [f"discourse precedes {other_label}", f"{other_label} precedes discourse",
+                "no significant precedence", "bidirectional precedence"]
+    verdict = verdicts[abs(hash(f"{label}|{other_label}")) % 4]
+    disc_leads = "discourse precedes" in verdict or "bidirectional" in verdict
+    other_leads = f"{other_label} precedes" in verdict or "bidirectional" in verdict
+    return {
+        **base, "verdict": verdict,
+        "volume_leads_market": {"min_p": 0.012, "best_lag": 2, "significant": True}
+        if disc_leads else {"min_p": 0.21, "best_lag": 3, "significant": False},
+        "market_leads_volume": {"min_p": 0.03, "best_lag": 1, "significant": True}
+        if other_leads else {"min_p": 0.34, "best_lag": 2, "significant": False},
+    }
+
+
+def _mediacloud(grid, curve, label, reliable_since=2017):
     weekly = grid[::7] if len(grid) > 60 else grid
     dates, counts, ratio = [], [], []
     for d in weekly:
@@ -258,6 +283,8 @@ def _mediacloud(grid, curve, reliable_since=2017):
     return MediaCloudArtifact(
         dates=dates, story_count=counts, ratio=ratio,
         reliable_since_year=reliable_since, caption=MC_CAPTION,
+        # press-vs-discourse lead-lag — the direct thesis test (ADR-048)
+        granger=_granger(len(dates), label, "press"),
     )
 
 
@@ -272,33 +299,7 @@ def _markets(grid, curve, label):
         dates.append(d.isoformat())
         vol.append(float(max(0.0, curve[i] if i < len(curve) else 0.0)))
         mkt.append(round(float(20 + 8 * math.sin(i / 9) + RNG.normal(0, 1.5)), 2))
-    # < 20 usable weekly obs → the lag test can't run (ADR-047); the overlay is
-    # still drawn, the readout reports "insufficient data" rather than a number.
-    if len(dates) < 20:
-        granger = {
-            "series_id": sid, "series_label": series, "max_lag": 4, "alpha": 0.05,
-            "caption": TIMING_NOT_CAUSE, "n_obs": len(dates),
-            "verdict": "insufficient data",
-            "volume_leads_market": None, "market_leads_volume": None,
-        }
-        return MarketsArtifact(
-            series_id=sid, series_label=series, dates=dates, volume=vol,
-            market=mkt, granger=granger, caption=TIMING_NOT_CAUSE,
-        )
-    verdicts = ["discourse precedes market", "market precedes discourse",
-                "no significant precedence", "bidirectional precedence"]
-    verdict = verdicts[abs(hash(label)) % 4]
-    granger = {
-        "series_id": sid, "series_label": series, "max_lag": 4, "alpha": 0.05,
-        "caption": TIMING_NOT_CAUSE, "n_obs": len(dates),
-        "verdict": verdict,
-        "volume_leads_market": {"min_p": 0.012, "best_lag": 2, "significant": True}
-        if "discourse" in verdict or "bidirectional" in verdict
-        else {"min_p": 0.21, "best_lag": 3, "significant": False},
-        "market_leads_volume": {"min_p": 0.03, "best_lag": 1, "significant": True}
-        if "market" in verdict or "bidirectional" in verdict
-        else {"min_p": 0.34, "best_lag": 2, "significant": False},
-    }
+    granger = {"series_id": sid, "series_label": series, **_granger(len(dates), label, "market")}
     return MarketsArtifact(
         series_id=sid, series_label=series, dates=dates, volume=vol,
         market=mkt, granger=granger, caption=TIMING_NOT_CAUSE,
@@ -368,7 +369,7 @@ def main() -> None:
             # before ~2017, so it's present for in-window narratives (start ≥ 2017)
             # and absent/degraded for older ones. The VIX markets overlay is
             # universal (ADR-047). (The per-spec `overlays` flag is unused now.)
-            mediacloud=_mediacloud(grid, curve) if start.year >= 2017 else None,
+            mediacloud=_mediacloud(grid, curve, label) if start.year >= 2017 else None,
             markets=_markets(grid, curve, label),
         ))
 

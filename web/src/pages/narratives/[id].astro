@@ -49,6 +49,13 @@ const SERIES_LABEL: Record<string, string> = {
 const fmtSeries = (s: string | null | undefined) =>
   !s ? "market" : SERIES_LABEL[s] ?? s.replace(/_/g, " ");
 const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
+const mkg = n.markets?.granger ?? null;
+const mcg = n.mediacloud?.granger ?? null;
+// one row of a Granger readout: "<from> → <to>" with significance + (p, lag).
+const direction = (d: any) =>
+  !d
+    ? "—"
+    : `${d.significant ? "significant" : "not significant"} (p = ${fmt(d.min_p, 3)}, lag ${d.best_lag})`;
 ---
 
 <Base title={n.label} active="narratives">
@@ -119,24 +126,42 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
     </div>
   </section>
 
-  {n.markets && (
+  {(n.markets || n.mediacloud) && (
     <section class="section reveal">
-      <p class="eyebrow">markets</p>
-      <h2>did the discourse lead or lag {mlabel}?</h2>
-      <p class="note">{n.markets.granger.verdict}</p>
-      <dl class="kv" style="margin-top:0.8rem;max-width:38rem">
-        <dt>discourse → {mlabel}</dt>
-        <dd>{n.markets.granger.volume_leads_market?.significant ? "significant" : "not significant"}
-          {n.markets.granger.volume_leads_market && <> (p = {fmt(n.markets.granger.volume_leads_market.min_p, 3)}, lag {n.markets.granger.volume_leads_market.best_lag})</>}</dd>
-        <dt>{mlabel} → discourse</dt>
-        <dd>{n.markets.granger.market_leads_volume?.significant ? "significant" : "not significant"}
-          {n.markets.granger.market_leads_volume && <> (p = {fmt(n.markets.granger.market_leads_volume.min_p, 3)}, lag {n.markets.granger.market_leads_volume.best_lag})</>}</dd>
-      </dl>
-      <p class="muted" style="margin-top:0.9rem;max-width:46rem">
-        {n.markets.caption} this is one of many such tests — one per narrative
-        against the same series — so an isolated &ldquo;significant&rdquo; verdict
-        is suggestive, not confirmation. read it as timing evidence, not proof.
-      </p>
+      <div class="cols-2">
+        {n.markets && mkg && (
+          <div>
+            <p class="eyebrow">markets</p>
+            <h3>did discourse lead or lag {mlabel}?</h3>
+            <p class="note">{mkg.verdict}</p>
+            <dl class="kv" style="margin-top:0.8rem">
+              <dt>discourse → {mlabel}</dt>
+              <dd>{direction(mkg.volume_leads_market)}</dd>
+              <dt>{mlabel} → discourse</dt>
+              <dd>{direction(mkg.market_leads_volume)}</dd>
+            </dl>
+          </div>
+        )}
+        {n.mediacloud && (
+          <div>
+            <p class="eyebrow">broad-press</p>
+            <h3>did discourse lead or lag the press?</h3>
+            {mcg ? (
+              <>
+                <p class="note">{mcg.verdict}</p>
+                <dl class="kv" style="margin-top:0.8rem">
+                  <dt>discourse → press</dt>
+                  <dd>{direction(mcg.volume_leads_market)}</dd>
+                  <dt>press → discourse</dt>
+                  <dd>{direction(mcg.market_leads_volume)}</dd>
+                </dl>
+              </>
+            ) : (
+              <p class="note">press lead-lag unavailable for this window.</p>
+            )}
+          </div>
+        )}
+      </div>
     </section>
   )}
 
