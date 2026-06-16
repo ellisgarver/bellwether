@@ -335,9 +335,10 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
       // happens every pan frame — that reflow was the jitter. the range comes
       // from the shared view state so a lens switch keeps the current pan/zoom.
       const vr = viewRange();
-      // legend left-aligned to the chart's left edge (xref:container, x:0) and
-      // lifted into a dedicated top-margin row (t:34, y:1 anchored bottom) so it
-      // clears the top y-tick instead of overlapping it.
+      // legend pinned to the plot area's left edge (xref:paper, x:0) and lifted
+      // into a top-margin row (t:34, y:1 anchored bottom) so it clears the top
+      // y-tick. anchoring to paper (not container) avoids the width-dependent
+      // left-margin inflation that shoved the whole plot right.
       const layout = baseLayout({
         bargap: 0.06,
         dragmode: false,
@@ -348,8 +349,7 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
           gridcolor: "rgba(226,220,207,0.6)", range: vr.y,
         },
         legend: {
-          orientation: "h", xref: "container", x: 0, xanchor: "left",
-          y: 1.0, yanchor: "bottom",
+          orientation: "h", x: 0, xanchor: "left", y: 1.0, yanchor: "bottom",
         },
       });
       // pin the hover chip per-trace: otherwise a translucent marker/line color
