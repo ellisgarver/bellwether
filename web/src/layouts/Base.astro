@@ -3,7 +3,7 @@ import "../styles/global.css";
 
 interface Props {
   title: string;
-  active?: "home" | "narratives" | "emerging" | "about";
+  active?: "home" | "narratives" | "emerging" | "guide" | "data" | "research";
   wide?: boolean;
 }
 const { title, active, wide = false } = Astro.props;
@@ -53,7 +53,9 @@ const href = (p: string) => (base.replace(/\/$/, "") + p) || "/";
         <nav class="nav">
           <a href={href("/narratives")} class={active === "narratives" ? "active" : ""}>narratives</a>
           <a href={href("/emerging")} class={active === "emerging" ? "active" : ""}>emerging</a>
-          <a href={href("/about")} class={active === "about" ? "active" : ""}>guide + research</a>
+          <a href={href("/data")} class={active === "data" ? "active" : ""}>data</a>
+          <a href={href("/guide")} class={active === "guide" ? "active" : ""}>guide</a>
+          <a href={href("/research")} class={active === "research" ? "active" : ""}>research</a>
         </nav>
       </div>
     </header>

@@ -31,6 +31,9 @@
   --fs-ui:    0.94rem;  /* nav, tabs, toggles, key/value, tables, captions */
   --fs-body:  1rem;     /* body copy */
   --fs-lede:  1.18rem;  /* ledes, hero thesis, h3 / card titles */
+  /* big tabular stat figure (home hero stats + data-page corpus stats); one
+     responsive value so the same role reads identically on every page. */
+  --fs-stat:  clamp(2rem, 3.2vw, 2.4rem);
   /* shared slide title (hero + landscape): the vw term self-regulates so the
      longer slide-2 line stays on one row; the cap is the widest that still fits
      it at the wrap's max width. */
@@ -76,6 +79,10 @@ h3 { font-size: var(--fs-lede); margin: var(--space-3) 0 var(--space-1); }
 .eyebrow + h1, .eyebrow + h2, .eyebrow + h3 { margin-top: 0; }
 
 p { margin: 0 0 1rem; }
+/* cap unclassed body copy at a readable line length so prose pages (guide,
+   data, research, detail) don't run the full 1180px container. Classed
+   paragraphs (.caption, .lede, .muted, .note) keep their own widths. */
+.section > p:not([class]) { max-width: var(--measure); }
 
 /* ---- layout ---- */
 .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 1.6rem; }
@@ -162,6 +169,15 @@ a.card:hover { background: var(--paper-2); padding-left: 0.9rem; padding-right: 
 .toggle { display: inline-flex; align-items: center; gap: 0.45rem; font-size: var(--fs-ui); cursor: pointer; color: var(--muted); }
 .toggle:hover { color: var(--ink); }
 .toggle input { accent-color: var(--accent); }
+
+/* visible keyboard focus for every interactive control (mouse clicks stay
+   clean via :focus-visible). */
+.tab:focus-visible,
+.toggle input:focus-visible,
+.nav a:focus-visible,
+.card:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px;
+}
 
 /* ---- charts ---- */
 .chart { width: 100%; min-height: 380px; }

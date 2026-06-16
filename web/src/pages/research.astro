@@ -1,0 +1,127 @@
+---
+import Base from "../layouts/Base.astro";
+const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
+---
+
+<Base title="research" active="research">
+  <p class="eyebrow reveal">the research</p>
+  <h1 class="reveal">what it is built on</h1>
+  <p class="lede reveal">
+    the idea behind the tool, why its results can be trusted, and what it was built for.
+  </p>
+
+  <section class="section reveal">
+    <p class="eyebrow">the idea</p>
+    <h2>contagious economic stories</h2>
+
+    <figure class="idea-graphic reveal">
+      <svg class="contagion" viewBox="0 0 320 130" aria-hidden="true">
+        <line class="edge" x1="60" y1="65" x2="120" y2="30" />
+        <line class="edge" x1="60" y1="65" x2="130" y2="100" />
+        <line class="edge" x1="120" y1="30" x2="200" y2="42" />
+        <line class="edge" x1="130" y1="100" x2="210" y2="92" />
+        <line class="edge" x1="200" y1="42" x2="270" y2="65" />
+        <line class="edge" x1="210" y1="92" x2="270" y2="65" />
+        <circle class="node n-s" cx="60" cy="65" r="9" />
+        <circle class="node n-a" cx="120" cy="30" r="8" />
+        <circle class="node n-b" cx="130" cy="100" r="8" />
+        <circle class="node n-c" cx="200" cy="42" r="8" />
+        <circle class="node n-d" cx="210" cy="92" r="8" />
+        <circle class="node n-e" cx="270" cy="65" r="9" />
+      </svg>
+      <figcaption class="sir-key">
+        <span><i class="dot s"></i>susceptible</span>
+        <span><i class="dot i"></i>infected</span>
+        <span><i class="dot r"></i>recovered</span>
+      </figcaption>
+    </figure>
+
+    <p>
+      this project is framed around Robert Shiller's <em>Narrative Economics</em> (2017 AEA
+      presidential address; 2019 book): economic stories spread through a population
+      the way contagious diseases do — a story is "caught" from exposure, carried for
+      a while, and eventually dropped, and its prevalence over time traces the same
+      rise-and-fall shape as an outbreak. the project seeks to quantify this analogy.
+    </p>
+    <p>
+      Shiller maps cleanly onto SIR compartments: people who have not yet
+      encountered a story are <em>susceptible</em>, those actively repeating it are
+      <em>infected</em>, and those who have moved on are <em>recovered</em>. the same
+      mechanics that determine whether a disease takes off also determine whether a story does. specifically,
+      we measure the lifecycle half of Shiller's claim —
+      emergence, growth, peak, decay — using century-old models economists
+      and epidemiologists share, applied to the volume of institutional
+      macro writing rather than to surveys or social media.
+    </p>
+  </section>
+
+  <section class="section reveal">
+    <p class="eyebrow">the grounding</p>
+    <h2>field-standard, not hand-tuned</h2>
+    <p>
+      results are credible because nothing is tuned
+      to make the output look better. every parameter in the pipeline is either a
+      published library default or a value taken from the primary literature with a
+      citation. where no field-accepted anchor existed, that knob was removed
+      rather than guessed or predicted. there are no sensitivity sweeps, no thresholds nudged
+      toward a nicer-looking chart, and crucially, nothing is ever adjusted to
+      improve how well the system recovers known events. with no
+      train/test split, no-tuning rule keeps the exercise honest.
+    </p>
+    <p class="muted">
+      see the full methodology, with citations in
+      <a href={`${repo}/blob/main/docs/METHODOLOGY.md`} target="_blank" rel="noopener">METHODOLOGY.md</a>
+      from the repository.
+    </p>
+  </section>
+
+  <section class="section reveal">
+    <p class="eyebrow">the goal</p>
+    <h2>a tool for reading the recent past</h2>
+    <p>
+      built as an educational and historical-analysis tool,
+      walk back through fifteen years of macro-financial discourse and watch how
+      specific stories — the 2013 taper tantrum, the transitory-inflation debate,
+      the 2023 soft-landing turn — emerged, took hold, peaked and faded, in the
+      words of the institutions that shaped them. or just keep an eye out for how the most
+      recent stories are turning out.
+    </p>
+    <p>
+      the aim is to make an abstract idea more concrete. Shiller's claim that narratives
+      spread like contagions is easy to state and hard to feel. here you can see the
+      curve, switch the lens, line it up against the markets, and judge the analogy
+      for yourself. free and reproducible.
+    </p>
+  </section>
+</Base>
+
+<style>
+  /* contagion motif: a small SIR spread that loops — one seed infects its
+     neighbours, then everyone recovers. */
+  .idea-graphic { margin: 1.2rem auto 1.4rem; max-width: 340px; text-align: center; }
+  .contagion { width: 100%; height: auto; display: block; }
+  .edge { stroke: var(--line); stroke-width: 1.4; opacity: 0.5; }
+  .node { fill: var(--faint); animation: infect 7.5s ease-in-out infinite; }
+  @keyframes infect {
+    0%, 8% { fill: var(--faint); }
+    20% { fill: var(--ember); }
+    42% { fill: var(--ember); }
+    60%, 92% { fill: var(--growth); }
+    100% { fill: var(--faint); }
+  }
+  .n-s { animation-delay: 0s; } .n-a { animation-delay: 0.7s; } .n-b { animation-delay: 0.9s; }
+  .n-c { animation-delay: 1.5s; } .n-d { animation-delay: 1.7s; } .n-e { animation-delay: 2.4s; }
+  .sir-key {
+    display: flex; gap: 1.1rem; justify-content: center; flex-wrap: wrap;
+    margin-top: 0.5rem; color: var(--muted); font-size: var(--fs-meta);
+  }
+  .sir-key span { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .sir-key .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; display: inline-block; }
+  .sir-key .s { background: var(--faint); }
+  .sir-key .i { background: var(--ember); }
+  .sir-key .r { background: var(--growth); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .node { animation: none; fill: var(--growth); }
+  }
+</style>
