@@ -58,12 +58,6 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
   <section class="section reveal">
     <p class="eyebrow">life-cycle</p>
     <h2>how the volume rose and fell</h2>
-    <p class="caption">
-      bars are article volume adjusted for the size of the whole corpus that day, so
-      growth in coverage overall doesn't masquerade as a rising narrative; the line is
-      one fitted lens. switch lenses with the tabs — each reads the same curve a
-      different way.
-    </p>
     <div class="lens-bar">
       <div class="tabs" id="lens-tabs"></div>
       {(n.mediacloud || n.markets) && (
@@ -91,16 +85,12 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
       <div>
         <p class="eyebrow">where it sits now</p>
         <h3>{n.stage}</h3>
-        <dl class="kv">
-          <dt>staging lens</dt><dd>{n.staging_model}</dd>
-          <dt>R₀ (mean)</dt><dd>{fmt(sd.r0_mean)}</dd>
-          <dt>R₀ 95% interval</dt><dd>{sd.r0_ci_low != null ? `${fmt(sd.r0_ci_low)} – ${fmt(sd.r0_ci_high)}` : "—"}</dd>
-          <dt>growth threshold</dt><dd>R₀ ≥ {fmt(sd.threshold, 1)}</dd>
-        </dl>
-        <p class="caption">
-          R₀ above 1 means the story was still spreading; below 1 it was fading.
-          the interval is how wide the estimate actually is.
-        </p>
+        <table class="facts">
+          <tr><td>staging lens</td><td>{n.staging_model}</td></tr>
+          <tr><td>R₀ (mean)</td><td>{fmt(sd.r0_mean)}</td></tr>
+          <tr><td>R₀ 95% interval</td><td>{sd.r0_ci_low != null ? `${fmt(sd.r0_ci_low)} – ${fmt(sd.r0_ci_high)}` : "—"}</td></tr>
+          <tr><td>growth threshold</td><td>R₀ ≥ {fmt(sd.threshold, 1)}</td></tr>
+        </table>
       </div>
       <div>
         <p class="eyebrow">shape facts</p>
@@ -289,7 +279,7 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
      the pre-change h1 size so it doesn't dwarf the meta line beneath it. */
   h1 { font-size: clamp(2rem, 4vw, 3.1rem); }
   .back { margin: 0 0 0.6rem; }
-  /* a single divider between the JEL code and the colour-bubble tags, replacing
+  /* a single divider between the JEL code and the color-bubble tags, replacing
      the gray dot separators around them. */
   .sep { color: var(--line); margin: 0 0.5rem; }
   .lede :global(.badge) { vertical-align: middle; margin-right: 0.3rem; }

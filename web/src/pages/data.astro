@@ -40,7 +40,7 @@ const sourceBars = [...sourceTotals.entries()]
   .map(([src, n]) => ({ label: sourceLabel(src), articles: n }))
   .sort((a, b) => a.articles - b.articles); // ascending: Plotly h-bars read bottom→top
 
-// JEL-field totals (article-weighted), with in-scope flag for colour.
+// JEL-field totals (article-weighted), with in-scope flag for color.
 const IN_SCOPE = new Set(["E", "F", "G", "H"]);
 const jelTotals = new Map<string, number>();
 for (const e of index.narratives) {
