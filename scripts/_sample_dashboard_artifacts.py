@@ -272,6 +272,19 @@ def _markets(grid, curve, label):
         dates.append(d.isoformat())
         vol.append(float(max(0.0, curve[i] if i < len(curve) else 0.0)))
         mkt.append(round(float(20 + 8 * math.sin(i / 9) + RNG.normal(0, 1.5)), 2))
+    # < 20 usable weekly obs → the lag test can't run (ADR-047); the overlay is
+    # still drawn, the readout reports "insufficient data" rather than a number.
+    if len(dates) < 20:
+        granger = {
+            "series_id": sid, "series_label": series, "max_lag": 4, "alpha": 0.05,
+            "caption": TIMING_NOT_CAUSE, "n_obs": len(dates),
+            "verdict": "insufficient data",
+            "volume_leads_market": None, "market_leads_volume": None,
+        }
+        return MarketsArtifact(
+            series_id=sid, series_label=series, dates=dates, volume=vol,
+            market=mkt, granger=granger, caption=TIMING_NOT_CAUSE,
+        )
     verdicts = ["discourse precedes market", "market precedes discourse",
                 "no significant precedence", "bidirectional precedence"]
     verdict = verdicts[abs(hash(label)) % 4]
@@ -351,8 +364,10 @@ def main() -> None:
                             runner_up={"E": "G", "F": "E", "G": "E",
                                        "H": "E", "J": "E"}[jel_code],
                             runner_up_gap=round(RNG.random() * 0.1, 3)),
+            # Media Cloud press is genuinely optional (key-gated, thin pre-2017,
+            # ADR-042); the VIX markets overlay is universal (ADR-047).
             mediacloud=_mediacloud(grid, curve) if overlays else None,
-            markets=_markets(grid, curve, label) if overlays else None,
+            markets=_markets(grid, curve, label),
         ))
 
         cen = JEL_CENTROID[jel_code]
