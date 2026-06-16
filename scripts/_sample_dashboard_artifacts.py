@@ -364,9 +364,11 @@ def main() -> None:
                             runner_up={"E": "G", "F": "E", "G": "E",
                                        "H": "E", "J": "E"}[jel_code],
                             runner_up_gap=round(RNG.random() * 0.1, 3)),
-            # Media Cloud press is genuinely optional (key-gated, thin pre-2017,
-            # ADR-042); the VIX markets overlay is universal (ADR-047).
-            mediacloud=_mediacloud(grid, curve) if overlays else None,
+            # Media Cloud press is genuinely optional (ADR-042): key-gated and thin
+            # before ~2017, so it's present for in-window narratives (start ≥ 2017)
+            # and absent/degraded for older ones. The VIX markets overlay is
+            # universal (ADR-047). (The per-spec `overlays` flag is unused now.)
+            mediacloud=_mediacloud(grid, curve) if start.year >= 2017 else None,
             markets=_markets(grid, curve, label),
         ))
 
