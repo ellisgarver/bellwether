@@ -79,6 +79,7 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
         </div>
       )}
     </div>
+    <div id="vol-legend" class="vol-legend"></div>
     <div id="vol-chart" class="chart"></div>
     <div class="zoom-controls">
       <label class="zoom">
@@ -178,6 +179,7 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
     import { Plotly, baseLayout, COL, HOVER_LABEL, seriesLabel } from "@lib/chart";
     const n = JSON.parse(document.getElementById("narr-data").textContent);
     const chartEl = document.getElementById("vol-chart");
+    const legendEl = document.getElementById("vol-legend");
     const tabsEl = document.getElementById("lens-tabs");
     const dates = n.volume.dates;
     const vol = n.volume.values;
@@ -330,26 +332,45 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
           line: { color: COL.decay, width: 2, dash: "dash" },
           hovertemplate: hov(`${seriesLabel(n.markets.series_label)} (scaled)`) });
       }
+      // custom HTML legend instead of Plotly's. Plotly's built-in legend can
+      // only anchor to the plot area (indented by the y-axis margin) or to the
+      // container — and the container anchor makes autoexpand inflate the left
+      // margin in proportion to viewport width, shoving the plot right with a
+      // big empty gutter at wide windows. an HTML row at the page-content left
+      // edge sits flush under the tabs and never touches Plotly's margins.
+      // styling is fully inline: these chips are injected via innerHTML, so
+      // Astro's scoped CSS (which tags template elements with a data-astro-cid
+      // attribute) never reaches them and a class-based display/size rule would
+      // silently not apply — collapsing the swatch box to a sliver.
+      const swBase = "display:inline-block;vertical-align:middle;margin-right:0.4rem;";
+      legendEl.innerHTML = traces
+        .map((t) => {
+          let sw;
+          if (t.type === "bar") {
+            sw = `<span style="${swBase}width:0.8rem;height:0.8rem;border-radius:2px;background:${t.marker.color};outline:1px solid ${COL.accent}"></span>`;
+          } else if (t.line.dash) {
+            const c = t.line.color;
+            sw = `<span style="${swBase}width:1.5rem;height:3px;border-radius:1px;background:repeating-linear-gradient(90deg,${c} 0 5px,transparent 5px 9px)"></span>`;
+          } else {
+            sw = `<span style="${swBase}width:1.5rem;height:3px;border-radius:1px;background:${t.line.color}"></span>`;
+          }
+          return `<span class="leg-item">${sw}${t.name}</span>`;
+        })
+        .join("");
       // fixed margins (no automargin): automargin recomputes the plot area
       // whenever the visible tick labels change width, which on a date axis
       // happens every pan frame — that reflow was the jitter. the range comes
       // from the shared view state so a lens switch keeps the current pan/zoom.
       const vr = viewRange();
-      // legend pinned to the plot area's left edge (xref:paper, x:0) and lifted
-      // into a top-margin row (t:34, y:1 anchored bottom) so it clears the top
-      // y-tick. anchoring to paper (not container) avoids the width-dependent
-      // left-margin inflation that shoved the whole plot right.
       const layout = baseLayout({
         bargap: 0.06,
         dragmode: false,
-        margin: { l: 64, r: 18, t: 34, b: 46 },
+        showlegend: false,
+        margin: { l: 64, r: 18, t: 8, b: 46 },
         xaxis: { type: "date", gridcolor: "rgba(226,220,207,0.6)", range: vr.x },
         yaxis: {
           title: { text: "corpus-size-adjusted volume", standoff: 14 },
           gridcolor: "rgba(226,220,207,0.6)", range: vr.y,
-        },
-        legend: {
-          orientation: "h", x: 0, xanchor: "left", y: 1.0, yanchor: "bottom",
         },
       });
       // pin the hover chip per-trace: otherwise a translucent marker/line color
@@ -383,6 +404,14 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
   }
   .lens-bar :global(.tabs) { border-bottom: none; margin: 0; }
   .lens-bar :global(.toggle-row) { margin: 0; }
+  /* custom chart legend: a flat row of swatch+label chips. left padding matches
+     the tab text inset (.tab padding-left is 0.95rem) so the first swatch sits
+     flush under the "logistic" tab rather than indented by the y-axis margin. */
+  .vol-legend {
+    display: flex; flex-wrap: wrap; gap: 0.3rem 1.4rem; align-items: center;
+    padding-left: 0.95rem; margin: 0.4rem 0 0.1rem;
+    font-size: var(--fs-meta); color: var(--muted);
+  }
   /* two zoom sliders sitting side by side under the chart — drag pans, these
      scale time and volume independently. accent-color matches the page toggles. */
   .zoom-controls { display: flex; gap: 2rem; align-items: center; margin: 0.6rem 0 0; }
