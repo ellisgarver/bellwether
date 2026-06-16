@@ -146,7 +146,7 @@ const curves = [
   }
   .hero-stats { display: flex; gap: 2.6rem; margin: 2.2rem 0 2rem; flex-wrap: wrap; }
   .hero-stats .num {
-    display: block; font-size: 2.4rem; font-weight: 600; line-height: 1;
+    display: block; font-size: var(--fs-stat); font-weight: 600; line-height: 1;
     font-variant-numeric: tabular-nums;
   }
   .hero-stats .lbl { font-size: var(--fs-meta); color: var(--faint); letter-spacing: 0.03em; }
@@ -176,7 +176,6 @@ const curves = [
   @media (max-width: 640px) {
     .hero { min-height: 0; padding-bottom: 1.5rem; }
     .hero-stats { gap: 1.3rem 1.8rem; margin: 1.8rem 0 1.4rem; }
-    .hero-stats .num { font-size: 2rem; }
     .hero-bg { height: clamp(150px, 42vw, 240px); margin: -2rem 0 0; opacity: 0.4; }
   }
 

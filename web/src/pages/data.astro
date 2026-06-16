@@ -1,0 +1,290 @@
+---
+import Base from "../layouts/Base.astro";
+import { loadIndex, loadNarrative, JEL_NAME } from "@lib/data";
+
+const index = loadIndex();
+
+// Aggregate the corpus at build time from the artifact contract — no hard-coded
+// totals. Article counts come from each narrative's index entry; the per-source
+// breakdown comes from each story card's source_mix.
+const totalArticles = index.narratives.reduce((s, e) => s + e.n_articles, 0);
+
+const sourceTotals = new Map<string, number>();
+for (const e of index.narratives) {
+  const card = loadNarrative(e.cluster_id).card;
+  for (const [src, n] of card.source_mix) {
+    sourceTotals.set(src, (sourceTotals.get(src) ?? 0) + n);
+  }
+}
+// pretty source labels (codes → institution names); unknown codes fall back to
+// a de-underscored form so a new feed still renders sensibly.
+const SOURCE_LABEL: Record<string, string> = {
+  federalreserve: "Federal Reserve Board",
+  fed_ny: "NY Fed",
+  fed_sf: "SF Fed",
+  fed_chicago: "Chicago Fed",
+  fed_atlanta: "Atlanta Fed",
+  imf: "IMF",
+  bis: "BIS",
+  cbo: "CBO",
+  cea: "Council of Economic Advisers",
+  ofr: "Treasury OFR",
+  brookings: "Brookings",
+  piie: "PIIE",
+  nber: "NBER",
+  voxeu: "VoxEU",
+  congressional: "Congressional testimony",
+};
+const sourceLabel = (s: string) => SOURCE_LABEL[s] ?? s.replace(/_/g, " ");
+const sourceBars = [...sourceTotals.entries()]
+  .map(([src, n]) => ({ label: sourceLabel(src), articles: n }))
+  .sort((a, b) => a.articles - b.articles); // ascending: Plotly h-bars read bottom→top
+
+// JEL-field totals (article-weighted), with in-scope flag for colour.
+const IN_SCOPE = new Set(["E", "F", "G", "H"]);
+const jelTotals = new Map<string, number>();
+for (const e of index.narratives) {
+  const code = e.jel_code ?? "?";
+  jelTotals.set(code, (jelTotals.get(code) ?? 0) + e.n_articles);
+}
+const jelBars = [...jelTotals.entries()]
+  .map(([code, n]) => ({
+    code,
+    name: JEL_NAME[code] ?? code,
+    articles: n,
+    in_scope: IN_SCOPE.has(code),
+  }))
+  .sort((a, b) => b.articles - a.articles);
+
+// the basis set (ADR-020): one row per independent dimension of U.S. macro
+// discourse, with the source(s) covering it.
+const sources: [string, string][] = [
+  [
+    "U.S. monetary authority",
+    "Federal Reserve Board — FOMC statements and minutes, speeches (including Jackson Hole), the Beige Book, FEDS Notes, the Monetary Policy Report, and the Financial Stability Report.",
+  ],
+  [
+    "U.S. monetary research",
+    "the regional Federal Reserve banks — New York (Liberty Street Economics, Staff Reports), San Francisco (Economic Letter, Working Papers, FedViews, Beige Book, Community Development), Chicago (research series, the president's speeches, business and economic-conditions surveys), and Atlanta (macroblog, working papers).",
+  ],
+  [
+    "international macro authority",
+    "the IMF — the World Economic Outlook, the Global Financial Stability Report, Finance & Development, working papers, and the IMF blog.",
+  ],
+  [
+    "international central-bank network",
+    "the BIS — the Quarterly Review, working papers, bulletins, and a curated set of central-bank speeches.",
+  ],
+  [
+    "U.S. fiscal authority",
+    "the CBO (cost estimates, the Budget and Economic Outlook, working papers, the Monthly Budget Review) and the Council of Economic Advisers (the Economic Report of the President).",
+  ],
+  [
+    "U.S. financial-stability research",
+    "the Treasury's Office of Financial Research — working papers and FSOC reports.",
+  ],
+  [
+    "U.S. policy think tanks",
+    "Brookings (Economic Studies and the Hutchins Center) and the Peterson Institute for International Economics.",
+  ],
+  [
+    "academic work and commentary",
+    "the NBER working-paper series and VoxEU, the CEPR's policy-column portal.",
+  ],
+  [
+    "cross-cutting Q&A register",
+    "Congressional testimony from the Treasury Secretary.",
+  ],
+];
+
+const fmt = (n: number) => n.toLocaleString("en-US");
+const stats: [string, string][] = [
+  [fmt(index.n_narratives), "narratives"],
+  [fmt(totalArticles), "articles"],
+  ["12", "active feeds"],
+  ["9", "discourse dimensions"],
+  ["2010", "tracked since"],
+];
+---
+
+<Base title="data" active="data">
+  <p class="eyebrow reveal">the data</p>
+  <h1 class="reveal">the corpus behind the tool</h1>
+  <p class="lede reveal">
+    every narrative is read out of the same fixed body of institutional and academic
+    macro writing. here is what that corpus is made of.
+  </p>
+
+  <div class="stat-row reveal">
+    {stats.map(([num, lbl]) => (
+      <div class="stat"><span class="num">{num}</span><span class="lbl">{lbl}</span></div>
+    ))}
+  </div>
+
+  <section class="section reveal">
+    <p class="eyebrow">1 · the sources</p>
+    <h2>where the words come from</h2>
+    <p>
+      the source set is fixed. it is purposefully built as a basis set: the smallest group of
+      sources that covers every independent dimension of U.S. macro discourse, with
+      nothing redundant. these are the upstream sources, narratives from
+      policymakers, researchers and analysts. nine dimensions, twelve active feeds, each with varying data types — hover a row for more information:
+    </p>
+    <div class="feeds">
+      {sources.map(([dim, src], i) => (
+        <div class="feed">
+          <div class="feed-head">
+            <span class="feed-n">{String(i + 1).padStart(2, "0")}</span>
+            <span class="feed-dim">{dim}</span>
+            <span class="feed-cue">+</span>
+          </div>
+          <div class="feed-detail"><p>{src}</p></div>
+        </div>
+      ))}
+    </div>
+    <p>
+      every article from every source enters the corpus; nothing is filtered by
+      topic on the way in. the only ingest filters are the date window (2010 to
+      today) and the removal of near-duplicate documents. within-macro topical scope is decided in clustering.
+    </p>
+    <p class="muted">
+      financial press itself (WSJ, Bloomberg, FT, etc) is downstream, its text is not ingested; but its volume is tracked separately as an overlay.
+    </p>
+  </section>
+
+  <section class="section reveal">
+    <p class="eyebrow">2 · the breakdown</p>
+    <h2>what is in the corpus</h2>
+    <p>
+      every clustered article counts toward one source and one JEL economics field.
+      the left chart is how the corpus splits across the twelve feeds; the right is
+      how it splits across fields, with the macro-finance core (E, F, G, H) in accent
+      and everything else flagged but still tracked.
+    </p>
+    <div class="charts">
+      <figure class="chart-fig">
+        <figcaption>articles by source</figcaption>
+        <div id="src-chart" class="chart"></div>
+      </figure>
+      <figure class="chart-fig">
+        <figcaption>articles by JEL field</figcaption>
+        <div id="jel-chart" class="chart"></div>
+      </figure>
+    </div>
+  </section>
+
+  <script id="src-data" type="application/json" set:html={JSON.stringify(sourceBars)}></script>
+  <script id="jel-data" type="application/json" set:html={JSON.stringify(jelBars)}></script>
+
+  <script>
+    import { Plotly, baseLayout, COL, CONFIG } from "@lib/chart";
+
+    const read = (id: string) => {
+      const el = document.getElementById(id);
+      return el ? JSON.parse(el.textContent || "[]") : [];
+    };
+
+    const srcEl = document.getElementById("src-chart");
+    const src = read("src-data");
+    if (srcEl && src.length) {
+      Plotly.newPlot(
+        srcEl,
+        [{
+          type: "bar",
+          orientation: "h",
+          x: src.map((d: any) => d.articles),
+          y: src.map((d: any) => d.label),
+          marker: { color: COL.accent },
+          hovertemplate: "%{y}: %{x:,} articles<extra></extra>",
+        }],
+        baseLayout({
+          margin: { l: 160, r: 18, t: 8, b: 36 },
+          xaxis: { gridcolor: "rgba(226,220,207,0.6)", zeroline: false, tickformat: "," },
+          yaxis: { automargin: true },
+          bargap: 0.32,
+        }),
+        CONFIG,
+      );
+    }
+
+    const jelEl = document.getElementById("jel-chart");
+    const jel = read("jel-data");
+    if (jelEl && jel.length) {
+      Plotly.newPlot(
+        jelEl,
+        [{
+          type: "bar",
+          x: jel.map((d: any) => d.name),
+          y: jel.map((d: any) => d.articles),
+          marker: { color: jel.map((d: any) => (d.in_scope ? COL.accent : COL.faint)) },
+          customdata: jel.map((d: any) => d.code),
+          hovertemplate: "%{x} (%{customdata}): %{y:,} articles<extra></extra>",
+        }],
+        baseLayout({
+          margin: { l: 52, r: 12, t: 8, b: 80 },
+          xaxis: { tickangle: -30, automargin: true },
+          yaxis: { gridcolor: "rgba(226,220,207,0.6)", zeroline: false, tickformat: "," },
+          bargap: 0.4,
+        }),
+        CONFIG,
+      );
+    }
+  </script>
+</Base>
+
+<style>
+  /* corpus stat row: tabular figures with quiet labels, mirroring the home hero
+     stats but as a self-contained band under the lede. */
+  .stat-row {
+    display: flex; flex-wrap: wrap; gap: 2.6rem;
+    margin: 1.8rem 0 0; padding: 1.2rem 0 0; border-top: 1px solid var(--line);
+  }
+  .stat .num {
+    display: block; font-size: var(--fs-stat); font-weight: 600; line-height: 1;
+    font-variant-numeric: tabular-nums; color: var(--ink);
+  }
+  .stat .lbl { font-size: var(--fs-meta); color: var(--faint); letter-spacing: 0.03em; }
+
+  /* corpus feeds: a row table where each row reveals its sources on hover */
+  .feeds { margin: 1rem 0 1.4rem; }
+  .feed { border-bottom: 1px solid var(--line-soft); transition: background 0.2s var(--ease); }
+  .feed:hover { background: var(--paper-2); }
+  .feed-head {
+    display: grid; grid-template-columns: 2.4rem 1fr auto; align-items: center;
+    gap: 0.9rem; padding: 0.8rem 0.5rem; cursor: default;
+  }
+  .feed-n { color: var(--faint); font-variant-numeric: tabular-nums; font-size: var(--fs-meta); }
+  .feed-dim { font-weight: 600; color: var(--ink); }
+  .feed-cue {
+    color: var(--accent); font-weight: 600; font-size: var(--fs-lede); line-height: 1;
+    transition: transform 0.3s var(--ease), color 0.2s var(--ease);
+  }
+  .feed:hover .feed-cue { transform: rotate(45deg); color: var(--accent-bright); }
+  .feed-detail {
+    max-height: 0; overflow: hidden; opacity: 0;
+    transition: max-height 0.4s var(--ease), opacity 0.3s var(--ease);
+  }
+  .feed:hover .feed-detail { max-height: 12rem; opacity: 1; }
+  .feed-detail p {
+    margin: 0; padding: 0 0.5rem 0.9rem 3.3rem;
+    color: var(--muted); font-size: var(--fs-ui);
+  }
+
+  /* corpus breakdown: two charts side by side, stacking on narrow screens. */
+  .charts {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1.6rem 2.2rem;
+    margin: 1.6rem 0 0.4rem;
+  }
+  .chart-fig { margin: 0; }
+  .chart-fig figcaption {
+    font-size: var(--fs-meta); color: var(--faint); letter-spacing: 0.03em;
+    margin: 0 0 0.5rem;
+  }
+  .chart { width: 100%; height: 360px; }
+  @media (max-width: 720px) {
+    .charts { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .feed-detail { transition: none; }
+  }
+</style>
