@@ -154,6 +154,25 @@ def _similar_artifact(d: dict[str, list[Any]]) -> SimilarNarratives:
     )
 
 
+def _median_article_words(clusters_df: pd.DataFrame) -> int | None:
+    """Median word count per clustered article (non-noise), folding chunks → articles.
+
+    Chunks of one document share an ``article_id``; the article's text is its chunk
+    bodies joined, and its length is whitespace-token count. Returns ``None`` when
+    there's no body column or no clustered article to count.
+    """
+    if "body" not in clusters_df.columns or "article_id" not in clusters_df.columns:
+        return None
+    rows = clusters_df[clusters_df["topic"] != NOISE_TOPIC]
+    if rows.empty:
+        return None
+    bodies = rows.assign(_body=rows["body"].fillna("").astype(str))
+    per_article = bodies.groupby("article_id")["_body"].apply(lambda s: len(" ".join(s).split()))
+    if per_article.empty:
+        return None
+    return int(round(float(per_article.median())))
+
+
 def _compute_emerging(
     date_range: tuple[str, str] | None, frontier: str | None, weeks: int
 ) -> bool:
@@ -292,6 +311,7 @@ def build_dashboard_artifacts(
         stage_min_r0=float(cfg["stages"]["growth_min_r0"]),
         n_narratives=len(index_rows),
         narratives=index_rows,
+        median_article_words=_median_article_words(clusters_df),
     )
 
     log.info(
