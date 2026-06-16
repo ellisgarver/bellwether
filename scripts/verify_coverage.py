@@ -61,6 +61,80 @@ def doc_type(rec: dict) -> str:
     return rm.get("document_type") or rec.get("section") or "(none)"
 
 
+def _pctile(sorted_vals: list[int], q: float) -> int:
+    """Nearest-rank percentile on a pre-sorted list (q in [0,1])."""
+    if not sorted_vals:
+        return 0
+    i = min(len(sorted_vals) - 1, int(q * (len(sorted_vals) - 1) + 0.5))
+    return sorted_vals[i]
+
+
+def body_report(source: str, files: list[str], rows: list[dict], short: int) -> None:
+    """Full-article-content check: empty / short bodies + word distribution,
+    broken out by document_type. The shape pivot proves a URL was captured; this
+    proves the *text* came with it. A fetch that failed but was stored anyway
+    (Finding #2) shows up as a doc_type with a high empty-body share; a listing
+    page or truncated extract shows up in the short-body tail. Word counts are
+    recomputed from `body` here — the stored `word_count` field is not trusted."""
+    by_dtype: dict[str, dict] = defaultdict(
+        lambda: {"n": 0, "empty": 0, "short": 0, "words": []}
+    )
+    empty_total = short_total = 0
+    for rec in rows:
+        b = by_dtype[doc_type(rec)]
+        b["n"] += 1
+        body = (rec.get("body") or "").strip()
+        if not body:
+            b["empty"] += 1
+            empty_total += 1
+            continue
+        w = len(body.split())
+        b["words"].append(w)
+        if w < short:
+            b["short"] += 1
+            short_total += 1
+
+    dtypes = sorted(by_dtype)
+    w = max([len(d) for d in dtypes] + [13])
+    n = len(rows)
+    print(f"\n== {source}: body fullness — {n} records across {len(files)} file(s) "
+          f"(short < {short} words) ==")
+    hdr = (f"{'document_type'.ljust(w)}{'records':>9}{'empty':>8}{'empty%':>8}"
+           f"{'short':>7}{'wMin':>7}{'wMed':>8}{'wP90':>8}{'wMax':>8}")
+    print(hdr)
+    print("-" * len(hdr))
+    for d in dtypes:
+        b = by_dtype[d]
+        ws = sorted(b["words"])
+        empty_pct = 100 * b["empty"] / b["n"] if b["n"] else 0.0
+        med = ws[len(ws) // 2] if ws else 0
+        print(f"{d.ljust(w)}{b['n']:>9}{b['empty']:>8}{empty_pct:>7.1f}%"
+              f"{b['short']:>7}{(ws[0] if ws else 0):>7}{med:>8}"
+              f"{_pctile(ws, 0.90):>8}{(ws[-1] if ws else 0):>8}")
+    epct = 100 * empty_total / n if n else 0.0
+    spct = 100 * short_total / n if n else 0.0
+    print("-" * len(hdr))
+    print(f"{'TOTAL'.ljust(w)}{n:>9}{empty_total:>8}{epct:>7.1f}%{short_total:>7}")
+
+    flags: list[str] = []
+    if epct >= 5.0:
+        flags.append(f"{epct:.1f}% of records have an EMPTY body "
+                     f"({empty_total}/{n}) — likely fetch-failures stored as metadata-only")
+    for d in dtypes:
+        b = by_dtype[d]
+        if b["n"] >= 20 and 100 * b["empty"] / b["n"] >= 20.0:
+            flags.append(f"{d}: {100 * b['empty'] / b['n']:.0f}% empty bodies "
+                         f"({b['empty']}/{b['n']}) — this series may be PDF-only / "
+                         f"behind a fetch path that returns no text")
+    if flags:
+        print("\nFLAGS (full content is the standard — investigate before clearing):")
+        for f in flags:
+            print("  ! " + f)
+    else:
+        print(f"\nno empty/short-body flags ({epct:.1f}% empty, {spct:.1f}% short). "
+              f"Bodies are present; confirm shape with the default (non-body) run too.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -69,9 +143,17 @@ def main() -> None:
                     help="adjacent-year ratio in one series that triggers a CLIFF flag (default 5)")
     ap.add_argument("--min", type=int, default=20,
                     help="ignore cliffs/gaps where the larger side is below this count (default 20)")
+    ap.add_argument("--body", action="store_true",
+                    help="body-fullness mode: empty/short bodies + word distribution per document_type")
+    ap.add_argument("--short", type=int, default=50,
+                    help="word count below which a non-empty body is flagged 'short' (default 50)")
     args = ap.parse_args()
 
     files, rows = load(args.source)
+
+    if args.body:
+        body_report(args.source, files, rows, args.short)
+        return
 
     pivot: dict[str, Counter] = defaultdict(Counter)  # pivot[document_type][year]
     slug: Counter = Counter()
