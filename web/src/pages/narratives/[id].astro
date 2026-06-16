@@ -83,21 +83,17 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
     <div class="zoom-controls">
       <label class="zoom">
         <span>time zoom</span>
-        <input type="range" id="zoom-x" min="1" max="12" step="0.1" value="1" aria-label="time (horizontal) zoom" />
+        <input type="range" id="zoom-x" min="-1" max="1" step="0.01" value="0" aria-label="time (horizontal) zoom" />
       </label>
       <label class="zoom">
         <span>volume zoom</span>
-        <input type="range" id="zoom-y" min="1" max="12" step="0.1" value="1" aria-label="volume (vertical) zoom" />
+        <input type="range" id="zoom-y" min="-1" max="1" step="0.01" value="0" aria-label="volume (vertical) zoom" />
       </label>
     </div>
     {(n.mediacloud || n.markets) && (
       <p class="caption" id="overlay-caption">
-        drag the chart to move; the sliders zoom time and volume independently.
         overlays are scaled to the bar axis — compare shape and timing, not height.
       </p>
-    )}
-    {!(n.mediacloud || n.markets) && (
-      <p class="caption">drag the chart to move; the sliders zoom time and volume independently.</p>
     )}
   </section>
 
@@ -225,7 +221,7 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
       b.disabled = !f.converged || !f.curve;
       if (b.disabled) b.title = f.failure_reason || "fit did not converge";
       b.addEventListener("click", () => {
-        activeFit = i; render();
+        activeFit = i; resetView(); render();
         [...tabsEl.children].forEach((c, j) => c.classList.toggle("active", j === i));
       });
       tabsEl.appendChild(b);
@@ -249,44 +245,28 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
       maxVol,
       ...fits.flatMap((f) => (f.curve || []).filter((v) => v != null && isFinite(v))),
     ) * 1.08;
-    let zx = 1, zy = 1;             // zoom factors (1 = the whole window)
+    // zoom factor maps from a centered slider: value 0 → factor 1 (the fitted
+    // full view), negatives zoom out (flatten / show beyond the window), and
+    // positives zoom in. 10^value gives symmetric log steps either side of 1.
+    const ZOOM_BASE = 10;
+    let zx = 1, zy = 1;
     let cx = (xMin + xMax) / 2;     // x center (epoch-ms)
     let cy = yTop / 2;              // y center
-    const ms = (v) => (typeof v === "number" ? v : Date.parse(v));
     function viewRange() {
       const xs = xFull / zx, ys = yTop / zy;
-      cx = Math.min(xMax - xs / 2, Math.max(xMin + xs / 2, cx));
-      cy = Math.min(yTop - ys / 2, Math.max(ys / 2, cy));
+      // x: pan within the window; once zoomed out past the full span there is
+      // nothing left to pan to, so lock to the window center.
+      cx = xs >= xFull
+        ? (xMin + xMax) / 2
+        : Math.min(xMax - xs / 2, Math.max(xMin + xs / 2, cx));
+      // y: the zero floor is strict. zoomed in we pan between 0 and yTop; zoomed
+      // out we anchor the floor at 0 and stack the extra headroom on top so the
+      // curve flattens without ever revealing a negative count.
+      cy = ys >= yTop
+        ? ys / 2
+        : Math.min(yTop - ys / 2, Math.max(ys / 2, cy));
       return { x: [cx - xs / 2, cx + xs / 2], y: [cy - ys / 2, cy + ys / 2] };
     }
-
-    render();
-
-    // drag pans (dragmode: pan); read the resulting range back so the center
-    // stays in sync — a later slider zoom then stays centered where the user
-    // left it. the floor is strict: a pan can momentarily overshoot below zero,
-    // so we snap the bottom back to 0 (keeping the window height), guarded
-    // against re-entrancy so the corrective relayout doesn't loop.
-    let correcting = false;
-    chartEl.on("plotly_relayout", (e) => {
-      if (correcting) return;
-      const x0 = e["xaxis.range[0]"], x1 = e["xaxis.range[1]"];
-      if (x0 != null && x1 != null && isFinite(ms(x0)) && isFinite(ms(x1)))
-        cx = (ms(x0) + ms(x1)) / 2;
-      const y0 = e["yaxis.range[0]"], y1 = e["yaxis.range[1]"];
-      if (y0 != null && y1 != null) {
-        let lo = Number(y0), hi = Number(y1);
-        if (lo < 0) {
-          hi -= lo; lo = 0;
-          cy = (lo + hi) / 2;
-          correcting = true;
-          Plotly.relayout(chartEl, { "yaxis.range": [lo, hi] })
-            .then(() => { correcting = false; });
-        } else {
-          cy = (lo + hi) / 2;
-        }
-      }
-    });
 
     const zxEl = document.getElementById("zoom-x");
     const zyEl = document.getElementById("zoom-y");
@@ -294,8 +274,45 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
       const vr = viewRange();
       Plotly.relayout(chartEl, { "xaxis.range": vr.x, "yaxis.range": vr.y });
     };
-    zxEl.addEventListener("input", () => { zx = parseFloat(zxEl.value); applyZoom(); });
-    zyEl.addEventListener("input", () => { zy = parseFloat(zyEl.value); applyZoom(); });
+    // reset pan + zoom to the fitted full view (used when switching fit lens).
+    function resetView() {
+      zx = 1; zy = 1;
+      cx = (xMin + xMax) / 2; cy = yTop / 2;
+      zxEl.value = "0"; zyEl.value = "0";
+    }
+    zxEl.addEventListener("input", () => { zx = ZOOM_BASE ** parseFloat(zxEl.value); applyZoom(); });
+    zyEl.addEventListener("input", () => { zy = ZOOM_BASE ** parseFloat(zyEl.value); applyZoom(); });
+
+    render();
+
+    // drag is a pure pan: we own it so a drag can only translate the view, never
+    // rescale it (Plotly's native pan squishes the range at a bound, which read
+    // back as an unwanted zoom). pixel deltas convert to data via the plot-area
+    // length; viewRange() then clamps to the strict bounds.
+    let dragging = false, lastX = 0, lastY = 0;
+    chartEl.style.cursor = "grab";
+    chartEl.addEventListener("pointerdown", (ev) => {
+      dragging = true; lastX = ev.clientX; lastY = ev.clientY;
+      chartEl.style.cursor = "grabbing";
+      chartEl.setPointerCapture(ev.pointerId);
+    });
+    chartEl.addEventListener("pointermove", (ev) => {
+      if (!dragging) return;
+      const fl = chartEl._fullLayout;
+      const xLen = fl.xaxis._length, yLen = fl.yaxis._length;
+      cx -= (ev.clientX - lastX) * (xFull / zx) / xLen;
+      cy += (ev.clientY - lastY) * (yTop / zy) / yLen;
+      lastX = ev.clientX; lastY = ev.clientY;
+      const vr = viewRange();
+      Plotly.relayout(chartEl, { "xaxis.range": vr.x, "yaxis.range": vr.y });
+    });
+    const endDrag = (ev) => {
+      if (!dragging) return;
+      dragging = false; chartEl.style.cursor = "grab";
+      try { chartEl.releasePointerCapture(ev.pointerId); } catch {}
+    };
+    chartEl.addEventListener("pointerup", endDrag);
+    chartEl.addEventListener("pointercancel", endDrag);
 
     function render() {
       const traces = [
@@ -330,24 +347,20 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
       const vr = viewRange();
       const layout = baseLayout({
         bargap: 0.06,
-        dragmode: "pan",
+        dragmode: false,
         margin: { l: 64, r: 18, t: 8, b: 46 },
-        xaxis: {
-          type: "date", gridcolor: "rgba(226,220,207,0.6)",
-          range: vr.x, minallowed: xMin, maxallowed: xMax,
-        },
+        xaxis: { type: "date", gridcolor: "rgba(226,220,207,0.6)", range: vr.x },
         yaxis: {
           title: { text: "corpus-size-adjusted volume", standoff: 14 },
-          gridcolor: "rgba(226,220,207,0.6)",
-          range: vr.y, minallowed: 0, maxallowed: yTop,
+          gridcolor: "rgba(226,220,207,0.6)", range: vr.y,
         },
         legend: { orientation: "h", y: 1.16, x: 0 },
       });
       // pin the hover chip per-trace: otherwise a translucent marker/line color
       // (e.g. the faint blue volume bars) bleeds into the chip background.
       traces.forEach((t) => (t.hoverlabel = HOVER_LABEL));
-      // pan-only: no scroll-zoom, no box-zoom, no double-click reset — the two
-      // sliders own zooming, so the axes never fight over a drag gesture.
+      // we own drag (custom pan) and zoom (the sliders), so every native range
+      // interaction is off; relayout calls drive the view instead.
       Plotly.react(chartEl, traces, layout, {
         displayModeBar: false, responsive: true, scrollZoom: false, doubleClick: false,
       });
