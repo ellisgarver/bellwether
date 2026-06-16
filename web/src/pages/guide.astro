@@ -173,20 +173,18 @@ const example =
       take <a href={`${base}/narratives/${example.cluster_id}`}>{example.label}</a> for example. the
       bars are its weekly article volume, and the line is the selected lens, switched
       via tabs. the press overlay shows when premium press media picked the story up,
-      usually but not strictly later than the institutional sources. note that each overlay is rescaled onto
+      usually but not strictly later than the institutional sources. the markets overlay compares the narrative against a standard series such as the VIX or
+      the 10-year yield. note that each overlay is rescaled onto
       the same axis as the volume bars to compare directional rise and fall, timing, and magnitude of change.
     </p>
     <p>
-      the markets overlay compares the narrative against a standard series such as the VIX or
-      the 10-year yield. underneath sits a bidirectional Granger causality test:
+      underneath sits two bidirectional Granger causality tests:
       it sweeps over a range of lags and checks, in both directions, to observe whether past
       values of one series help predict the other better than the series predicts
       itself, and reports the lag with the strongest signal. this provides a statement about
-      temporal precedence — whether discourse moved before or after the market.
-      the broad-press readout sitting beside it runs the same bidirectional test, but
-      against the broad/premium press volume rather than a market series. 
+      temporal precedence — whether discourse moved before or after the market and before or after broad/premium press.
       crucially, a story can lead a market even without driving it. also note that one lag = 1 week, 
-      lags range from 1-4 weeks.
+      lags range from 1-4.
     </p>
     <p class="muted">
       further, a caution on both lead-lag readouts: Granger precedence is timing, not cause,
