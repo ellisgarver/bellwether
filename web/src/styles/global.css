@@ -115,6 +115,10 @@ main { padding: var(--space-5) 0 var(--space-3); }
 /* ---- editorial sections (de-boxed: hairline rules, not cards) ---- */
 .section { padding: var(--space-section) 0; border-top: 1px solid var(--line); }
 .section:first-of-type { border-top: none; }
+/* a lede already supplies its own bottom margin; drop the borderless first
+   section's top padding so the two don't stack into an oversized gap (guide /
+   research, where the section follows the lede directly with nothing between). */
+.lede + .section { padding-top: 0; }
 .panel { margin: var(--space-4) 0; }
 .eyebrow {
   font-size: var(--fs-label); letter-spacing: 0.08em;
