@@ -41,10 +41,13 @@ export function baseLayout(extra: Record<string, any> = {}): Record<string, any>
     paper_bgcolor: "rgba(0,0,0,0)",
     plot_bgcolor: "rgba(0,0,0,0)",
     margin: { l: 48, r: 16, t: 12, b: 40 },
+    // dark chip that reads as intentional against the warm paper (a near-white
+    // box looked out of place); left-aligned so single-line counts sit cleanly.
     hoverlabel: {
-      bgcolor: "#fffdf8",
-      bordercolor: COL.line,
-      font: { family: FONT, color: COL.ink, size: 13 },
+      bgcolor: COL.ink,
+      bordercolor: COL.ink,
+      font: { family: FONT, color: COL.paper, size: 13 },
+      align: "left",
     },
     colorway: [COL.accent, COL.ember, COL.growth, COL.decay, COL.dormant],
     ...extra,

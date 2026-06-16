@@ -195,7 +195,7 @@ const stats: [string, string][] = [
           x: src.map((d: any) => d.articles),
           y: src.map((d: any) => d.label),
           marker: { color: COL.accent },
-          hovertemplate: "%{y}: %{x:,} articles<extra></extra>",
+          hovertemplate: "%{x:,} articles<extra></extra>",
         }],
         baseLayout({
           margin: { l: 160, r: 18, t: 8, b: 36 },
@@ -218,7 +218,7 @@ const stats: [string, string][] = [
           y: jel.map((d: any) => d.articles),
           marker: { color: jel.map((d: any) => (d.in_scope ? COL.accent : COL.faint)) },
           customdata: jel.map((d: any) => d.code),
-          hovertemplate: "%{x} (%{customdata}): %{y:,} articles<extra></extra>",
+          hovertemplate: "%{y:,} articles<extra></extra>",
         }],
         baseLayout({
           margin: { l: 52, r: 12, t: 8, b: 80 },
