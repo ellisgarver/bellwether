@@ -212,12 +212,13 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
     const marketEl = document.getElementById("t-market");
     pressEl && pressEl.addEventListener("change", render);
     marketEl && marketEl.addEventListener("change", render);
-    render();
 
     // one-line hover: trace name, date, value — all in a single chip so the
     // name never spills into Plotly's separate (white, trace-colored) box.
     const hov = (label) =>
       `${label} · %{x|%b %-d, %Y} · %{y:.2f}<extra></extra>`;
+
+    render();
 
     function render() {
       const traces = [
