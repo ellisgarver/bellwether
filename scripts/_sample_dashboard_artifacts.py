@@ -94,8 +94,12 @@ SPECS = [
      ["stablecoin", "tokenized", "deposit", "custody", "reserve", "redemption"]),
 ]
 
-SOURCES = ["federalreserve", "imf", "nber", "bis", "brookings", "piie",
-           "voxeu", "cbo", "ofr", "cea"]
+# All twelve basis feeds (ADR-020). The four regional Fed ids roll up to one
+# "regional Fed" bar on the data page; treasury_ofr/congressional match the real
+# ingestor source_ids so the sample chart mirrors a production build.
+SOURCES = ["federalreserve", "fed_ny", "fed_sf", "fed_chicago", "fed_atlanta",
+           "imf", "bis", "cbo", "cea", "treasury_ofr", "brookings", "piie",
+           "nber", "voxeu", "congressional"]
 
 # Distinct R0 by stage — these flow into BOTH the stage readout and the staging
 # fit, so the badge, the CI and the plotted curve direction can never disagree.

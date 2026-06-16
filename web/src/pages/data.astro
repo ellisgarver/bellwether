@@ -9,31 +9,34 @@ const index = loadIndex();
 // breakdown comes from each story card's source_mix.
 const totalArticles = index.narratives.reduce((s, e) => s + e.n_articles, 0);
 
+// the four regional Federal Reserve banks are distinct source ids but roll up
+// into one "regional Fed" feed for the chart (one of the twelve basis feeds).
+const REGIONAL_FED = new Set(["fed_ny", "fed_sf", "fed_chicago", "fed_atlanta"]);
+const groupSource = (s: string) => (REGIONAL_FED.has(s) ? "regional_fed" : s);
+
 const sourceTotals = new Map<string, number>();
 for (const e of index.narratives) {
   const card = loadNarrative(e.cluster_id).card;
   for (const [src, n] of card.source_mix) {
-    sourceTotals.set(src, (sourceTotals.get(src) ?? 0) + n);
+    const key = groupSource(src);
+    sourceTotals.set(key, (sourceTotals.get(key) ?? 0) + n);
   }
 }
-// pretty source labels (codes → institution names); unknown codes fall back to
-// a de-underscored form so a new feed still renders sensibly.
+// source labels (codes → full institution names, acronyms spelled out); unknown
+// codes fall back to a de-underscored form so a new feed still renders sensibly.
 const SOURCE_LABEL: Record<string, string> = {
   federalreserve: "Federal Reserve Board",
-  fed_ny: "NY Fed",
-  fed_sf: "SF Fed",
-  fed_chicago: "Chicago Fed",
-  fed_atlanta: "Atlanta Fed",
-  imf: "IMF",
-  bis: "BIS",
-  cbo: "CBO",
+  regional_fed: "Regional Federal Reserve Banks",
+  imf: "Int'l Monetary Fund",
+  bis: "Bank for Int'l Settlements",
+  cbo: "Congressional Budget Office",
   cea: "Council of Economic Advisers",
-  ofr: "Treasury OFR",
-  brookings: "Brookings",
-  piie: "PIIE",
-  nber: "NBER",
-  voxeu: "VoxEU",
-  congressional: "Congressional testimony",
+  treasury_ofr: "Treasury Office of Financial Research",
+  brookings: "Brookings Institution",
+  piie: "Peterson Inst. for Int'l Economics",
+  nber: "Nat'l Bureau of Economic Research",
+  voxeu: "VoxEU (Centre for Econ. Policy Research)",
+  congressional: "Congressional Testimony",
 };
 const sourceLabel = (s: string) => SOURCE_LABEL[s] ?? s.replace(/_/g, " ");
 const sourceBars = [...sourceTotals.entries()]
@@ -202,8 +205,8 @@ const stats: [string, string][] = [
         }],
         baseLayout({
           margin: { l: 160, r: 18, t: 8, b: 36 },
-          xaxis: { gridcolor: "rgba(226,220,207,0.6)", zeroline: false, tickformat: "," },
-          yaxis: { automargin: true },
+          xaxis: { gridcolor: "rgba(226,220,207,0.6)", zeroline: false, tickformat: ",", fixedrange: true },
+          yaxis: { automargin: true, fixedrange: true },
           bargap: 0.32,
         }),
         CONFIG,
@@ -213,6 +216,24 @@ const stats: [string, string][] = [
     const jelEl = document.getElementById("jel-chart");
     const jel = read("jel-data");
     if (jelEl && jel.length) {
+      // Align the JEL chart's top y-tick with the source chart's first (top)
+      // bar label. The source chart is horizontal bars: its top bar sits half a
+      // category slot below the plot-area top, so we push the JEL plot down by
+      // that same half-slot (margin.t) and pin the JEL y-axis so its highest
+      // tick lands exactly at the plot-area top.
+      const SRC_T = 8, SRC_B = 36, CHART_H = 360;
+      const halfSlot = src.length
+        ? (CHART_H - SRC_T - SRC_B) / (2 * src.length)
+        : 0;
+      const niceStep = (rough: number) => {
+        const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+        const norm = rough / mag;
+        const f = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10;
+        return f * mag;
+      };
+      const jelMax = Math.max(...jel.map((d: any) => d.articles));
+      const step = niceStep(jelMax / 4);
+      const niceMax = Math.ceil(jelMax / step) * step;
       Plotly.newPlot(
         jelEl,
         [{
@@ -224,9 +245,12 @@ const stats: [string, string][] = [
           hovertemplate: "%{y:,} articles<extra></extra>",
         }],
         baseLayout({
-          margin: { l: 52, r: 12, t: 8, b: 80 },
-          xaxis: { tickangle: -30, automargin: true },
-          yaxis: { gridcolor: "rgba(226,220,207,0.6)", zeroline: false, tickformat: "," },
+          margin: { l: 52, r: 12, t: Math.round(SRC_T + halfSlot), b: 80 },
+          xaxis: { tickangle: -30, automargin: true, fixedrange: true },
+          yaxis: {
+            gridcolor: "rgba(226,220,207,0.6)", zeroline: false, tickformat: ",",
+            range: [0, niceMax], dtick: step, fixedrange: true,
+          },
           bargap: 0.4,
         }),
         CONFIG,
@@ -277,6 +301,9 @@ const stats: [string, string][] = [
   .charts {
     display: grid; grid-template-columns: 1fr 1fr; gap: 1.6rem 2.2rem;
     margin: 1.6rem 0 0.4rem;
+    /* top-align the two figures so both plots start at the same height; their
+       bottoms may differ (the JEL chart's angled field labels run lower). */
+    align-items: start;
   }
   .chart-fig { margin: 0; }
   .chart-fig figcaption {
