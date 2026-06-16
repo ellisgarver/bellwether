@@ -79,10 +79,6 @@ h3 { font-size: var(--fs-lede); margin: var(--space-3) 0 var(--space-1); }
 .eyebrow + h1, .eyebrow + h2, .eyebrow + h3 { margin-top: 0; }
 
 p { margin: 0 0 1rem; }
-/* cap unclassed body copy at a readable line length so prose pages (guide,
-   data, research, detail) don't run the full 1180px container. Classed
-   paragraphs (.caption, .lede, .muted, .note) keep their own widths. */
-.section > p:not([class]) { max-width: var(--measure); }
 
 /* ---- layout ---- */
 .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 1.6rem; }
