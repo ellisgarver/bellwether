@@ -105,7 +105,7 @@ const direction = (d: any) =>
     <div class="cols-2">
       <div>
         <p class="eyebrow">where it sits now</p>
-        <h3>{n.stage} characterization</h3>
+        <h2>{n.stage} characterization</h2>
         <table class="facts">
           <tr><td>staging lens</td><td>{n.staging_model}</td></tr>
           <tr><td>R₀ (mean / median)</td><td>{fmt(sd.r0_mean)} / {fmt(sd.r0_median)}</td></tr>
@@ -116,7 +116,7 @@ const direction = (d: any) =>
       </div>
       <div>
         <p class="eyebrow">shape facts</p>
-        <h3>read straight off the curve</h3>
+        <h2>read straight off the curve</h2>
         <table class="facts">
           {factOrder.filter(([k]) => k in facts).map(([k, lbl]) => (
             <tr><td>{lbl}</td><td>{facts[k].toLocaleString(undefined, { maximumFractionDigits: 1 })}</td></tr>
@@ -132,7 +132,7 @@ const direction = (d: any) =>
         {n.markets && mkg && (
           <div>
             <p class="eyebrow">markets</p>
-            <h3>did discourse lead or lag {mlabel}?</h3>
+            <h2>did discourse lead or lag {mlabel}?</h2>
             <p class="note">{mkg.verdict}</p>
             <dl class="kv" style="margin-top:0.8rem">
               <dt>discourse → {mlabel}</dt>
@@ -145,7 +145,7 @@ const direction = (d: any) =>
         {n.mediacloud && (
           <div>
             <p class="eyebrow">broad-press</p>
-            <h3>did discourse lead or lag the press?</h3>
+            <h2>did discourse lead or lag the press?</h2>
             {mcg ? (
               <>
                 <p class="note">{mcg.verdict}</p>
