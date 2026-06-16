@@ -90,11 +90,6 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
         <input type="range" id="zoom-y" min="0" max="1" step="0.01" value="0" aria-label="volume (vertical) zoom" />
       </label>
     </div>
-    {(n.mediacloud || n.markets) && (
-      <p class="caption" id="overlay-caption">
-        overlays are scaled to the bar axis — compare shape and timing, not height.
-      </p>
-    )}
   </section>
 
   <!-- stage + shape facts -->
@@ -348,7 +343,7 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
           title: { text: "corpus-size-adjusted volume", standoff: 14 },
           gridcolor: "rgba(226,220,207,0.6)", range: vr.y,
         },
-        legend: { orientation: "h", y: 1.16, x: 0 },
+        legend: { orientation: "h", y: 1.16, x: 0, xref: "container" },
       });
       // pin the hover chip per-trace: otherwise a translucent marker/line color
       // (e.g. the faint blue volume bars) bleeds into the chip background.
