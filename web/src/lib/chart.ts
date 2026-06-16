@@ -12,6 +12,7 @@ export const COL = {
   faint: "#908a7e",
   line: "#e2dccf",
   paper: "#edece8",
+  paper2: "#e6e4de",
   accent: "#3a5a93",
   accentBright: "#4a7ac4",
   ember: "#c2410c",
@@ -35,20 +36,23 @@ export const JEL_SYMBOL: Record<string, string> = {
   J: "x",
 };
 
+// on-palette hover chip: a soft paper surface with a hairline border, not the
+// stark white default nor a hard black box. Exported so per-trace overrides can
+// reuse it — Plotly otherwise lets a translucent trace color leak into the chip.
+export const HOVER_LABEL = {
+  bgcolor: COL.paper2,
+  bordercolor: COL.line,
+  font: { family: FONT, color: COL.ink, size: 13 },
+  align: "left" as const,
+};
+
 export function baseLayout(extra: Record<string, any> = {}): Record<string, any> {
   return {
     font: { family: FONT, color: COL.ink, size: 13 },
     paper_bgcolor: "rgba(0,0,0,0)",
     plot_bgcolor: "rgba(0,0,0,0)",
     margin: { l: 48, r: 16, t: 12, b: 40 },
-    // dark chip that reads as intentional against the warm paper (a near-white
-    // box looked out of place); left-aligned so single-line counts sit cleanly.
-    hoverlabel: {
-      bgcolor: COL.ink,
-      bordercolor: COL.ink,
-      font: { family: FONT, color: COL.paper, size: 13 },
-      align: "left",
-    },
+    hoverlabel: HOVER_LABEL,
     colorway: [COL.accent, COL.ember, COL.growth, COL.decay, COL.dormant],
     ...extra,
   };
