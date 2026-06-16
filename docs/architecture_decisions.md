@@ -63,6 +63,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 044 | **Narrative map — hybrid node-link UMAP graph (shape=JEL, color=stage+emerging)** | Live (relates 019/020/039/043) |
 | 045 | **Corpus-base-rate volume normalization (fit + display); cross-narrative & lead-lag deferred but unblocked** | Live (supersedes 008 normalizer; relates 016/019/039) |
 | 046 | **Analyze every cluster; JEL scope is a display flag, not a dynamics gate (out-of-scope shown with code)** | Live (supersedes 020 "dropped from dynamics"; relates 019/044) |
+| 047 | **Markets overlay + Granger for every narrative; VIX canonical (lag tied to it), extra series display-only; `wave_count`→"peaks (≥ ½ max)"** | Live (amends 041; relates 039/043/045) |
 
 ---
 
@@ -3439,6 +3440,90 @@ reading with its caveat, don't silently drop it.
   narratives remain present in the artifacts.
 - The CLAUDE.md scope invariant is updated to match (out-of-scope flagged, not
   dropped).
+
+---
+
+## ADR-047: Markets overlay + Granger everywhere; VIX canonical; peak-count relabel
+
+- **Status**: Accepted
+- **Date**: 2026-06-16
+- **Amends**: ADR-041 (markets overlay was "on-click, per-narrative on demand,
+  relevant series"; this fixes the canonical series, makes it universal, and ties
+  the lag test to one series)
+- **Relates to**: ADR-039 (shape-facts lens, where `wave_count` lives), ADR-043
+  (precompute everything into the static artifact), ADR-045 (adjusted volume is the
+  series the overlay aligns against)
+
+### Context
+
+Three loose ends surfaced while finishing the per-narrative life-cycle view:
+
+1. **Inconsistent market series.** Narratives showed different FRED overlays
+   (VIX / 10y yield / 10y–2y spread) with no principled reason — in fact the
+   variety was a sample-data artifact (`scripts/_sample_dashboard_artifacts.py`
+   rotated series by `hash(label) % 3`). ADR-041 said "a relevant free FRED
+   series" without fixing one, so there was no canonical default to fall back to.
+2. **`wave_count` label.** The shape-facts lens reports `wave_count` =
+   `len(find_peaks(y, height=½·peak))` (half-maximum convention, ADR-019/039, no
+   tuned param). "wave count" reads as a modeled quantity; it is a plain count of
+   prominent peaks.
+3. **Coverage of the overlay + lag test.** ADR-041 framed Granger as on-click and
+   per-narrative-on-demand; ADR-043 then made it precomputed. Production never
+   wired it (`run.py` step 5 builds artifacts with `markets` absent). The question
+   was whether to compute overlays + a lag readout for *every* narrative, and if so
+   what caveats that universality brings (chiefly multiple comparisons across
+   ~hundreds of narratives × directions × candidate series).
+
+### Decision
+
+1. **VIX is the canonical market series.** `VIXCLS` is the default overlay for
+   every narrative and the **only** series the Granger/lag readout is computed
+   against. It is the broadest single risk-sentiment gauge, free on FRED, and
+   defined across the whole 2010-present window. Other series (10y yield, 2y, 10y–2y
+   spread, HY/IG spreads) remain available as **display-only** overlay toggles with
+   **no lag test** attached — so the precedence claim is made once per narrative,
+   against one series, in one place.
+
+2. **Compute the overlay + bidirectional Granger for every narrative**, baked into
+   the artifact (ADR-043), against the adjusted weekly volume (ADR-045). Where a
+   narrative has fewer than `_MIN_OBS_PER_LAG·max_lag` (5·4 = 20) weekly
+   observations, the readout is **"insufficient data"** rather than a fitted number.
+   The lag test stays at weekly resolution and first-differenced (ADR-041) — we do
+   **not** chase daily resolution or per-series tuning.
+
+3. **Framing is strictly descriptive, with a multiple-comparison caveat.** Running
+   one bidirectional test per narrative is a large family of tests; some "significant
+   precedence" verdicts will be false positives at α=0.05. We do **not** apply a
+   formal family-wise/FDR correction (consistent with ADR-040: this is a descriptive
+   educational tool, not a registered inferential claim). Instead the UI carries the
+   existing **"this shows timing, not cause"** caption *plus* a caveat that the
+   readout is one of many such tests and individual verdicts should be read as
+   suggestive, not confirmatory. Honesty via labeling, per `feedback_frontend_clarity`.
+
+4. **Relabel `wave_count` → "peaks (≥ ½ max)"** in the front-end shape-facts list.
+   The artifact key and the computation are unchanged (ADR-019/039); only the human
+   label changes, so the number is read as what it is — a count of peaks at least
+   half the maximum height.
+
+### Consequences
+
+- `scripts/_sample_dashboard_artifacts.py` stops rotating series by hash and always
+  emits VIX; sample artifacts now match the production contract.
+- `src/mnd/dashboard/run.py` step 5 builds a VIX overlay per fitted narrative via
+  `MarketsOverlay.from_env()` and passes the `markets` dict into
+  `build_dashboard_artifacts`. FRED is free and validation-tier (no new paid dep,
+  core invariant intact); the overlay is post-corpus, so ADR-020 (no external signal
+  into clustering) is untouched.
+- The lag claim is single-series and single-test-per-narrative, which bounds the
+  multiple-comparison surface to one family of `n_narratives` tests rather than
+  `n_narratives × n_series` — the most defensible universal design without a formal
+  correction.
+- No artifact-schema change: `markets` is an already-defined optional block on the
+  narrative artifact; this just populates it for real narratives instead of only in
+  sample data.
+- Narratives shorter than 20 usable weeks (short-lived spikes) will show
+  "insufficient data" for the lag readout but still get the VIX overlay drawn — the
+  overlay is descriptive even where the test can't run.
 
 ---
 

@@ -262,8 +262,9 @@ def _mediacloud(grid, curve, reliable_since=2017):
 
 
 def _markets(grid, curve, label):
-    series = ["vix", "10y_yield", "yield_spread"][abs(hash(label)) % 3]
-    sid = {"vix": "VIXCLS", "10y_yield": "DGS10", "yield_spread": "T10Y2Y"}[series]
+    # VIX is the canonical overlay + the only series the Granger readout uses
+    # (ADR-047); extra series are display-only and not modeled here.
+    series, sid = "vix", "VIXCLS"
     weekly = grid[::7] if len(grid) > 60 else grid
     dates, vol, mkt = [], [], []
     for d in weekly:

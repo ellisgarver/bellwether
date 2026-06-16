@@ -23,10 +23,11 @@ Pipeline assembled here, in order:
   5. assembly into the artifact contract via ``build_dashboard_artifacts`` and
      persistence via ``write_dashboard_artifacts``.
 
-The Media Cloud (ADR-042) and markets/Granger (ADR-041) overlays are display-only,
-require live API keys, and recompute from persisted artifacts independently; they
-are left as a follow-on (passed through as absent here), and the front end already
-handles their absence (null overlays).
+The markets/Granger overlay (ADR-041/047) is built here against the canonical VIX
+series for every narrative when a FRED key is present; it degrades to absent (the
+front end renders no markets section) when FRED is unconfigured. The Media Cloud
+press overlay (ADR-042) needs a separate key and recomputes independently; it is
+still a follow-on (passed through as absent), and the front end handles its absence.
 
 ``embedder`` and ``fitter`` are injectable so the assembly path is unit-testable
 without loading Qwen3-8B or running PyMC; the CLI passes the real ones.
@@ -184,7 +185,12 @@ def run_analysis(
         volume_curves={cid: dynamics[cid].time_series for cid in fit_ids},
     )
 
-    # 5. Assemble + persist (markets/mediacloud overlays absent — display follow-on).
+    # 5. Markets/Granger overlay against canonical VIX (ADR-047) — built for every
+    # narrative when FRED is configured, absent otherwise. Media Cloud stays a
+    # follow-on (separate key).
+    markets = _markets_overlays(adj, fit_ids)
+
+    # 6. Assemble + persist.
     index, narratives = build_dashboard_artifacts(
         clusters_df=clusters_df,
         dynamics=dynamics,
@@ -196,9 +202,57 @@ def run_analysis(
         centroids=centroids,
         umap_xy=umap_xy,
         umap_xyz=umap_xyz,
+        markets=markets,
         cfg=cfg,
     )
     return write_dashboard_artifacts(index, narratives, out_dir)
+
+
+def _markets_overlays(
+    adj: dict[int, pd.Series], fit_ids: list[int]
+) -> dict[int, Any]:
+    """Build a VIX markets overlay + bidirectional Granger per narrative (ADR-047).
+
+    VIX is the canonical series and the only one the lag test runs against; extra
+    series are display-only and not computed here. Requires a FRED key — if one is
+    absent (or a fetch fails), the affected narratives simply get no markets block
+    and the front end omits the section. Short narratives (< 20 usable weekly obs)
+    still get the overlay drawn; their Granger readout reports "insufficient data".
+    """
+    from mnd.detection.markets import TIMING_NOT_CAUSE, MarketsOverlay
+    from mnd.dashboard.artifacts import MarketsArtifact
+
+    try:
+        overlay = MarketsOverlay.from_env()
+    except Exception as exc:
+        log.warning("Markets overlay skipped — no FRED client (%s); section absent", exc)
+        return {}
+
+    out: dict[int, Any] = {}
+    for cid in fit_ids:
+        try:
+            df = overlay.build_overlay(adj[cid], series="vix")
+        except Exception as exc:
+            log.warning("Markets overlay failed for cluster %d: %s", cid, exc)
+            continue
+        if df.empty or not df["market"].notna().any():
+            continue
+        series_id = df.attrs.get("series_id") or "VIXCLS"
+        series_label = df.attrs.get("series_label") or "vix"
+        df = df.dropna(subset=["volume", "market"])
+        granger = overlay.granger_bidirectional(df)
+        idx = pd.to_datetime(df.index)
+        out[cid] = MarketsArtifact(
+            series_id=series_id,
+            series_label=series_label,
+            dates=[d.date().isoformat() for d in idx],
+            volume=[float(v) for v in df["volume"]],
+            market=[float(m) for m in df["market"]],
+            granger=granger,
+            caption=TIMING_NOT_CAUSE,
+        )
+    log.info("Built VIX markets overlay for %d/%d narratives (ADR-047)", len(out), len(fit_ids))
+    return out
 
 
 def _default_embedder() -> Any:
