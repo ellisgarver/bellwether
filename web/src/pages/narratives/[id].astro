@@ -177,6 +177,12 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
     const vol = n.volume.values;
     const maxVol = Math.max(1, ...vol);
 
+    // x bounds in epoch-ms with a small pad beyond the first/last day, so the
+    // edge bars aren't flush against the frame and a zoomed-in pan has slack.
+    const xLoMs = Date.parse(dates[0]);
+    const xHiMs = Date.parse(dates[dates.length - 1]);
+    const xPad = (xHiMs - xLoMs) * 0.02 || 864e5;
+
     function normalise(arr) {
       const xs = arr.filter((v) => v != null && isFinite(v));
       if (!xs.length) return arr.map(() => null);
@@ -252,18 +258,22 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
         maxVol,
         ...((f && f.curve) ? f.curve.filter((v) => v != null && isFinite(v)) : [0]),
       );
+      // fixed margins (no automargin): automargin recomputes the plot area
+      // whenever the visible tick labels change width, which on a date axis
+      // happens every pan/zoom frame — that reflow was the jitter. fixed
+      // margins keep the drawing area stable so the drag stays smooth.
       const layout = baseLayout({
         bargap: 0.06,
         dragmode: "pan",
-        margin: { l: 56, r: 16, t: 8, b: 48 },
+        margin: { l: 64, r: 18, t: 8, b: 46 },
         xaxis: {
-          type: "date", gridcolor: "rgba(226,220,207,0.6)", automargin: true,
-          range: [dates[0], dates[dates.length - 1]],
-          minallowed: dates[0], maxallowed: dates[dates.length - 1],
+          type: "date", gridcolor: "rgba(226,220,207,0.6)",
+          range: [xLoMs - xPad, xHiMs + xPad],
+          minallowed: xLoMs - xPad, maxallowed: xHiMs + xPad,
         },
         yaxis: {
-          title: { text: "corpus-size-adjusted volume", standoff: 12 },
-          gridcolor: "rgba(226,220,207,0.6)", automargin: true,
+          title: { text: "corpus-size-adjusted volume", standoff: 14 },
+          gridcolor: "rgba(226,220,207,0.6)",
           range: [0, yMax * 1.08], minallowed: 0,
         },
         legend: { orientation: "h", y: 1.16, x: 0 },
