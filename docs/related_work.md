@@ -2,7 +2,7 @@
 
 A survey of the published literature relevant to the Macro Narrative Dynamics project. Used to position the project's contribution, identify methodological precedents to cite, and surface insights to incorporate into the methodology and pre-registration.
 
-The conclusion up front: **the project's specific combination — multi-source institutional+academic corpus, BERTopic on transformer embeddings, SIR/logistic lifecycle ODEs fit per narrative cluster, anchor-validated, and surfaced through a live public dashboard — does not exist as a single published artifact.** Every individual component is field-standard. The contribution is integrative and operational, not methodologically heroic. That framing is honest and pre-registration-friendly.
+The conclusion up front: **every individual component here is field-standard, and most have precedents — epidemic models of idea/rumor spread go back to Goffman & Newill (1964) and Daley & Kendall (1965); SIR/logistic curves have since been fit to news, citations, and online topics; topic-model studies of macro discourse are an established stream.** What does not appear to exist as a single artifact is the *combination* assembled into a usable, open-source educational tool: multi-source institutional+academic corpus → BERTopic on transformer embeddings → SIR/logistic/Bass lifecycle fits per narrative cluster → anchor-validated → surfaced through a public dashboard anyone can explore. The contribution is integrative and operational — a tool for reading past and present macro narratives — not a new method. That framing is the honest one.
 
 ---
 
@@ -20,7 +20,7 @@ The field has bifurcated into three streams:
 
 A fourth, very recent stream uses LLMs at sentence/document level (Schmidt et al. 2025; Gueta et al. 2025; Hartley 2025). These target the "what is a narrative" extraction problem rather than the lifecycle dynamics problem.
 
-**No widely cited paper has fit SIR or logistic ODEs to topic-volume time series across a multi-source institutional/academic corpus and labeled lifecycle stages.** Shiller proposed the framework; published empirical work has stopped at descriptive trajectories or correlations with macro outcomes.
+Epidemic-style models *have* been fit to the spread of ideas and information — Goffman & Newill (1964) on scientific ideas, Daley & Kendall (1965) on rumors, and a more recent literature on news and citation cascades — so the model itself is not new. What is uncommon is fitting these lifecycle curves to a multi-source institutional/academic macro corpus, labeling stages, and putting the result in front of the public as a tool. Shiller proposed the macro framing; published empirical work in this subfield has largely stopped at descriptive trajectories or correlations with macro outcomes.
 
 ---
 
@@ -171,8 +171,8 @@ Text-mine earnings calls for firm-level political risk exposure. Keyword-in-cont
 
 ### Where this project genuinely advances
 
-- **No published work fits SIR/logistic ODEs to multi-source institutional+academic narrative volume series and labels lifecycle stages.** Bertsch et al. is closest but reports a single fragmentation index, not per-narrative lifecycle. Medeiros et al. (2026) defines emergence statistically but does not extend through peak and decay. This is genuinely new.
-- **No published work releases a live, public, dashboard-facing version of narrative lifecycle measurement.** Baker-Bloom-Davis EPU is the only adjacent public artifact, and it is a single index.
+- **Fitting SIR/logistic/Bass lifecycle curves to a multi-source institutional+academic macro corpus and labeling per-narrative stages is uncommon.** The epidemic-of-ideas lineage (Goffman & Newill 1964; Daley & Kendall 1965) and later news/citation-SIR work establish the model; applying it to this substrate with per-narrative staging is where this project adds. Bertsch et al. is closest in spirit but reports a single fragmentation index, not per-narrative lifecycle; Medeiros et al. (2026) defines emergence statistically but does not extend through peak and decay.
+- **Packaging narrative lifecycle measurement as a live, public, open-source dashboard anyone can explore is the clearest differentiator.** Baker-Bloom-Davis EPU is the main adjacent public artifact, and it is a single index, not a browsable set of staged narratives. This usable-tool framing — not the underlying methods — is what the project hopes is new.
 - **The institutional+academic source mix is broader than any published comparable.** Bybee = WSJ only; Larsen-Thorsrud = one Norwegian paper; Bertsch = newspapers only; Hansen-McMahon-Prat = FOMC only.
 - **Anchor-narrative validation against 10 pre-documented events with stability tested via bootstrap NMI** is more rigorous than the post-hoc validation in most precedent work.
 
@@ -227,6 +227,8 @@ Still worth fuller reading before the eventual paper's literature review (paywal
 | Citation | Why it matters here |
 |---|---|
 | Shiller (2017) AEA Presidential Address; Shiller (2019) *Narrative Economics* | The conceptual anchor |
+| Goffman & Newill (1964, *Nature*); Daley & Kendall (1965, *Nature*) | Epidemic-of-ideas lineage the SIR framing builds on |
+| Kermack & McKendrick (1927); Verhulst (1838); Bass (1969) | The lifecycle models fit per narrative |
 | Bybee, Kelly, Manela & Xiu (2024), "Business News and Business Cycles" | Closest methodological precedent (LDA on WSJ) |
 | Larsen & Thorsrud (2019, *JoE*); Larsen, Thorsrud & Zhulanova (2021, *JME*) | Narratives in macro discourse, single-newspaper LDA |
 | Hansen, McMahon & Prat (2018, *QJE*) | LDA on Fed text — top-5 precedent |
@@ -242,4 +244,4 @@ Still worth fuller reading before the eventual paper's literature review (paywal
 
 ---
 
-*Document version: 2026-05-19. Maintain by adding new entries as the literature evolves; flag obsolete claims with strikethroughs rather than deleting.*
+*Document version: 2026-06-16. Maintain by adding new entries as the literature evolves; flag obsolete claims with strikethroughs rather than deleting.*

@@ -26,7 +26,7 @@ The conceptual leap: a narrative is something that spreads from writer to writer
 
 This isn't just metaphor. The SIR model (Kermack & McKendrick 1927) — three populations of Susceptible, Infected, and Recovered with two rate constants β (transmission) and γ (recovery) — fits narrative volume curves the same way it fits disease incidence. The basic reproduction number R₀ = β/γ has the same interpretation: above 1 the narrative spreads, below 1 it fades.
 
-We're not the first to apply SIR to narrative spread. There is established literature on epidemic-style modeling of news propagation, misinformation spread, and rumor diffusion. We're applying it to a substrate — institutional macro discourse — where it hasn't been measured rigorously before.
+We're not the first to apply epidemic models to the spread of ideas. The lineage is long: Goffman & Newill (1964) modeled the transmission of scientific ideas as an epidemic; Daley & Kendall (1965) built the canonical rumor-spreading model on SIR mechanics; and a more recent literature fits SIR-type dynamics to news propagation, citation cascades, and online topic diffusion. What this project adds is not the model but the substrate and the packaging — fitting these lifecycle curves to multi-source institutional macro discourse, then surfacing the result as a usable public tool, rather than to social-media or news streams in a one-off study.
 
 ---
 
@@ -303,7 +303,9 @@ Each phase boundary is a methodology checkpoint — significant decisions get an
 - **Narrative-economics framing & related work**: Shiller 2017 (AEA Presidential Address); Shiller 2019 *Narrative Economics*; Roos & Reccius 2024 (*Journal of Economic Surveys*); Flynn & Sastry 2024 (NBER WP 32602); Andre, Haaland, Roth, Wiederholt & Wohlfart (forthcoming *RES*).
 - **Adjacent technical precedents**: Boutaleb, Picault & Grosjean 2024 *BERTrend* (ACL FuturED); Medeiros, Quigley & Revie 2026 (arXiv:2602.20939).
 - **Text-as-data surveys**: Ash & Hansen 2023 (*Annual Review of Economics*); Gentzkow, Kelly & Taddy 2019 (*JEL*).
-- **Epidemic / diffusion models**: Kermack & McKendrick 1927; Verhulst 1838; Bjørnstad 2018 *Epidemics: Models and Data using R*; Gelman et al. *Bayesian Data Analysis* 3rd ed.
+- **Epidemic / diffusion models**: Kermack & McKendrick 1927; Verhulst 1838 (logistic); Bass 1969 (diffusion of innovations); Bjørnstad 2018 *Epidemics: Models and Data using R*; Gelman et al. *Bayesian Data Analysis* 3rd ed.
+- **Epidemic models of idea/information spread (lineage this builds on)**: Goffman & Newill 1964 (*Nature*, transmission of ideas as an epidemic); Daley & Kendall 1965 (*Nature*, rumor model); Rogers 2003 *Diffusion of Innovations* 5th ed.
+- **Lead-lag testing**: Granger 1969 (predictive causality, ADR-041) — markets-vs-narrative timing overlay only; framed as timing, not cause.
 - **Validation & statistics**: Brown & Warner 1985 (event-study windows); Benjamini & Hochberg 1995 (FDR); Efron & Tibshirani 1993 (bootstrap); Strehl & Ghosh 2002 (NMI quality measure); Jaccard 1901 (set similarity).
 - **Deduplication**: Broder 1997 (MinHash); Henzinger 2006 (near-duplicate web pages).
 - **LLM-frontier reference set** (positioning, not in active methodology): Schmidt et al. 2025; Hartley 2025; Gueta et al. 2025.

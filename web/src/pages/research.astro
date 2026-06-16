@@ -93,6 +93,42 @@ const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
       for yourself. free and reproducible.
     </p>
   </section>
+
+  <section class="section reveal">
+    <p class="eyebrow">further reading</p>
+    <h2>where this comes from, and where to go deeper</h2>
+    <p>
+      none of the machinery here is invented from scratch — it stands on a long
+      lineage. the idea that stories spread like contagions runs through Shiller's
+      narrative economics back to mid-century models of how ideas and rumors move
+      through a population. the lifecycle curves are the century-old models
+      epidemiologists still use. what this project adds is pointing that toolkit at
+      institutional macro writing and making the result something you can browse —
+      so if you want to go deeper, start with the work it builds on.
+    </p>
+    <ul class="reading">
+      <li>
+        <a href="https://doi.org/10.1257/aer.107.4.967" target="_blank" rel="noopener">Shiller, “Narrative Economics” (2017)</a>
+        — the AEA presidential address that frames the whole project.
+      </li>
+      <li>
+        Goffman &amp; Newill (1964) and Daley &amp; Kendall (1965), in <em>Nature</em>
+        — the original epidemic models of how ideas and rumors spread.
+      </li>
+      <li>
+        Roos &amp; Reccius, “Narratives in economics” (2024, <em>Journal of Economic Surveys</em>)
+        — the clearest survey of where this young field actually stands.
+      </li>
+      <li>
+        <a href={`${repo}/blob/main/docs/related_work.md`} target="_blank" rel="noopener">our related-work survey</a>
+        — the full literature map, honest about what is precedent and what is new.
+      </li>
+      <li>
+        <a href={`${repo}/blob/main/docs/METHODOLOGY.md`} target="_blank" rel="noopener">our methodology</a>
+        — every parameter and the citation behind it, end to end.
+      </li>
+    </ul>
+  </section>
 </Base>
 
 <style>
@@ -124,4 +160,19 @@ const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
   @media (prefers-reduced-motion: reduce) {
     .node { animation: none; fill: var(--growth); }
   }
+
+  .reading {
+    list-style: none;
+    margin: 1.1rem 0 0;
+    padding: 0;
+    max-width: 60ch;
+  }
+  .reading li {
+    padding: 0.55rem 0;
+    border-top: 1px solid var(--line);
+    line-height: 1.5;
+    color: var(--muted);
+  }
+  .reading li:first-child { border-top: none; }
+  .reading a { font-weight: 600; color: var(--ink); }
 </style>
