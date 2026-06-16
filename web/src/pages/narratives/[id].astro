@@ -339,15 +339,18 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
       // custom HTML legend: Plotly's built-in legend can't be aligned to the
       // tab text reliably and its container anchor overlapped the top y-tick.
       // a flat row of swatch+label chips left-aligned with the tabs avoids both.
+      // colors are written inline straight from each trace so the swatch always
+      // matches the rendered series (a filled box for the bars, a solid or
+      // dashed rule for each line).
       legendEl.innerHTML = traces
         .map((t) => {
-          const c = t.type === "bar" ? t.marker.color : t.line.color;
-          const dash = t.line && t.line.dash;
-          const sw = dash
-            ? `<span class="sw sw-line" style="--c:${c};--dash:${dash === "dot" ? "2px 2px" : "5px 3px"}"></span>`
-            : t.type === "bar"
-              ? `<span class="sw sw-bar" style="--c:${c}"></span>`
-              : `<span class="sw sw-line" style="--c:${c};--dash:none"></span>`;
+          let sw;
+          if (t.type === "bar") {
+            sw = `<span class="sw" style="width:0.85rem;height:0.85rem;border-radius:2px;background:${t.marker.color};border:1px solid ${COL.accent}"></span>`;
+          } else {
+            const stroke = t.line.dash ? "dashed" : "solid";
+            sw = `<span class="sw" style="width:1.6rem;height:0;border-top:3px ${stroke} ${t.line.color}"></span>`;
+          }
           return `<span class="leg-item">${sw}${t.name}</span>`;
         })
         .join("");
@@ -403,19 +406,9 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
     font-size: var(--fs-meta); color: var(--muted);
   }
   .vol-legend .leg-item { display: inline-flex; align-items: center; gap: 0.45rem; }
+  /* swatch geometry/color are written inline per-trace; this just keeps it from
+     shrinking inside the flex row. */
   .vol-legend .sw { display: inline-block; flex: none; }
-  .vol-legend .sw-bar {
-    width: 0.85rem; height: 0.85rem; border-radius: 2px;
-    background: var(--c);
-  }
-  .vol-legend .sw-line {
-    width: 1.4rem; height: 0;
-    border-top: 2.6px solid var(--c);
-  }
-  .vol-legend .sw-line[style*="dash:2px"],
-  .vol-legend .sw-line[style*="dash:5px"] {
-    border-top-style: dashed; border-top-width: 2px;
-  }
   /* two zoom sliders sitting side by side under the chart — drag pans, these
      scale time and volume independently. accent-color matches the page toggles. */
   .zoom-controls { display: flex; gap: 2rem; align-items: center; margin: 0.6rem 0 0; }
