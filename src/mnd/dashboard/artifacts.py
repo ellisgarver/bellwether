@@ -191,6 +191,9 @@ class DashboardIndex:
     stage_min_r0: float
     n_narratives: int
     narratives: list[IndexEntry] = field(default_factory=list)
+    # Median words per clustered article — a corpus-shape stat for the data page
+    # (article-level, non-noise). None when no bodies are available to count.
+    median_article_words: int | None = None
     schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:

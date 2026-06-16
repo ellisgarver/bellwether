@@ -123,6 +123,7 @@ export interface DashboardIndex {
   stage_min_r0: number;
   n_narratives: number;
   narratives: IndexEntry[];
+  median_article_words: number | null;
   schema_version: string;
 }
 

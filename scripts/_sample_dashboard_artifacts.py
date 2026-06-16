@@ -414,6 +414,9 @@ def main() -> None:
         global_random_seed=int(cfg["reproducibility"]["global_random_seed"]),
         stage_min_r0=float(cfg["stages"]["growth_min_r0"]),
         n_narratives=len(rows), narratives=rows,
+        # institutional/academic macro writing runs long; fabricate a plausible
+        # per-article median (production counts it from clusters.parquet bodies).
+        median_article_words=1180,
     )
 
     out = write_dashboard_artifacts(index, narratives, OUT)

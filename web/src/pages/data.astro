@@ -101,8 +101,11 @@ const fmt = (n: number) => n.toLocaleString("en-US");
 const stats: [string, string][] = [
   [fmt(index.n_narratives), "narratives"],
   [fmt(totalArticles), "articles"],
-  ["12", "active feeds"],
-  ["9", "discourse dimensions"],
+  ...(index.median_article_words
+    ? ([[fmt(index.median_article_words), "median words / article"]] as [string, string][])
+    : []),
+  ["12", "feeds"],
+  ["9", "dimensions"],
   ["2010", "tracked since"],
 ];
 ---
@@ -128,7 +131,7 @@ const stats: [string, string][] = [
       the source set is fixed. it is purposefully built as a basis set: the smallest group of
       sources that covers every independent dimension of U.S. macro discourse, with
       nothing redundant. these are the upstream sources, narratives from
-      policymakers, researchers and analysts. nine dimensions, twelve active feeds, each with varying data types — hover a row for more information:
+      policymakers, researchers and analysts. nine discourse dimensions, twelve active feeds, each with varying data types — hover a row for more information:
     </p>
     <div class="feeds">
       {sources.map(([dim, src], i) => (
