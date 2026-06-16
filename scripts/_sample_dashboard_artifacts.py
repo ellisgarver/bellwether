@@ -100,6 +100,14 @@ SOURCES = ["federalreserve", "imf", "nber", "bis", "brookings", "piie",
 # Distinct R0 by stage — these flow into BOTH the stage readout and the staging
 # fit, so the badge, the CI and the plotted curve direction can never disagree.
 STAGE_R0 = {"growth": 1.9, "decay": 0.55, "dormant": None}
+# present mean R0 plus the posterior median and the effective-reproduction
+# peak/min over the trajectory. decay's present R0 is sub-1 (fading) yet it
+# peaked well above 1 (the explosion); growth is still above 1 now.
+STAGE_R0_RANGE = {
+    "growth": {"median": 1.84, "peak": 2.15, "min": 1.05},
+    "decay": {"median": 0.52, "peak": 2.60, "min": 0.40},
+    "dormant": None,
+}
 
 
 # Stage drives where the peak sits and whether the curve is still rising at the
@@ -314,9 +322,17 @@ def main() -> None:
         card["cluster_id"] = cid
 
         r0 = STAGE_R0[stage]
+        rng = STAGE_R0_RANGE[stage]
         stage_detail = {
             "model": staging_model, "converged": not sparse,
             "r0_mean": r0,
+            # posterior median of the (effective) reproduction number, and the
+            # peak/min it reached over the trajectory — peak is the height of the
+            # outbreak, min the present floor, so a faded narrative still shows
+            # how explosive it once was (see [id].astro table).
+            "r0_median": rng["median"] if rng else None,
+            "r0_peak": rng["peak"] if rng else None,
+            "r0_min": rng["min"] if rng else None,
             "r0_ci_low": round(r0 - 0.3, 2) if r0 else None,
             "r0_ci_high": round(r0 + 0.4, 2) if r0 else None,
             "threshold": cfg["stages"]["growth_min_r0"],
