@@ -132,6 +132,7 @@ class MarketsOverlay:
         *,
         max_lag: int = 4,
         alpha: float = 0.05,
+        other_label: str = "market",
     ) -> dict[str, Any]:
         """Run bidirectional Granger on the first-differenced overlay.
 
@@ -141,6 +142,11 @@ class MarketsOverlay:
         (ADR-041). Returns a dict that always carries the timing-not-cause
         caption; on insufficient data it reports ``verdict="insufficient data"``
         rather than raising.
+
+        ``other_label`` names the second series in the verdict wording — "market"
+        for the FRED overlay (ADR-047), "press" for the Media Cloud lead-lag
+        (ADR-048). The ``volume``/``market`` column + key names are the generic
+        slots and stay fixed regardless.
         """
         result: dict[str, Any] = {
             "series_id": overlay.attrs.get("series_id"),
@@ -172,7 +178,7 @@ class MarketsOverlay:
 
         result["volume_leads_market"] = v_leads_m
         result["market_leads_volume"] = m_leads_v
-        result["verdict"] = self._verdict(v_leads_m, m_leads_v, alpha)
+        result["verdict"] = self._verdict(v_leads_m, m_leads_v, alpha, other_label)
         return result
 
     @staticmethod
@@ -197,14 +203,17 @@ class MarketsOverlay:
 
     @staticmethod
     def _verdict(
-        v_leads_m: dict[str, Any], m_leads_v: dict[str, Any], alpha: float
+        v_leads_m: dict[str, Any],
+        m_leads_v: dict[str, Any],
+        alpha: float,
+        other_label: str = "market",
     ) -> str:
         vm = (v_leads_m.get("min_p") or 1.0) < alpha
         mv = (m_leads_v.get("min_p") or 1.0) < alpha
         if vm and mv:
             return "bidirectional precedence"
         if vm:
-            return "discourse precedes market"
+            return f"discourse precedes {other_label}"
         if mv:
-            return "market precedes discourse"
+            return f"{other_label} precedes discourse"
         return "no significant precedence"

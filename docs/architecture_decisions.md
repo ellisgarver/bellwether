@@ -64,6 +64,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 045 | **Corpus-base-rate volume normalization (fit + display); cross-narrative & lead-lag deferred but unblocked** | Live (supersedes 008 normalizer; relates 016/019/039) |
 | 046 | **Analyze every cluster; JEL scope is a display flag, not a dynamics gate (out-of-scope shown with code)** | Live (supersedes 020 "dropped from dynamics"; relates 019/044) |
 | 047 | **Markets overlay + Granger for every narrative; VIX canonical (lag tied to it), extra series display-only; `wave_count`→"peaks (≥ ½ max)"** | Live (amends 041; relates 039/043/045) |
+| 048 | **Broad-press lead-lag — bidirectional Granger between institutional discourse and Media Cloud press, beside the markets readout** | Live (amends 042; relates 041/047) |
 
 ---
 
@@ -3524,6 +3525,68 @@ Three loose ends surfaced while finishing the per-narrative life-cycle view:
 - Narratives shorter than 20 usable weeks (short-lived spikes) will show
   "insufficient data" for the lag readout but still get the VIX overlay drawn — the
   overlay is descriptive even where the test can't run.
+
+---
+
+## ADR-048: Broad-press lead-lag — bidirectional Granger vs. Media Cloud press
+
+- **Status**: Accepted
+- **Date**: 2026-06-16
+- **Amends**: ADR-042 (the Media Cloud press overlay was display/validation only;
+  this adds a lead-lag readout on top of it)
+- **Relates to**: ADR-041 (the Granger machinery this reuses), ADR-047 (the
+  markets lead-lag this mirrors), ADR-045 (adjusted weekly volume is the discourse
+  series both tests consume)
+
+### Context
+
+The central claim of the project is that macro narratives **form upstream** in
+institutional/academic discourse and **surface later** in the broad/premium press.
+ADR-042 added a Media Cloud press-volume overlay so the two curves can be eyeballed
+side by side, but stopped at the overlay — it never tested the timing directly. The
+markets overlay already carries a bidirectional Granger readout (ADR-041/047); the
+same test applied to press-vs-discourse is the most direct quantitative statement of
+the project's thesis, and the data to run it (adjusted weekly discourse volume,
+ADR-045; Media Cloud weekly story counts, ADR-042) already exists wherever the press
+overlay does.
+
+### Decision
+
+Add a **broad-press lead-lag** readout to the per-narrative view, sitting beside the
+markets readout (two-column, mirroring the stage / shape-facts pair):
+
+- Run the **same** bidirectional Granger as markets (ADR-041): weekly resolution,
+  first-differenced for stationarity, `max_lag=4`, `alpha=0.05`, minimum
+  `_MIN_OBS_PER_LAG·max_lag = 20` weekly observations or the verdict is
+  "insufficient data". The two series are the **adjusted institutional discourse
+  volume** (ADR-045) and the **Media Cloud press story count** (ADR-042).
+- Reuse `MarketsOverlay.granger_bidirectional`; the only generalization is a verdict
+  wording parameter (`other_label`, default `"market"`) so the press readout reads
+  "press precedes discourse" / "discourse precedes press" rather than market wording.
+  The dict shape (`volume_leads_market` / `market_leads_volume` / `verdict` / per-lag
+  `min_p`+`best_lag`+`significant`) is identical — "market" is the generic
+  second-series slot, relabeled in the UI.
+- Same **descriptive-only** framing as ADR-047: no family-wise/FDR correction
+  (ADR-040), and the "this shows timing, not cause" + multiple-comparison caveat
+  live on the **guide** page (explaining both the markets and press readouts), not
+  repeated on each narrative.
+
+### Consequences
+
+- `MediaCloudArtifact` gains an optional `granger` field (same shape as
+  `MarketsArtifact.granger`); no other schema change.
+- The press readout exists **only where the Media Cloud series does** — key-gated
+  (`MEDIACLOUD_API_KEY`) and reliable only from ~2017 (ADR-042), so pre-2017
+  narratives show neither the press overlay nor its lead-lag. Markets (VIX) remains
+  universal (ADR-047); the two readouts are independently present/absent.
+- Production computation rides along with the Media Cloud overlay, which is still
+  the ADR-042 follow-on (no key in `.env` yet); when that overlay is wired, the
+  press Granger is the same `granger_bidirectional(..., other_label="press")` call on
+  the weekly discourse/press pair. Sample data fabricates it for ≥2017 narratives so
+  the front end is exercised now.
+- This is the thesis test made visible: a "press precedes discourse" verdict is a
+  point **against** the upstream-first story for that narrative, and the tool shows
+  it honestly rather than hiding disconfirming cases.
 
 ---
 

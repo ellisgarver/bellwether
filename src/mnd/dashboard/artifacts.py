@@ -112,6 +112,9 @@ class MediaCloudArtifact:
     ratio: list[float]
     reliable_since_year: int
     caption: str
+    # Bidirectional press-vs-discourse lead-lag (ADR-048), same shape as
+    # MarketsArtifact.granger; None when there aren't enough weekly obs.
+    granger: dict[str, Any] | None = None
 
 
 @dataclass
