@@ -83,11 +83,11 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
     <div class="zoom-controls">
       <label class="zoom">
         <span>time zoom</span>
-        <input type="range" id="zoom-x" min="-1" max="1" step="0.01" value="0" aria-label="time (horizontal) zoom" />
+        <input type="range" id="zoom-x" min="0" max="1" step="0.01" value="0" aria-label="time (horizontal) zoom" />
       </label>
       <label class="zoom">
         <span>volume zoom</span>
-        <input type="range" id="zoom-y" min="-1" max="1" step="0.01" value="0" aria-label="volume (vertical) zoom" />
+        <input type="range" id="zoom-y" min="0" max="1" step="0.01" value="0" aria-label="volume (vertical) zoom" />
       </label>
     </div>
     {(n.mediacloud || n.markets) && (
@@ -187,16 +187,11 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
     const vol = n.volume.values;
     const maxVol = Math.max(1, ...vol);
 
-    // x bounds in epoch-ms. give the series ~20% of its span as breathing room
-    // on the left so the rising tail and overlays aren't flush to the frame.
-    // dormant narratives are finished, so they get the same margin on the right;
-    // growth/decay are still unfolding, so we pin the right edge to the last
-    // datapoint rather than imply "future" whitespace.
+    // x bounds in epoch-ms: the full timeline, edge to edge, no margin. this is
+    // the default ("most zoomed out") view; the time slider only zooms in.
     const xLoMs = Date.parse(dates[0]);
     const xHiMs = Date.parse(dates[dates.length - 1]);
-    const xSpan = xHiMs - xLoMs || 864e5;
-    const xMarginL = xSpan * 0.2;
-    const xMarginR = n.stage === "dormant" ? xSpan * 0.2 : 0;
+    const xFull = xHiMs - xLoMs || 864e5;
 
     function normalise(arr) {
       const xs = arr.filter((v) => v != null && isFinite(v));
@@ -237,34 +232,27 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
     const hov = (label) =>
       `${label} · %{x|%b %-d, %Y} · %{y:.2f}<extra></extra>`;
 
-    // ---- view state: drag pans the center, the sliders set the zoom factor ----
-    const xMin = xLoMs - xMarginL, xMax = xHiMs + xMarginR, xFull = xMax - xMin;
-    // y top is the max across every lens (not just the active one) so the
-    // vertical scale and its zoom slider stay put when you switch lenses.
+    // ---- view state: drag pans the center, the sliders zoom in ----
+    // y top spans every lens (not just the active one) so the scale stays put
+    // when switching lenses. it is fixed — zooming never changes the max, only
+    // how much of [0, yTop] is shown ("y max stays regardless of zoom").
     const yTop = Math.max(
       maxVol,
       ...fits.flatMap((f) => (f.curve || []).filter((v) => v != null && isFinite(v))),
     ) * 1.08;
-    // zoom factor maps from a centered slider: value 0 → factor 1 (the fitted
-    // full view), negatives zoom out (flatten / show beyond the window), and
-    // positives zoom in. 10^value gives symmetric log steps either side of 1.
+    // sliders run 0 (full view, "most zoomed out") to 1 (deepest zoom); 10^value
+    // gives smooth log steps. there is no zoom-out past the full timeline.
     const ZOOM_BASE = 10;
     let zx = 1, zy = 1;
-    let cx = (xMin + xMax) / 2;     // x center (epoch-ms)
+    let cx = (xLoMs + xHiMs) / 2;   // x center (epoch-ms)
     let cy = yTop / 2;              // y center
     function viewRange() {
       const xs = xFull / zx, ys = yTop / zy;
-      // x: pan within the window; once zoomed out past the full span there is
-      // nothing left to pan to, so lock to the window center.
-      cx = xs >= xFull
-        ? (xMin + xMax) / 2
-        : Math.min(xMax - xs / 2, Math.max(xMin + xs / 2, cx));
-      // y: the zero floor is strict. zoomed in we pan between 0 and yTop; zoomed
-      // out we anchor the floor at 0 and stack the extra headroom on top so the
-      // curve flattens without ever revealing a negative count.
-      cy = ys >= yTop
-        ? ys / 2
-        : Math.min(yTop - ys / 2, Math.max(ys / 2, cy));
+      // pan within the data extent; at zoom 1 these clamps pin the view to the
+      // full timeline and the full [0, yTop] height. the floor and ceiling are
+      // both strict, so the view never shows below 0 or above the data max.
+      cx = Math.min(xHiMs - xs / 2, Math.max(xLoMs + xs / 2, cx));
+      cy = Math.min(yTop - ys / 2, Math.max(ys / 2, cy));
       return { x: [cx - xs / 2, cx + xs / 2], y: [cy - ys / 2, cy + ys / 2] };
     }
 
@@ -274,31 +262,38 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
       const vr = viewRange();
       Plotly.relayout(chartEl, { "xaxis.range": vr.x, "yaxis.range": vr.y });
     };
-    // reset pan + zoom to the fitted full view (used when switching fit lens).
+    // reset pan + zoom to the full view (used when switching fit lens).
     function resetView() {
       zx = 1; zy = 1;
-      cx = (xMin + xMax) / 2; cy = yTop / 2;
+      cx = (xLoMs + xHiMs) / 2; cy = yTop / 2;
       zxEl.value = "0"; zyEl.value = "0";
     }
     zxEl.addEventListener("input", () => { zx = ZOOM_BASE ** parseFloat(zxEl.value); applyZoom(); });
-    zyEl.addEventListener("input", () => { zy = ZOOM_BASE ** parseFloat(zyEl.value); applyZoom(); });
+    // volume zoom keeps the data max pinned at the top: anchor the window's top
+    // at yTop so zooming reveals the peak in finer detail without moving the max.
+    zyEl.addEventListener("input", () => {
+      zy = ZOOM_BASE ** parseFloat(zyEl.value);
+      cy = yTop - (yTop / zy) / 2;
+      applyZoom();
+    });
 
     render();
 
     // drag is a pure pan: we own it so a drag can only translate the view, never
     // rescale it (Plotly's native pan squishes the range at a bound, which read
     // back as an unwanted zoom). pixel deltas convert to data via the plot-area
-    // length; viewRange() then clamps to the strict bounds.
+    // length; viewRange() then clamps to the strict bounds. move/up live on the
+    // window so a drag keeps going off the chart and — critically — the release
+    // is always caught, even outside the plot, so it can't get stuck "dragging".
     let dragging = false, lastX = 0, lastY = 0;
-    chartEl.style.cursor = "grab";
     chartEl.addEventListener("pointerdown", (ev) => {
       dragging = true; lastX = ev.clientX; lastY = ev.clientY;
-      chartEl.style.cursor = "grabbing";
-      chartEl.setPointerCapture(ev.pointerId);
+      chartEl.classList.add("dragging");
     });
-    chartEl.addEventListener("pointermove", (ev) => {
+    window.addEventListener("pointermove", (ev) => {
       if (!dragging) return;
       const fl = chartEl._fullLayout;
+      if (!fl) return;
       const xLen = fl.xaxis._length, yLen = fl.yaxis._length;
       cx -= (ev.clientX - lastX) * (xFull / zx) / xLen;
       cy += (ev.clientY - lastY) * (yTop / zy) / yLen;
@@ -306,13 +301,12 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
       const vr = viewRange();
       Plotly.relayout(chartEl, { "xaxis.range": vr.x, "yaxis.range": vr.y });
     });
-    const endDrag = (ev) => {
+    const endDrag = () => {
       if (!dragging) return;
-      dragging = false; chartEl.style.cursor = "grab";
-      try { chartEl.releasePointerCapture(ev.pointerId); } catch {}
+      dragging = false; chartEl.classList.remove("dragging");
     };
-    chartEl.addEventListener("pointerup", endDrag);
-    chartEl.addEventListener("pointercancel", endDrag);
+    window.addEventListener("pointerup", endDrag);
+    window.addEventListener("pointercancel", endDrag);
 
     function render() {
       const traces = [
@@ -396,6 +390,12 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
   }
   .zoom span { white-space: nowrap; }
   .zoom input[type="range"] { flex: 1; accent-color: var(--accent); cursor: pointer; }
+  /* only two cursors over the chart: the default arrow (Plotly's crosshair is
+     suppressed) and a closed grabbing hand while a drag is in progress. */
+  .chart :global(.nsewdrag),
+  .chart :global(.drag) { cursor: default !important; }
+  .chart.dragging :global(.nsewdrag),
+  .chart.dragging :global(.drag) { cursor: grabbing !important; }
   .reps { list-style: none; margin: 0; padding: 0; }
   .reps li { padding: 0.9rem 0; border-bottom: 1px solid var(--line-soft); }
   .reps a { font-weight: 600; }
