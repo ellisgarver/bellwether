@@ -347,10 +347,16 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
         .map((t) => {
           let sw;
           if (t.type === "bar") {
-            sw = `<span style="${swBase}width:0.8rem;height:0.8rem;border-radius:2px;background:${t.marker.color};outline:1px solid ${COL.accent}"></span>`;
+            sw = `<span style="${swBase}width:0.8rem;height:0.8rem;border-radius:2px;background:${t.marker.color}"></span>`;
           } else if (t.line.dash) {
             const c = t.line.color;
-            sw = `<span style="${swBase}width:1.5rem;height:3px;border-radius:1px;background:repeating-linear-gradient(90deg,${c} 0 5px,transparent 5px 9px)"></span>`;
+            // mirror the line's dash style so the legend distinguishes the
+            // overlays: "dot" → tight round-ish dots, "dash" → longer dashes.
+            const stripe =
+              t.line.dash === "dot"
+                ? `repeating-linear-gradient(90deg,${c} 0 2px,transparent 2px 5px)`
+                : `repeating-linear-gradient(90deg,${c} 0 6px,transparent 6px 10px)`;
+            sw = `<span style="${swBase}width:1.5rem;height:3px;border-radius:1px;background:${stripe}"></span>`;
           } else {
             sw = `<span style="${swBase}width:1.5rem;height:3px;border-radius:1px;background:${t.line.color}"></span>`;
           }
