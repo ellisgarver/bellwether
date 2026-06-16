@@ -79,7 +79,6 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
         </div>
       )}
     </div>
-    <div id="vol-legend" class="vol-legend"></div>
     <div id="vol-chart" class="chart"></div>
     <div class="zoom-controls">
       <label class="zoom">
@@ -179,7 +178,6 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
     import { Plotly, baseLayout, COL, HOVER_LABEL, seriesLabel } from "@lib/chart";
     const n = JSON.parse(document.getElementById("narr-data").textContent);
     const chartEl = document.getElementById("vol-chart");
-    const legendEl = document.getElementById("vol-legend");
     const tabsEl = document.getElementById("lens-tabs");
     const dates = n.volume.dates;
     const vol = n.volume.values;
@@ -336,34 +334,22 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
       // whenever the visible tick labels change width, which on a date axis
       // happens every pan frame — that reflow was the jitter. the range comes
       // from the shared view state so a lens switch keeps the current pan/zoom.
-      // custom HTML legend: Plotly's built-in legend can't be aligned to the
-      // tab text reliably and its container anchor overlapped the top y-tick.
-      // a flat row of swatch+label chips left-aligned with the tabs avoids both.
-      // colors are written inline straight from each trace so the swatch always
-      // matches the rendered series (a filled box for the bars, a solid or
-      // dashed rule for each line).
-      legendEl.innerHTML = traces
-        .map((t) => {
-          let sw;
-          if (t.type === "bar") {
-            sw = `<span class="sw" style="width:0.85rem;height:0.85rem;border-radius:2px;background:${t.marker.color};border:1px solid ${COL.accent}"></span>`;
-          } else {
-            const stroke = t.line.dash ? "dashed" : "solid";
-            sw = `<span class="sw" style="width:1.6rem;height:0;border-top:3px ${stroke} ${t.line.color}"></span>`;
-          }
-          return `<span class="leg-item">${sw}${t.name}</span>`;
-        })
-        .join("");
       const vr = viewRange();
+      // legend left-aligned to the chart's left edge (xref:container, x:0) and
+      // lifted into a dedicated top-margin row (t:34, y:1 anchored bottom) so it
+      // clears the top y-tick instead of overlapping it.
       const layout = baseLayout({
         bargap: 0.06,
         dragmode: false,
-        showlegend: false,
-        margin: { l: 64, r: 18, t: 8, b: 46 },
+        margin: { l: 64, r: 18, t: 34, b: 46 },
         xaxis: { type: "date", gridcolor: "rgba(226,220,207,0.6)", range: vr.x },
         yaxis: {
           title: { text: "corpus-size-adjusted volume", standoff: 14 },
           gridcolor: "rgba(226,220,207,0.6)", range: vr.y,
+        },
+        legend: {
+          orientation: "h", xref: "container", x: 0, xanchor: "left",
+          y: 1.0, yanchor: "bottom",
         },
       });
       // pin the hover chip per-trace: otherwise a translucent marker/line color
@@ -397,18 +383,6 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
   }
   .lens-bar :global(.tabs) { border-bottom: none; margin: 0; }
   .lens-bar :global(.toggle-row) { margin: 0; }
-  /* custom chart legend: a flat row of swatch+label chips, left edge aligned
-     with the tab text (tab padding-left is 0.95rem) so the first swatch sits
-     under "logistic". sits above the plot, clear of the y-axis ticks. */
-  .vol-legend {
-    display: flex; flex-wrap: wrap; gap: 0.4rem 1.4rem; align-items: center;
-    padding-left: 0.95rem; margin: 0.7rem 0 0.1rem;
-    font-size: var(--fs-meta); color: var(--muted);
-  }
-  .vol-legend .leg-item { display: inline-flex; align-items: center; gap: 0.45rem; }
-  /* swatch geometry/color are written inline per-trace; this just keeps it from
-     shrinking inside the flex row. */
-  .vol-legend .sw { display: inline-block; flex: none; }
   /* two zoom sliders sitting side by side under the chart — drag pans, these
      scale time and volume independently. accent-color matches the page toggles. */
   .zoom-controls { display: flex; gap: 2rem; align-items: center; margin: 0.6rem 0 0; }
