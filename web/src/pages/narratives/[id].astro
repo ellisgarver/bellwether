@@ -171,7 +171,7 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
 
   <script id="narr-data" type="application/json" set:html={JSON.stringify(n)}></script>
   <script>
-    import { Plotly, baseLayout, CHART_CONFIG, COL, seriesLabel } from "@lib/chart";
+    import { Plotly, baseLayout, CHART_CONFIG, COL, HOVER_LABEL, seriesLabel } from "@lib/chart";
     const n = JSON.parse(document.getElementById("narr-data").textContent);
     const chartEl = document.getElementById("vol-chart");
     const tabsEl = document.getElementById("lens-tabs");
@@ -245,6 +245,9 @@ const mlabel = n.markets ? fmtSeries(n.markets.series_label) : null;
           gridcolor: "rgba(226,220,207,0.6)", automargin: true },
         legend: { orientation: "h", y: 1.16, x: 0 },
       });
+      // pin the hover chip per-trace: otherwise a translucent marker/line color
+      // (e.g. the faint blue volume bars) bleeds into the chip background.
+      traces.forEach((t) => (t.hoverlabel = HOVER_LABEL));
       Plotly.react(chartEl, traces, layout, CHART_CONFIG);
     }
 
