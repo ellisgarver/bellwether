@@ -23,11 +23,12 @@ Pipeline assembled here, in order:
   5. assembly into the artifact contract via ``build_dashboard_artifacts`` and
      persistence via ``write_dashboard_artifacts``.
 
-The markets/Granger overlay (ADR-041/047) is built here against the canonical VIX
-series for every narrative when a FRED key is present; it degrades to absent (the
-front end renders no markets section) when FRED is unconfigured. The Media Cloud
-press overlay (ADR-042) needs a separate key and recomputes independently; it is
-still a follow-on (passed through as absent), and the front end handles its absence.
+Two display overlays are built here, each keyed on its own credential and each
+degrading to absent (the front end omits the section) when its key is missing:
+the markets/Granger overlay (ADR-041/047) against the canonical VIX series with a
+FRED key, and the Media Cloud broad-press story-count overlay with a bidirectional
+press-vs-discourse Granger readout (ADR-042/048) with a MEDIACLOUD key. Both are
+display/validation only — neither ever feeds embedding, clustering, or the fit.
 
 ``embedder`` and ``fitter`` are injectable so the assembly path is unit-testable
 without loading Qwen3-8B or running PyMC; the CLI passes the real ones.
@@ -185,10 +186,11 @@ def run_analysis(
         volume_curves={cid: dynamics[cid].time_series for cid in fit_ids},
     )
 
-    # 5. Markets/Granger overlay against canonical VIX (ADR-047) — built for every
-    # narrative when FRED is configured, absent otherwise. Media Cloud stays a
-    # follow-on (separate key).
+    # 5. Display overlays (ADR-041/047 markets, ADR-042/048 press) — each built per
+    # narrative when its key is configured, absent otherwise (the front end omits
+    # the section). Both are display/validation only and never feed the fit.
     markets = _markets_overlays(adj, fit_ids)
+    mediacloud = _mediacloud_overlays(adj, fit_ids, cluster_terms, cfg)
 
     # 6. Assemble + persist.
     index, narratives = build_dashboard_artifacts(
@@ -203,6 +205,7 @@ def run_analysis(
         umap_xy=umap_xy,
         umap_xyz=umap_xyz,
         markets=markets,
+        mediacloud=mediacloud,
         cfg=cfg,
     )
     return write_dashboard_artifacts(index, narratives, out_dir)
@@ -252,6 +255,101 @@ def _markets_overlays(
             caption=TIMING_NOT_CAUSE,
         )
     log.info("Built VIX markets overlay for %d/%d narratives (ADR-047)", len(out), len(fit_ids))
+    return out
+
+
+def _mediacloud_query(terms: list[str], k: int) -> str:
+    """OR the top-k cluster c-TF-IDF terms into a Media Cloud keyword query.
+
+    Data-driven (the query is the cluster's own keywords, not a hand-written
+    string) so the no-tuning rule holds. Multi-word terms are phrase-quoted.
+    """
+    parts = []
+    for t in terms[:k]:
+        t = t.strip()
+        if not t:
+            continue
+        parts.append(f'"{t}"' if " " in t else t)
+    return " OR ".join(parts)
+
+
+def _press_granger(daily_volume: pd.Series, records: list[dict]) -> dict[str, Any] | None:
+    """Weekly bidirectional Granger between discourse volume and press counts
+    (ADR-048). Press counts occupy the generic ``market`` slot; ``other_label=
+    "press"`` only sets the verdict wording. Returns None when there are no
+    overlapping weekly observations."""
+    from mnd.detection.markets import MarketsOverlay
+
+    press = pd.Series(
+        {pd.Timestamp(r["date"]): int(r["story_count"]) for r in records}
+    ).sort_index()
+    if press.empty:
+        return None
+    weekly_vol = MarketsOverlay.weekly_volume(daily_volume)
+    weekly_press = press.resample("W").sum()
+    weekly_press.name = "market"
+    df = pd.concat([weekly_vol, weekly_press], axis=1).dropna()
+    if df.empty:
+        return None
+    df.attrs["series_id"] = "mediacloud_us_national"
+    df.attrs["series_label"] = "press"
+    return MarketsOverlay(fred=None).granger_bidirectional(df, other_label="press")
+
+
+def _mediacloud_overlays(
+    adj: dict[int, pd.Series],
+    fit_ids: list[int],
+    cluster_terms: dict[int, list[str]],
+    cfg: dict[str, Any],
+) -> dict[int, Any]:
+    """Broad-press story-count overlay + bidirectional press-vs-discourse Granger
+    per narrative (ADR-042/048). The per-narrative query is the OR of its top
+    c-TF-IDF terms. Requires MEDIACLOUD_API_KEY — if absent (or a fetch fails),
+    the affected narratives simply get no mediacloud block and the front end omits
+    the section. Press coverage thins before ~2017; the artifact carries
+    ``reliable_since_year`` so the UI can caption that rather than show a flat line.
+    Display/validation only — never feeds embedding, clustering, or the fit.
+    """
+    from mnd.detection.mediacloud import MediaCloudDetector, RELIABLE_SINCE_YEAR
+    from mnd.dashboard.artifacts import MediaCloudArtifact
+
+    try:
+        detector = MediaCloudDetector.from_env()
+    except Exception as exc:
+        log.warning("Media Cloud overlay skipped — no MEDIACLOUD key (%s); section absent", exc)
+        return {}
+
+    k = int(cfg.get("detection", {}).get("mediacloud", {}).get("query_top_terms", 6))
+    caption = f"Broad-press story counts (Media Cloud). Reliable from ~{RELIABLE_SINCE_YEAR}."
+
+    out: dict[int, Any] = {}
+    for cid in fit_ids:
+        query = _mediacloud_query(cluster_terms.get(cid, []), k)
+        if not query:
+            continue
+        idx = pd.to_datetime(adj[cid].index)
+        if len(idx) == 0:
+            continue
+        start, end = idx.min().date(), idx.max().date()
+        try:
+            records = list(detector.fetch_story_counts(query, start, end))
+        except Exception as exc:
+            log.warning("Media Cloud fetch failed for cluster %d: %s", cid, exc)
+            continue
+        if not records:
+            continue
+        out[cid] = MediaCloudArtifact(
+            dates=[r["date"] for r in records],
+            story_count=[int(r["story_count"]) for r in records],
+            ratio=[float(r["ratio"]) for r in records],
+            reliable_since_year=RELIABLE_SINCE_YEAR,
+            caption=caption,
+            granger=_press_granger(adj[cid], records),
+        )
+    log.info(
+        "Built Media Cloud press overlay for %d/%d narratives (ADR-042/048)",
+        len(out), len(fit_ids),
+    )
     return out
 
 
