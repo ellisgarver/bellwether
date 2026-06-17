@@ -108,7 +108,7 @@ const stats: [string, string][] = [
     ? ([[fmt(index.median_article_words), "median words / article"]] as [string, string][])
     : []),
   ["12", "feeds"],
-  ["9", "dimensions"],
+  ["8", "dimensions"],
   ["2010", "tracked since"],
 ];
 ---
@@ -134,7 +134,7 @@ const stats: [string, string][] = [
       the source set is fixed. it is purposefully built as a basis set: the smallest group of
       sources that covers every independent dimension of U.S. macro discourse, with
       nothing redundant. these are the upstream sources, narratives from
-      policymakers, researchers and analysts. nine discourse dimensions, twelve active feeds, each with varying data types — hover a row for more information:
+      policymakers, researchers and analysts. eight independent discourse dimensions plus a cross-cutting Q&A register, twelve active feeds, each with varying data types — hover a row for more information:
     </p>
     <div class="feeds">
       {sources.map(([dim, src], i) => (
@@ -150,8 +150,11 @@ const stats: [string, string][] = [
     </div>
     <p>
       every article from every source enters the corpus; nothing is filtered by
-      topic on the way in. the only ingest filters are the date window (2010 to
-      today) and the removal of near-duplicate documents. within-macro topical scope is decided in clustering.
+      topic on the way in. the only ingest filters are the date window (2010
+      onward) and near-duplicate removal — MinHash over character 5-grams,
+      dropping documents above 0.85 Jaccard similarity (Broder 1997; Henzinger
+      2006), keyed on both article URL and content. within-macro topical scope is
+      decided later, in clustering.
     </p>
     <p class="muted">
       financial press itself (WSJ, Bloomberg, FT, etc) is downstream, its text is not ingested; but its volume is tracked separately as an overlay.

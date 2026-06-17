@@ -29,7 +29,8 @@
   --fs-label: 0.84rem;  /* eyebrows, small-caps labels */
   --fs-meta:  0.9rem;   /* meta lines, footer, secondary captions */
   --fs-ui:    0.94rem;  /* nav, tabs, toggles, key/value, tables, captions */
-  --fs-body:  1rem;     /* body copy */
+  --fs-body:  1.0625rem; /* body copy (17px at the 16px root) */
+  --fs-h2:    clamp(1.4rem, 2.4vw, 1.9rem); /* section headings */
   --fs-lede:  1.18rem;  /* ledes, hero thesis, h3 / card titles */
   /* big tabular stat figure (home hero stats + data-page corpus stats); one
      responsive value so the same role reads identically on every page. */
@@ -59,7 +60,7 @@ body {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font);
-  font-size: 17px;
+  font-size: var(--fs-body);
   line-height: 1.62;
   letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;
@@ -71,7 +72,7 @@ a:hover { color: var(--accent-bright); }
 
 h1, h2, h3, h4 { font-weight: 600; line-height: 1.08; letter-spacing: -0.02em; margin: 0; }
 h1 { font-size: var(--fs-title); }
-h2 { font-size: clamp(1.4rem, 2.4vw, 1.9rem); margin: var(--space-5) 0 var(--space-2); }
+h2 { font-size: var(--fs-h2); margin: var(--space-5) 0 var(--space-2); }
 h3 { font-size: var(--fs-lede); margin: var(--space-3) 0 var(--space-1); }
 
 /* an eyebrow is the lead-in to a heading: collapse the heading's top margin so
