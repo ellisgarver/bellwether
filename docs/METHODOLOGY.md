@@ -1,8 +1,8 @@
 # Macro Narrative Dynamics — Methodology
 
-A plain-English walkthrough of how the system works and why each step is built the way it is. This document sits between the engineering-focused `CLAUDE.md` (what to do when writing code) and the comprehensive `MND_PROJECT_SPEC.md` (full project specification). It is the canonical reference for "how does this project actually work?" — useful for collaborators, reviewers, and future development sessions.
+The canonical reference for how the system works and why each step is built the way it is.
 
-The methodology is designed to be **defensible without relying on researcher judgment**. Every parameter is either a published library default, a citation from primary literature, or removed because no field-accepted anchor existed. There are no sensitivity sweeps. There are no hand-tuned thresholds. This is a stated design constraint, not an aspiration — see "Methodological principles" at the bottom.
+Every parameter is either a published library default, a value cited from primary literature, or removed because no field-accepted anchor existed. No sensitivity sweeps, no hand-tuned thresholds — see "Methodological principles" (§7).
 
 ---
 
@@ -14,7 +14,7 @@ This is an **educational, historical, and analytical** project. It is not a pred
 
 **Core intellectual frame**: Robert Shiller's *Narrative Economics* (2017, 2019) argues that economic narratives spread through populations in patterns resembling epidemics. He left the formal measurement of that claim as future work. This project operationalizes the *lifecycle dynamics* half of Shiller's framework — emergence, growth, peak, decay — by fitting SIR/logistic ODEs to BERTopic cluster volume. We do not claim to measure narrative virality at the population level or causal effects on macro outcomes; that is left to structural work in the Flynn & Sastry (2024) tradition.
 
-**Why this matters**: macro narratives drive expectations, expectations drive policy, policy drives outcomes. Measuring the narrative layer directly — separately from market prices or survey data — gives a complementary view on the formation of macro consensus. The institutional/policy/academic discourse measured here is the *upstream supply side* of the narratives that households eventually adopt — a layer that Andre, Haaland, Roth, Wiederholt & Wohlfart (forthcoming, *Review of Economic Studies*) showed differs qualitatively from household-elicited narratives.
+**The narrative layer**: measuring narratives directly — separately from market prices or survey data — gives a complementary view on the formation of macro consensus. The institutional/policy/academic discourse measured here is the *upstream supply side* of the narratives households eventually adopt — a layer that Andre, Haaland, Roth, Wiederholt & Wohlfart (forthcoming, *Review of Economic Studies*) showed differs qualitatively from household-elicited narratives.
 
 **Field context**: Roos & Reccius (2024, *Journal of Economic Surveys*) — the most recent survey of narrative economics — notes the field is still consolidating, with no generally accepted definition of an "economic narrative" and no operationalization of Shiller's framework that goes beyond keyword counts. Among published quantitative work, the closest precedents are Bybee, Kelly, Manela & Xiu (2024, *Journal of Finance*) and Larsen & Thorsrud (2019, *Journal of Econometrics*) on the topic-model side, Bertsch et al. (2021, *Economics Letters*) on the temporal-dynamics side, and Hansen, McMahon & Prat (2018, *QJE*) on the institutional-text side. None combine multi-source institutional+academic corpus, lifecycle ODE fitting, BERTopic-on-transformer-embeddings, and live public reporting in a single artifact. See `docs/related_work.md` for the full survey.
 
@@ -22,7 +22,7 @@ This is an **educational, historical, and analytical** project. It is not a pred
 
 ## 2. The narrative-as-epidemic analogy
 
-The conceptual leap: a narrative is something that spreads from writer to writer the way a disease spreads from person to person. A writer encounters a framing (susceptible state), starts using it (infected), and either keeps spreading it or moves on (recovered). Aggregate over thousands of writers, plot weekly volume of articles using the framing, and you get a curve that looks remarkably like an epidemic curve — sharp ignition, exponential growth, peak, decay.
+The conceptual leap: a narrative is something that spreads from writer to writer the way a disease spreads from person to person. A writer encounters a framing (susceptible state), starts using it (infected), and either keeps spreading it or moves on (recovered). Aggregate over thousands of writers, plot weekly volume of articles using the framing, and the curve takes the shape of an epidemic curve — sharp ignition, exponential growth, peak, decay.
 
 This isn't just metaphor. The SIR model (Kermack & McKendrick 1927) — three populations of Susceptible, Infected, and Recovered with two rate constants β (transmission) and γ (recovery) — fits narrative volume curves the same way it fits disease incidence. The basic reproduction number R₀ = β/γ has the same interpretation: above 1 the narrative spreads, below 1 it fades.
 
@@ -135,7 +135,7 @@ For each narrative cluster, we build three weekly volume time series.
 
 **Why three signals?** Cross-validation and lead-lag analysis.
 - **Cross-validation**: a real macro narrative shows up in *both* institutional discourse AND premium press. If a cluster has institutional volume but zero press volume, it might be a procedural artifact (e.g., routine Treasury announcements that don't reach narrative status). If press volume but no institutional, it's downstream-only — out of our analytical scope.
-- **Lead-lag**: institutional discourse usually *leads* premium press by days to weeks. Plotting both curves on the same axis lets a reader literally see "the Fed was talking about soft landing for three months before WSJ wrote about it." This is the headline analytical insight the project enables.
+- **Lead-lag**: institutional discourse usually *leads* premium press by days to weeks. Plotting both curves on the same axis shows the offset directly — e.g., institutional soft-landing volume rising months before premium-press coverage.
 - **Detection**: broad-press spikes can flag emerging narratives in Phase 6 weekly updates before they reach our institutional sources.
 
 **Media Cloud never enters embedding or clustering.** It is a separate volume signal, not a text source. We use it for cross-validation and as a parallel curve on the dashboard.
@@ -191,7 +191,7 @@ For each detected narrative, the dashboard surfaces the **most similar past narr
 
 We report the **top-5 most similar narratives by each method separately** rather than a single combined score. Top-K avoids the "where's the threshold" question — it's a ranking. The three views are complementary: morphological can surface narratives that share no vocabulary but had similar epidemic shapes (a 2022 inflation peak and a 2008 commodity-price spike, for instance).
 
-This is what lets the dashboard answer: "this current narrative looks like it might be following the same arc as X past narrative." Educational and historical, not predictive.
+The dashboard uses this to surface, for a current narrative, the past narratives whose arc it most resembles — historical, not predictive.
 
 ---
 
