@@ -1,9 +1,8 @@
 """Downstream analysis driver: clusters.parquet → dashboard artifacts (ADR-043/045).
 
-This is the seam the pipeline was missing. ``cluster`` persists ``clusters.parquet``
-(+ ``topic_info.parquet``) and ``embeddings.npy``; the front end reads the small
-JSON in ``paths.dashboard_artifacts``. Nothing connected the two except the
-throwaway sample fabricator. ``run_analysis`` is that connection — it recomputes
+``cluster`` persists ``clusters.parquet`` (+ ``topic_info.parquet``) and
+``embeddings.npy``; the front end reads the small JSON in
+``paths.dashboard_artifacts``. ``run_analysis`` connects the two — it recomputes
 the entire analysis layer from the persisted clustering, with no re-embedding
 (the embed+cluster step is the only irreversible one-shot work).
 

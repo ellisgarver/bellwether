@@ -1203,7 +1203,7 @@ without referencing any category by name.
 
 ## ADR-019: Comprehensive methodology lock-in to field-accepted anchors
 
-- **Status**: Proposed (drafted 2026-05-20; pending implementation)
+- **Status**: Accepted — implemented. Embedder choice (0.6B sole embedder) later superseded by ADR-036 (Qwen3-Embedding-8B on RCC, 0.6B local fallback).
 - **Date**: 2026-05-20
 - **Supersedes**:
   - ADR-001 (partial) — comparator (mpnet) embedder role removed

@@ -287,7 +287,7 @@ The project runs through seven phases. We are currently in Phase 2 (corpus inges
 | 2 | Full corpus ingestion, methodology lock-in | In progress |
 | 3 | Embedding + clustering at corpus scale | Initial run complete; re-run with locked methodology pending |
 | 4 | Full-corpus anchor + fizzled validation (reported, not gated) | Blocked on Phase 2/3 completion |
-| 5 | Streamlit dashboard, public deploy | Blocked on Phase 4 |
+| 5 | Astro static site, public deploy | Blocked on Phase 4 |
 | 6 | Weekly cron update pipeline | Blocked on Phase 5 |
 | 7 | Technical report, reproducibility audit | Final |
 

@@ -21,9 +21,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
 ]
 
-[project.scripts]
-mnd = "mnd.cli:main"
-
 [tool.setuptools.packages.find]
 where = ["src"]
 

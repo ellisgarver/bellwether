@@ -1,8 +1,8 @@
-"""Dashboard artifact contract (Phase 5).
+"""Dashboard artifact contract (ADR-043).
 
-This module defines the *seam* between the analysis pipeline and the Streamlit
-front end. The pipeline is heavy (parquet of every chunk, a fitted BERTopic
-model, embedding matrices, PyMC traces); the website should not touch any of it.
+This module defines the boundary between the analysis pipeline and the Astro
+static site. The pipeline is heavy (parquet of every chunk, a fitted BERTopic
+model, embedding matrices, PyMC traces); the website does not touch any of it.
 Instead an artifact-builder bakes everything the screen needs into small, plain
 JSON, and the front end only ever reads that JSON — it never imports
 pymc/bertopic/torch.
