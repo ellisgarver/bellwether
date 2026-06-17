@@ -78,9 +78,9 @@ const example =
       each article is split into passages of roughly 512 tokens or less — the
       retrieval unit from the BEIR benchmark — so long reports are read in
       coherent pieces not averaged into mush. each passage is transformed into
-      a high-dimensional vector by a sentence-embedding model (Qwen3-Embedding),
-      where geometric closeness mimics semantic closeness: two passages with the
-      same argument land near each other.
+      a vector by a sentence-embedding model — Qwen3-Embedding-8B, 4,096 numbers
+      per passage — where geometric closeness mimics semantic closeness: two
+      passages with the same argument land near each other.
     </p>
     <p>
       those vectors are clustered with BERTopic, which reduces them to a lower
