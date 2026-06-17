@@ -157,6 +157,18 @@ dynamics:
   # R^2 and R_0 credible interval width are reported as diagnostics, not gated.
 
 # -----------------------------------------------------------------------------
+# Detection / display overlays (ADR-042/048) — display & validation only, never
+# fed into embedding, clustering, or dynamics fitting.
+# -----------------------------------------------------------------------------
+detection:
+  mediacloud:
+    # Per-narrative press query = OR of this many top c-TF-IDF terms. The terms
+    # are the data-driven cluster keywords (no hand-picked query string, so the
+    # no-tuning rule holds); 6 balances topical specificity against an over-narrow
+    # query that returns near-zero press counts.
+    query_top_terms: 6
+
+# -----------------------------------------------------------------------------
 # Stage classification (ADR-019)
 # -----------------------------------------------------------------------------
 # Three stages keyed to R_0 direction. Classical SIR threshold R_0=1 from
