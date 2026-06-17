@@ -8,7 +8,7 @@ BERTopic, fits epidemiological growth models (SIR / logistic) to each
 narrative's life-cycle, and surfaces the analysis through a public web
 dashboard updated weekly.
 
-This is a **descriptive, educational, historical, and analytical measurement system**, not a prediction engine. The methodology is anchored throughout to field-accepted citations or published library defaults — no researcher-tuned parameters, no sensitivity sweeps.
+This is a **descriptive measurement and educational tool**, not a prediction engine. Every parameter is a published library default or a value cited from primary literature — no researcher-tuned parameters, no sensitivity sweeps.
 
 **For methodology, read [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) first** — plain-English walkthrough of every pipeline stage and the citation behind each choice. Then see [`MND_PROJECT_SPEC.md`](MND_PROJECT_SPEC.md) for scope and phase structure, and [`docs/architecture_decisions.md`](docs/architecture_decisions.md) for every architectural decision as a dated ADR.
 
@@ -67,7 +67,7 @@ Every parameter below is either a published library default or a citation from p
 
 | Choice | Value | Anchor |
 |---|---|---|
-| Embedding model | `Qwen/Qwen3-Embedding-0.6B` (1024-d, instruction-aware) | MTEB benchmark; Apache 2.0 |
+| Embedding model | `Qwen/Qwen3-Embedding-8B` (4096-d, instruction-aware) on RCC A100; `Qwen3-Embedding-0.6B` (1024-d) local-MPS fallback | MTEB benchmark; Apache 2.0 (ADR-036) |
 | Embedding context | 1024 tokens (RCC) / 512 tokens (local MPS) | Hardware constraint |
 | Document chunking | 512 Qwen3 tokens, ~64-token overlap | Thakur et al. 2021 *BEIR* (NeurIPS) |
 | Scope filter | None pre-clustering; post-cluster JEL scope classification (drop JEL ∉ {E,F,G,H} from dynamics only) | AEA JEL Classification System (ADR-020) |
@@ -83,7 +83,7 @@ Every parameter below is either a published library default or a citation from p
 | FDR threshold | 0.05 | Benjamini & Hochberg 1995 |
 | Random seed | 42 throughout | Convention |
 
-**Anchor recovery is reported as a rate, not gated by a pass/fail threshold.** Per ADR-019, no kill criteria with researcher-set thresholds.
+**Anchor recovery is reported as a rate, not gated by a pass/fail threshold.** Per ADR-040, no kill criteria with researcher-set thresholds, no train/test split, no formal pre-registration.
 
 ## Repository layout
 
@@ -96,18 +96,19 @@ src/mnd/               Python package
   ingestion/             InstitutionalIngestor composite + Fed + FRED
   processing/            Document chunker (Qwen3 SentencePiece, 512 tokens per ADR-019)
   filtering/             Date-range filter + MinHash dedup (no topic filter, ADR-020)
-  embedding/             Qwen3-Embedding-0.6B (sole embedder, ADR-019)
-  clustering/            BERTopic with library-default UMAP/HDBSCAN/c-TF-IDF (Grootendorst 2022)
-  dynamics/              SIR + logistic fitting; 7-day MA smoothing; calendar annotation
-  stages/                Four-stage life-cycle classification (R₀-keyed)
-  detection/             Media Cloud module (Layer 1B premium dynamics + Layer 2 broad detection)
+  embedding/             Qwen3-Embedding-8B on RCC A100, 0.6B local fallback (ADR-036)
+  clustering/            BERTopic with library-default UMAP/HDBSCAN/c-TF-IDF (Grootendorst 2022); JEL scope classifier
+  dynamics/              SIR + logistic + Bass + non-parametric shape facts; 7-day MA smoothing
+  stages/                Life-cycle classification keyed to R₀ direction
+  detection/             Media Cloud module (premium-press dynamics + broad detection)
   validation/            Anchor recovery (reporting only; no kill criteria)
-  dashboard/             Streamlit dashboard (Phase 5)
+  dashboard/             JSON-artifact builder feeding the Astro site (ADR-043 contract)
   utils/                 Config loader, logging
 scripts/
   run_pipeline.py        CLI dispatching every stage
   preflight_check.py     Pre-flight environment validator
   rcc/                   SLURM job scripts for UChicago Midway3
+web/                   Astro static site; reads the dashboard JSON artifacts at build time
 docs/                  Architecture decisions, methodology, project plan PDF
 tests/                 pytest suite
 ```
@@ -149,7 +150,7 @@ long pole starves the rest), then chains the downstream stages on `afterok` of
 every ingest job:
 
 ```
-[ingest source_1 … source_N] → filter-pre-embed → filter → embed → cluster
+[ingest source_1 … source_N] → filter-pre-embed → filter → embed → cluster → analyze
 ```
 
 `curl_cffi==0.15.0` must be installed in the RCC `mnd` conda env (`pip install -r requirements.txt`).

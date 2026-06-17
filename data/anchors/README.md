@@ -1,20 +1,20 @@
 # Anchor Narratives & Validation Sets
 
-This directory contains the **ground truth** against which the system's narrative
-detection is validated. These files are part of the project's pre-commitment —
-they should be **finalized before any predictive analysis** and not modified
-post-hoc to fit results.
+Locked ground truth for face-validity checking of narrative detection. Anchor
+recovery is **reported as a diagnostic, not gated**: there is no pass/fail
+threshold and no kill criteria (ADR-040). The sets are fixed before analysis and
+not modified post-hoc, so the no-tuning rule (ADR-040) holds — recovery is never
+optimized toward.
 
 ## Files
 
 ### `anchor_narratives.jsonl`
-The 10 anchor narratives from §10.1 of the project plan. Each is a documented
-historical narrative the system **must** recover within `tolerance_days` to be
-considered functioning. Below the kill-criterion threshold (7 of 10 recovered),
-the project pivots methodology or scope.
+The 10 anchor narratives (§10.1 of the project plan): documented historical
+narratives whose recovery within `tolerance_days` is measured and reported. The
+recovery rate is a face-validity readout, not a gate.
 
-**Status: LOCKED** — do not modify entries after Phase 1 pilot completes. Any
-changes require a documented architectural decision.
+**Status: LOCKED** — entries are not modified after the Phase 1 pilot. Changes
+require an ADR.
 
 Each entry contains:
 - `id`, `name`, `category` — identification
@@ -28,38 +28,29 @@ Each entry contains:
 - `references` — primary-source citations supporting the timing
 
 ### `fizzled_counterparts_seed.jsonl`
-Narratives that emerged but did **not** crystallize into significant sustained
-discourse. Used to validate that the system distinguishes survivors from non-survivors
-(see §8.5 — survivorship bias mitigation).
+Narratives that emerged but did not crystallize into sustained discourse. Used to
+check that the system distinguishes survivors from non-survivors (survivorship-bias
+mitigation, §8.5).
 
-**Status: DRAFT (seed entries marked `_seed_status: DRAFT`)** — these are
-plausible candidates from background research, but **must be confirmed by
-inspecting actual corpus volumes** during Phase 1 pilot before being locked.
-
-The reason for the DRAFT marking is methodological honesty: a fizzled narrative
-should be one the corpus shows as fizzled, not one we *think* fizzled. After
-Phase 1 ingestion, run the confirmation protocol below.
-
-### `topic_seed_articles.jsonl` *(to be created in Phase 1)*
-A small set (~30) of paradigmatically macro-financial articles used as positive
-examples for the embedding-similarity arm of the topic filter. Built in Phase 1
-from a hand-curated selection of WSJ/FT/Economist/FOMC pieces spanning categories.
+**Status: DRAFT (entries marked `_seed_status: DRAFT`)** — plausible candidates
+from background research that must be confirmed against actual corpus volumes
+before being locked. The DRAFT marking enforces that a fizzled narrative is one
+the corpus shows as fizzled, not one assumed to have fizzled.
 
 ## Confirmation Protocol for Fizzled Narratives
 
-After Phase 1 ingestion completes:
+After ingestion completes:
 
-1. For each `_seed_status: DRAFT` fizzled candidate, query the ingested corpus
-   for articles matching the `key_terms` within the `reference_window`.
-2. Verify that volume genuinely peaks and declines without sustaining (the
-   "fizzle" claim).
-3. Update `_seed_status` to `CONFIRMED` and remove the field, OR
-   replace the entry with a different fizzled candidate that the corpus supports.
-4. Commit the update before any predictive analysis runs.
+1. For each `_seed_status: DRAFT` candidate, query the corpus for articles
+   matching `key_terms` within the `reference_window`.
+2. Verify volume peaks and declines without sustaining (the "fizzle" claim).
+3. Set `_seed_status` to `CONFIRMED` and remove the field, OR replace the entry
+   with a different fizzled candidate the corpus supports.
+4. Commit before analysis runs.
 
-This protocol prevents post-hoc tuning of the fizzled set to support results.
+This prevents post-hoc tuning of the fizzled set toward results.
 
 ## Reproducibility
 
-All entries are JSONL (one JSON object per line) for easy diffing in version
-control. No mutation in place — corrections are full-line replacements.
+JSONL (one object per line) for line-diffable version control. Corrections are
+full-line replacements, never in-place mutation.

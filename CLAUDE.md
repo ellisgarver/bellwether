@@ -94,7 +94,7 @@ SOURCES="<src>" SKIP_DOWNSTREAM=1 SKIP_CLEANUP=1 bash scripts/rcc/submit_paralle
   outlier 25.4%, stability NMI=0.880±0.003, anchor recovery 6/10 on the pre-fix
   corpus). Re-validation deferred until after the re-ingest.
 - [ ] Phase 4 — full-corpus anchor + fizzled validation (reported, not gated; no prereg/split — ADR-040).
-- [ ] Phase 5 — Streamlit dashboard, Hugging Face Spaces deploy.
+- [ ] Phase 5 — Astro static site (ADR-043), public deploy.
 - [ ] Phase 6 — weekly re-ingest of the basis set + Media Cloud Premium live (ADR-016).
 - [ ] Phase 7 — technical report, reproducibility audit.
 
