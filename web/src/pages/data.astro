@@ -134,18 +134,18 @@ const stats: [string, string][] = [
       the source set is fixed. it is purposefully built as a basis set: the smallest group of
       sources that covers every independent dimension of U.S. macro discourse, with
       nothing redundant. these are the upstream sources, narratives from
-      policymakers, researchers and analysts. eight independent discourse dimensions plus a cross-cutting Q&A register, twelve active feeds, each with varying data types — hover a row for more information:
+      policymakers, researchers and analysts. eight independent discourse dimensions plus a cross-cutting Q&A register, twelve active feeds, each with varying data types — open a row for the underlying series:
     </p>
     <div class="feeds">
       {sources.map(([dim, src], i) => (
-        <div class="feed">
-          <div class="feed-head">
+        <details class="feed">
+          <summary class="feed-head">
             <span class="feed-n">{String(i + 1).padStart(2, "0")}</span>
             <span class="feed-dim">{dim}</span>
             <span class="feed-cue">+</span>
-          </div>
+          </summary>
           <div class="feed-detail"><p>{src}</p></div>
-        </div>
+        </details>
       ))}
     </div>
     <p>
@@ -275,28 +275,25 @@ const stats: [string, string][] = [
   }
   .stat .lbl { font-size: var(--fs-meta); color: var(--faint); letter-spacing: 0.03em; }
 
-  /* corpus feeds: a row table where each row reveals its sources on hover */
+  /* corpus feeds: a row table where each row discloses its sources on click/tap
+     (native <details> so it works with mouse, touch, and keyboard alike). */
   .feeds { margin: 1rem 0 1.4rem; }
   .feed { border-bottom: 1px solid var(--line-soft); transition: background 0.2s var(--ease); }
   .feed:hover { background: var(--paper-2); }
   .feed-head {
     display: grid; grid-template-columns: 2.4rem 1fr auto; align-items: center;
-    gap: 0.9rem; padding: 0.8rem 0.5rem; cursor: default;
+    gap: 0.9rem; padding: 0.8rem 0.5rem; cursor: pointer; list-style: none;
   }
+  .feed-head::-webkit-details-marker { display: none; }
   .feed-n { color: var(--faint); font-variant-numeric: tabular-nums; font-size: var(--fs-meta); }
   .feed-dim { font-weight: 600; color: var(--ink); }
   .feed-cue {
     color: var(--accent); font-weight: 600; font-size: var(--fs-lede); line-height: 1;
     transition: transform 0.3s var(--ease), color 0.2s var(--ease);
   }
-  .feed:hover .feed-cue { transform: rotate(45deg); color: var(--accent-bright); }
-  .feed-detail {
-    max-height: 0; overflow: hidden; opacity: 0;
-    transition: max-height 0.4s var(--ease), opacity 0.3s var(--ease);
-  }
-  .feed:hover .feed-detail { max-height: 12rem; opacity: 1; }
+  .feed[open] .feed-cue { transform: rotate(45deg); color: var(--accent-bright); }
   .feed-detail p {
-    margin: 0; padding: 0 0.5rem 0.9rem 3.8rem;
+    margin: 0; padding: 0.1rem 0.5rem 0.9rem 3.8rem;
     color: var(--muted); font-size: var(--fs-ui);
   }
 
@@ -318,6 +315,6 @@ const stats: [string, string][] = [
     .charts { grid-template-columns: 1fr; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .feed-detail { transition: none; }
+    .feed-cue { transition: none; }
   }
 </style>
