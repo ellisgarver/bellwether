@@ -60,8 +60,7 @@ const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
       presidential address; 2019 book): economic stories spread through a population
       the way contagious diseases do — a story is "caught" from exposure, carried for
       a while, and eventually dropped, and its prevalence over time traces the same
-      rise-and-fall shape as an outbreak. this project seeks
-     to quantify that analogy.
+      rise-and-fall shape as an outbreak. this project seeks to quantify that analogy.
     </p>
     <p>
       Shiller maps cleanly onto SIR compartments: people who have not yet
@@ -97,36 +96,43 @@ const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
 
   <section class="section reveal">
     <p class="eyebrow">further reading</p>
-    <h2>where this comes from, and where to go deeper</h2>
-    <p>
-      none of the machinery here is invented from scratch — it stands on a long
-      lineage. the idea that stories spread like contagions runs through Shiller's
-      narrative economics back to mid-century models of how ideas and rumors move
-      through a population. the lifecycle curves are the century-old models
-      epidemiologists still use. what this project adds is pointing that toolkit at
-      institutional macro writing and making the result something you can browse —
-      so if you want to go deeper, start with the work it builds on.
-    </p>
+    <h2>references &amp; related work</h2>
     <ul class="reading">
       <li>
-        <a href="https://doi.org/10.1257/aer.107.4.967" target="_blank" rel="noopener">Shiller, “Narrative Economics” (2017)</a>
-        — the AEA presidential address that frames the whole project.
+        Shiller, R. J. (2017). “Narrative Economics.” <em>American Economic Review</em>, 107(4), 967–1004.
+        <a href="https://doi.org/10.1257/aer.107.4.967" target="_blank" rel="noopener">doi.org/10.1257/aer.107.4.967</a>
       </li>
       <li>
-        Goffman &amp; Newill (1964) and Daley &amp; Kendall (1965), in <em>Nature</em>
-        — the original epidemic models of how ideas and rumors spread.
+        Shiller, R. J. (2019). <em>Narrative Economics: How Stories Go Viral and Drive Major Economic Events</em>. Princeton University Press.
       </li>
       <li>
-        Roos &amp; Reccius, “Narratives in economics” (2024, <em>Journal of Economic Surveys</em>)
-        — the clearest survey of where this young field actually stands.
+        Goffman, W., &amp; Newill, V. A. (1964). “Generalization of Epidemic Theory: An Application to the Transmission of Ideas.” <em>Nature</em>, 204, 225–228.
       </li>
       <li>
-        <a href={`${repo}/blob/main/docs/related_work.md`} target="_blank" rel="noopener">our related-work survey</a>
-        — the full literature map, honest about what is precedent and what is new.
+        Daley, D. J., &amp; Kendall, D. G. (1965). “Stochastic Rumours.” <em>Journal of the Institute of Mathematics and Its Applications</em>, 1(1), 42–55.
       </li>
       <li>
-        <a href={`${repo}/blob/main/docs/METHODOLOGY.md`} target="_blank" rel="noopener">our methodology</a>
-        — every parameter and the citation behind it, end to end.
+        Kermack, W. O., &amp; McKendrick, A. G. (1927). “A Contribution to the Mathematical Theory of Epidemics.” <em>Proceedings of the Royal Society A</em>, 115(772), 700–721.
+      </li>
+      <li>
+        Roos, M., &amp; Reccius, M. (2024). “Narratives in Economics.” <em>Journal of Economic Surveys</em>, 38(2), 303–341.
+      </li>
+      <li>
+        Bybee, L., Kelly, B., Manela, A., &amp; Xiu, D. (2024). “Business News and Business Cycles.” <em>Journal of Finance</em>, 79(5), 3105–3147.
+        <a href="https://doi.org/10.1111/jofi.13377" target="_blank" rel="noopener">doi.org/10.1111/jofi.13377</a>
+      </li>
+      <li>
+        Hansen, S., McMahon, M., &amp; Prat, A. (2018). “Transparency and Deliberation within the FOMC: A Computational Linguistics Approach.” <em>Quarterly Journal of Economics</em>, 133(2), 801–870.
+      </li>
+      <li>
+        Grootendorst, M. (2022). “BERTopic: Neural Topic Modeling with a Class-Based TF-IDF Procedure.”
+        <a href="https://arxiv.org/abs/2203.05794" target="_blank" rel="noopener">arXiv:2203.05794</a>
+      </li>
+      <li>
+        Project documentation —
+        <a href={`${repo}/blob/main/docs/METHODOLOGY.md`} target="_blank" rel="noopener">METHODOLOGY.md</a>
+        and
+        <a href={`${repo}/blob/main/docs/related_work.md`} target="_blank" rel="noopener">related_work.md</a>.
       </li>
     </ul>
   </section>
@@ -166,14 +172,14 @@ const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
     list-style: none;
     margin: 1.1rem 0 0;
     padding: 0;
-    max-width: 60ch;
   }
   .reading li {
-    padding: 0.55rem 0;
+    padding: 0.6rem 0 0.6rem 1.6rem;
+    text-indent: -1.6rem;
     border-top: 1px solid var(--line);
-    line-height: 1.5;
-    color: var(--muted);
+    line-height: 1.55;
+    color: var(--ink);
   }
   .reading li:first-child { border-top: none; }
-  .reading a { font-weight: 600; color: var(--ink); }
+  .reading a { color: var(--decay); word-break: break-word; }
 </style>
