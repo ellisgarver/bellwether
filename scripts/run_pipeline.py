@@ -502,11 +502,28 @@ def filter_cmd(
 )
 @click.option("--input", "input_path", default=None, help="Input parquet path")
 @click.option("--output", default=None, help="Output .npy path")
+@click.option(
+    "--full",
+    "full_rebuild",
+    is_flag=True,
+    default=False,
+    help=(
+        "Ignore any cached embeddings and re-encode every chunk. Use when the "
+        "embedder/model changed (ADR-050). Also triggered by MND_EMBED_FULL=1."
+    ),
+)
 @click.pass_context
 def embed(
-    ctx: click.Context, role: str, input_path: str | None, output: str | None
+    ctx: click.Context,
+    role: str,
+    input_path: str | None,
+    output: str | None,
+    full_rebuild: bool,
 ) -> None:
     """Encode articles to embeddings with the Qwen3 production embedder."""
+    import os
+
+    from mnd.embedding import cache as embed_cache
     from mnd.embedding.embedder import Embedder
 
     cfg = ctx.obj["cfg"]
@@ -536,22 +553,54 @@ def embed(
         chunk_df.to_parquet(chunks_path, index=False)
         log.info("Saved %d chunks → %s", len(chunk_df), chunks_path)
 
-    # Build the per-chunk text fed to the embedder. The chunker (chunk_corpus)
-    # has already enforced the 512-Qwen3-token chunk window (ADR-019), so we
-    # just concatenate title + body here -- the embedder's max_seq_len + the
-    # model tokenizer handle any final truncation.
-    texts: list[str] = []
-    for row in chunk_df.to_dict("records"):
-        title = str(row.get("title") or "").strip()
-        body = str(row.get("body") or "").strip()
-        if title and body:
-            texts.append(f"{title}. {body}")
-        else:
-            texts.append(title or body)
-    log.info("Embedding %d chunks with %s model → %s", len(texts), role, npy_path)
+    # Incremental embedding cache (ADR-050): reuse vectors for chunks whose
+    # (chunk_id, embedded-text) is unchanged so a weekly delta re-embeds only the
+    # new/changed chunks. A full rebuild (archive/NUKE wipes data/processed, or
+    # --full / MND_EMBED_FULL=1) starts from no cache and re-encodes everything.
+    # The chunker has already enforced the 512-Qwen3-token window (ADR-019); the
+    # embedder's max_seq_len + tokenizer handle any final truncation.
+    index_path = embed_cache.index_path_for(npy_path)
+    full = full_rebuild or os.environ.get("MND_EMBED_FULL") == "1"
+
+    cached_index = None
+    cached_matrix = None
+    if not full and npy_path.exists() and index_path.exists():
+        cached_index = pd.read_parquet(index_path)
+        cached_matrix = np.load(str(npy_path))
+        if len(cached_index) != cached_matrix.shape[0]:
+            log.warning(
+                "Embedding cache index (%d rows) and matrix (%d rows) disagree — "
+                "ignoring cache and re-embedding in full.",
+                len(cached_index),
+                cached_matrix.shape[0],
+            )
+            cached_index = cached_matrix = None
+
+    plan = embed_cache.plan_incremental(chunk_df, cached_index)
+    mode = "full rebuild" if cached_index is None else "incremental"
+    log.info(
+        "Embedding %d chunks (%s) with %s model → %s — reuse %d cached, encode %d new",
+        len(chunk_df),
+        mode,
+        role,
+        npy_path,
+        plan.n_reuse,
+        plan.n_encode,
+    )
 
     embedder = Embedder.from_config(role)  # type: ignore[arg-type]
-    embeddings = embedder.encode(texts)
+    if plan.n_encode:
+        fresh = embedder.encode([plan.texts[i] for i in plan.encode_positions])
+    else:
+        fresh = np.empty((0, cached_matrix.shape[1]), dtype=np.float32)
+
+    if plan.n_encode and cached_matrix is not None and fresh.shape[1] != cached_matrix.shape[1]:
+        raise RuntimeError(
+            f"Embedder output dim {fresh.shape[1]} != cached dim {cached_matrix.shape[1]}. "
+            "The embedder/model changed — re-run `embed --full` to invalidate the cache."
+        )
+
+    embeddings = embed_cache.assemble_matrix(plan, cached_matrix, fresh)
 
     if embeddings.shape[0] != len(chunk_df):
         raise RuntimeError(
@@ -561,7 +610,39 @@ def embed(
 
     npy_path.parent.mkdir(parents=True, exist_ok=True)
     np.save(str(npy_path), embeddings)
-    log.info("Saved embeddings %s → %s", embeddings.shape, npy_path)
+    embed_cache.index_frame(plan).to_parquet(index_path, index=False)
+    log.info("Saved embeddings %s → %s (+ index → %s)", embeddings.shape, npy_path, index_path)
+
+
+@cli.command(name="embed-index")
+@click.pass_context
+def embed_index(ctx: click.Context) -> None:
+    """Backfill the embedding index sidecar for an existing embeddings.npy (ADR-050).
+
+    No re-embedding: derives [chunk_id, text_sha1] from the current
+    chunks.parquet, row-aligned to the existing matrix, so a later incremental
+    `embed` can reuse those vectors. Run once after a full run whose embeddings
+    predate the cache, before any delta re-ingest.
+    """
+    from mnd.embedding import cache as embed_cache
+
+    cfg = ctx.obj["cfg"]
+    root = project_root()
+    chunks_path = root / cfg["paths"]["processed_chunks"]
+    npy_path = root / cfg["paths"]["processed_embeddings"]
+    index_path = embed_cache.index_path_for(npy_path)
+
+    chunk_df = pd.read_parquet(chunks_path)
+    emb = np.load(str(npy_path), mmap_mode="r")
+    if emb.shape[0] != len(chunk_df):
+        raise RuntimeError(
+            f"Embedding matrix has {emb.shape[0]} rows but chunks parquet has {len(chunk_df)} rows. "
+            "Cannot backfill an aligned index — re-run `embed` to regenerate the matrix first."
+        )
+
+    plan = embed_cache.plan_incremental(chunk_df, cached_index=None)
+    embed_cache.index_frame(plan).to_parquet(index_path, index=False)
+    log.info("Wrote embedding index (%d rows) → %s", len(chunk_df), index_path)
 
 
 # ---------------------------------------------------------------------------

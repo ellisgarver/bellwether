@@ -66,6 +66,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 047 | **Markets overlay + Granger for every narrative; VIX canonical (lag tied to it), extra series display-only; `wave_count`→"peaks (≥ ½ max)"** | Live (amends 041; relates 039/043/045) |
 | 048 | **Broad-press lead-lag — bidirectional Granger between institutional discourse and Media Cloud press, beside the markets readout** | Live (amends 042; relates 041/047) |
 | 049 | **Dashboard artifact contract align-up: producers emit `r0_median` + R₀ interval + threshold in `stage_detail`; `shape_facts` keys renamed to the front-end's; undefined R₀ peak/min row dropped** | Live (relates 039/043/047) |
+| 050 | **Incremental embedding cache — `(chunk_id, text_sha1)` sidecar lets `embed` reuse vectors and re-encode only new/changed chunks; full rebuild still re-embeds all** | Live (relates 036/016/030) |
 
 ---
 
@@ -3654,6 +3655,82 @@ for. These are features we want to keep, so we align up.
 - Safe to deploy mid-run: the change is producer-additive and only the `analyze`
   stage emits these fields, so an RCC `git pull` while jobs are queued lets the
   downstream analyze step write the enriched artifacts.
+
+---
+
+## ADR-050: Incremental embedding cache (embed only new/changed chunks)
+
+- **Status**: Accepted
+- **Date**: 2026-06-18
+- **Relates to**: ADR-036 (the 8B embedder whose ~7h full pass this avoids
+  re-running), ADR-016 (the Phase-6 weekly re-ingest cadence this serves),
+  ADR-030 (fail-loud — the alignment guard is preserved, not relaxed)
+
+### Context
+
+`embed` is batch full-recompute: it reads all of `chunks.parquet`, encodes every
+row, and saves `embeddings.npy` as a positional matrix row-aligned to that
+parquet, behind a hard downstream guard (`cluster`/`analyze` refuse to run if
+`npy.rows != chunks.rows`). Any mutation of `chunks.parquet` therefore forces a
+re-embed of the **entire** corpus — ~429k chunks, ~7h on an A100 — even when only
+a handful of chunks are new. That is acceptable for a one-shot full build but not
+for the Phase-6 weekly re-ingest (ADR-016), and it makes backfilling an ingest
+discrepancy (a late coverage fix) disproportionately expensive.
+
+Incremental embedding is well-posed because chunk identity is stable and
+content-addressable upstream: `chunk_id = article_id + _cNNN` and
+`article_id = sha256(source_id|url)`. The only blocker was that `embeddings.npy`
+is stored positionally, with no key to merge against.
+
+A subtlety rules out keying on `chunk_id` alone: `chunk_id` derives from the URL,
+not the body, so a corrected / more-complete re-capture of an existing URL keeps
+its `chunk_id` while its text changes. Reusing a vector on a `chunk_id` match
+alone would silently serve a stale embedding.
+
+### Decision
+
+Persist a sidecar index next to the matrix and reuse vectors keyed on
+`(chunk_id, text_sha1)`:
+
+- `embeddings.npy` — `(N, D)` float32, **unchanged** positional contract.
+- `embeddings_index.parquet` — `[chunk_id, text_sha1]`, row-aligned to the matrix.
+  `text_sha1` hashes the exact title/body string fed to the embedder (one
+  definition, `mnd.embedding.cache.build_chunk_text`).
+
+`embed` now loads the cache iff present, reuses the cached vector for every row
+whose `(chunk_id, text_sha1)` matches, encodes only the remainder, reassembles the
+matrix **in current `chunks.parquet` order**, and rewrites both files. The
+positional row-count guard is retained verbatim.
+
+Cache presence — not a new flag — selects the mode, and it falls out of the
+existing run topology:
+- A full rebuild archives/NUKEs `data/processed` (`submit_parallel_ingest.sh`),
+  removing matrix + sidecar → no cache → full re-embed.
+- A delta run (`SKIP_CLEANUP=1`, the weekly cadence) preserves them → incremental.
+
+Escape hatches: `embed --full` / `MND_EMBED_FULL=1` force a full re-encode (use
+when the embedder/model changes); a dim mismatch between fresh and cached vectors
+raises rather than concatenating; an index/matrix row-count disagreement discards
+the cache and re-embeds in full. `embed-index` backfills the sidecar for an
+existing matrix with no re-embedding — run once for embeddings that predate this
+ADR, before the first delta re-ingest.
+
+### Consequences
+
+- Weekly re-ingest embeds only genuinely new/changed chunks (minutes on the delta)
+  instead of the whole corpus (~7h). Clustering still re-runs globally by design —
+  topic structure shifts as documents are added — so "futureproof" means
+  *incremental embed + full re-cluster*, not incremental clustering.
+- Correctness holds by construction: identical `(chunk_id, text)` ⇒ identical
+  embedder input ⇒ identical vector from a deterministic model; any text change
+  re-embeds. Re-captures/corrections are handled, not masked.
+- `cluster`/`analyze` are untouched — they read `embeddings.npy` positionally and
+  never open the sidecar — so this is safe to deploy mid-run; the in-flight
+  recovery (cluster→analyze on the banked matrix) is unaffected.
+- The current banked matrix has no sidecar; `embed-index` seeds it from the live
+  `chunks.parquet` so the first Phase-6 delta can reuse all ~429k vectors.
+- New pure module `src/mnd/embedding/cache.py` (unit-tested without ML deps);
+  `embed` gains `--full`; new `embed-index` command.
 
 ---
 
