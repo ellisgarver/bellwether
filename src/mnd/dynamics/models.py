@@ -132,14 +132,14 @@ def shape_facts(t: np.ndarray, y: np.ndarray) -> dict[str, float]:
     """Descriptive statistics straight off the (smoothed) volume curve.
 
     No fitting, no assumptions -- the honest baseline a reader can always trust:
-      total_volume              -- area under the curve (sum of y)
-      peak_height               -- maximum volume
-      time_to_peak              -- t at the global maximum
-      duration_above_half_peak  -- points with y >= peak/2 (full-width-half-max
-                                   convention, standard signal-processing measure)
-      wave_count                -- distinct re-emergence humps: local maxima
-                                   reaching at least half the global peak (same
-                                   half-maximum convention -- no extra threshold)
+      total_volume       -- area under the curve (sum of y)
+      peak_volume        -- maximum volume
+      time_to_peak_days  -- t at the global maximum
+      active_days        -- points with y >= peak/2 (full-width-half-max
+                            convention, standard signal-processing measure)
+      wave_count         -- distinct re-emergence humps: local maxima reaching
+                            at least half the global peak (same half-maximum
+                            convention -- no extra threshold)
 
     Half-maximum is the only convention used, so there is no researcher-tuned
     parameter here (ADR-019 principle 1).
@@ -149,15 +149,15 @@ def shape_facts(t: np.ndarray, y: np.ndarray) -> dict[str, float]:
     if y.size == 0 or float(np.max(y)) <= 0.0:
         return {
             "total_volume": float(y.sum()) if y.size else 0.0,
-            "peak_height": 0.0,
-            "time_to_peak": 0.0,
-            "duration_above_half_peak": 0,
+            "peak_volume": 0.0,
+            "time_to_peak_days": 0.0,
+            "active_days": 0,
             "wave_count": 0,
         }
 
     peak_idx = int(np.argmax(y))
-    peak_height = float(y[peak_idx])
-    half = peak_height / 2.0
+    peak_volume = float(y[peak_idx])
+    half = peak_volume / 2.0
 
     peaks, _ = find_peaks(y, height=half)
     # find_peaks ignores boundary maxima; a single rising/falling hump that peaks
@@ -166,9 +166,9 @@ def shape_facts(t: np.ndarray, y: np.ndarray) -> dict[str, float]:
 
     return {
         "total_volume": float(y.sum()),
-        "peak_height": peak_height,
-        "time_to_peak": float(t[peak_idx]),
-        "duration_above_half_peak": int(np.sum(y >= half)),
+        "peak_volume": peak_volume,
+        "time_to_peak_days": float(t[peak_idx]),
+        "active_days": int(np.sum(y >= half)),
         "wave_count": wave_count,
     }
 

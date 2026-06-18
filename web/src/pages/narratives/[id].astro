@@ -109,8 +109,7 @@ const direction = (d: any) =>
         <table class="facts">
           <tr><td>staging lens</td><td>{n.staging_model}</td></tr>
           <tr><td>R₀ (mean / median)</td><td>{fmt(sd.r0_mean)} / {fmt(sd.r0_median)}</td></tr>
-          <tr><td>R₀ (peak / min)</td><td>{fmt(sd.r0_peak)} / {fmt(sd.r0_min)}</td></tr>
-          <tr><td>R₀ 95% interval</td><td>{sd.r0_ci_low != null ? `${fmt(sd.r0_ci_low)} – ${fmt(sd.r0_ci_high)}` : "—"}</td></tr>
+          <tr><td>R₀ 94% interval</td><td>{sd.r0_ci_low != null ? `${fmt(sd.r0_ci_low)} – ${fmt(sd.r0_ci_high)}` : "—"}</td></tr>
           <tr><td>{n.stage} threshold</td><td>{stageThreshold}</td></tr>
         </table>
       </div>
