@@ -63,5 +63,5 @@ cluster:  ## Run clustering on embeddings
 validate:  ## Run anchor-narrative recovery validation
 	$(PYTHON) scripts/run_pipeline.py validate
 
-dashboard:  ## Launch the Streamlit dashboard locally
-	streamlit run src/mnd/dashboard/app.py
+dashboard:  ## Run the Astro dashboard dev server (web/)
+	cd web && npm run dev
