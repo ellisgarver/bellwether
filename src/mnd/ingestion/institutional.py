@@ -1,21 +1,20 @@
 """Institutional, academic, and policy-analytical ingestors.
 
-Covers the eight-dimension basis-set semantic corpus defined in ADR-020
-(2026-05-20) — one ingestor per dimension of US macro discourse, no
-redundant sources, no pre-clustering topic keyword filter. See
-config/whitelist.yaml.
+Covers the eight-dimension basis-set semantic corpus: one ingestor per
+dimension of US macro discourse, with no redundant sources and no
+pre-clustering topic keyword filter. See config/whitelist.yaml.
 
-  Basis dimension → ingestor mapping (ADR-020)
+  Basis dimension → ingestor mapping
 
     1. US monetary authority           FederalReserveIngestor (fed.py)
     2. US monetary research voice      FedRegionalIngestor (NY, SF, Chicago, Atlanta)
-    3. International macro authority   IMFIngestor (curl_cffi + Coveo, ADR-014)
-    4. International CB network        BISIngestor (multi-section, ADR-017)
-    5. US fiscal authority             CBOIngestor (Wayback bounded-ID enumeration, ADR-023)
-                                       CEAIngestor (govinfo ERP, ADR-020)
+    3. International macro authority   IMFIngestor (curl_cffi + Coveo)
+    4. International CB network        BISIngestor (multi-section)
+    5. US fiscal authority             CBOIngestor (Wayback bounded-ID enumeration)
+                                       CEAIngestor (govinfo ERP)
     6. US financial stability          TreasuryOFRIngestor
     7. US policy think-tank            BrookingsIngestor + PIIEIngestor
-    8. Academic primary work           NBERIngestor (direct URL enum, ADR-020)
+    8. Academic primary work           NBERIngestor (direct URL enumeration)
        Academic-policy column          VoxEUIngestor
 
   Cross-cutting:
@@ -24,39 +23,13 @@ config/whitelist.yaml.
 
   InstitutionalIngestor   Composite: runs every basis-set ingestor and merges output.
 
-Pre-clustering topic relevance filtering was removed in ADR-020. The basis-set
-source selection is the only macro-content scope constraint at ingest time;
-JEL classification is applied post-clustering by mnd.clustering.jel_classifier
-to label clusters with their primary JEL code, and non-macro clusters
-(primary JEL ∉ {E, F, G, H}) are excluded from dynamics analysis only — not
-dropped from the embedded corpus.
+There is no pre-clustering topic relevance filter; the basis-set source
+selection is the only macro-content scope constraint at ingest time. JEL
+classification is applied post-clustering by mnd.clustering.jel_classifier to
+label each cluster with its primary JEL code; clusters outside {E, F, G, H}
+are flagged with that code rather than dropped.
 
-Removed (ADR-020):
-  CFRIngestor — basis-set redundancy with PIIE on the international-policy
-                dimension (~80% of CFR output is foreign-policy non-macro,
-                and the macro subset overlaps PIIE). Class deleted in the
-                second repo cleanse.
-
-Restored (ADR-020):
-  NBERIngestor — academic primary-work dimension. Direct URL enumeration
-                 of /papers/wNNNNN (no search-API bot wall; citation_*
-                 meta tags give clean structured metadata). The original
-                 search-API-based ingestor (deleted in ADR-019) is
-                 superseded — that path is irrelevant.
-
-Added (ADR-020):
-  CEAIngestor — Council of Economic Advisers. govinfo.gov ERP collection
-                (Economic Report of the President, 61 packages back to 1947;
-                granule-level chapter access with PDF text extraction).
-
-Removed (ADR-012 / MND_PROJECT_SPEC rev3):
-  JacksonHoleIngestor — covered by FederalReserveIngestor.
-  ArxivIngestor       — 2017-only coverage; removed (code in git history).
-
-Removed (ADR-010):
-  AP News, Reuters, MarketWatch journalism tier — removed (code in git history).
-
-All timestamps follow the ADR-008 rule: publication/release date only.
+All timestamps are publication/release dates only.
 FOMC minutes = release date.
 """
 from __future__ import annotations
@@ -100,16 +73,12 @@ class _WaybackBanned(RuntimeError):
 
     Defensive: raised only when _wayback_get exhausts its patient cooldown budget
     on IA's own 429 (no x-archive-orig-* headers). The CBO fetch loop catches it
-    to PAUSE cleanly — bank the checkpoint, exit 0 — so a later run resumes rather
+    to pause cleanly — bank the checkpoint, exit 0 — so a later run resumes rather
     than crashing and re-paying from zero.
 
-    History correction (2026-06-13): the 2026-06-09 observation that "the walk
-    dies at the same pid after ~172 fetches whether spaced 0.3s or 12s" was
-    originally read as a cumulative request-count ban — but dying at the SAME pid
-    regardless of pacing is the signature of a frozen archived-429 block page at
-    that pid (pub/41672), now skipped via the x-archive-orig-* path, not a rate
-    ban. A rate probe over the replay endpoint saw ZERO live 429s at any pace;
-    its real throttle is TCP connection refusal under burst, handled by
+    A frozen archived-429 block page at a given pid (e.g. pub/41672) is skipped
+    via the x-archive-orig-* path rather than treated as a rate ban: the replay
+    endpoint's real throttle is TCP connection refusal under burst, handled by
     _wayback_get's network-error retry. This exception remains as correct
     defense should IA ever issue a genuine sustained live 429.
     """
@@ -141,7 +110,7 @@ def _cffi_get_retry(do_get, url: str):
     """Retry a curl_cffi-style GET on transient failures and return the response.
 
     The impersonating getters (``_imf_get``/``_atlanta_get``/``_cepr_get``/
-    ``_piie_get``) deliberately do NOT call ``raise_for_status`` — callers
+    ``_piie_get``) deliberately do not call ``raise_for_status`` — callers
     classify the status themselves. That means a 5xx arrives as a normal
     response, not an exception, so ``_get``'s tenacity decorator can't see it.
     This wrapper gives those getters the same transient-failure cushion ``_get``
@@ -198,8 +167,8 @@ def _extract_body(url: str, *, min_words: int = 50) -> str | None:
 
     Returns None for a genuine absence (HTTP 4xx) or a real-but-too-short page.
     A transient/systemic fetch failure (HTTP 5xx surviving ``_get``'s retries, a
-    connection error, or a timeout) RAISES instead of returning None, so it
-    can't masquerade as an empty article and silently under-capture (finding #2).
+    connection error, or a timeout) raises instead of returning None, so it
+    can't masquerade as an empty article and silently under-capture.
     """
     try:
         resp = _get(url, timeout=30.0)
@@ -303,7 +272,7 @@ def _parse_date_flexible(text: str) -> date | None:
 # This is the date to trust. ``article:published_time`` on the same pages is
 # the 2016-03-02 Drupal-migration timestamp, which trafilatura reads and which
 # collapsed the entire pre-2016 back-catalog into 2016 (ADR-029). The sidebar
-# "related publications" use ``teaser__date`` <time> elements — explicitly NOT
+# "related publications" use ``teaser__date`` <time> elements — explicitly not
 # matched here so we never pick up a neighbouring paper's date.
 _PIIE_PUB_DATE_RE = re.compile(
     r'class="hero-banner-publication__date"[^>]*>\s*<time[^>]*\bdatetime="([^"]+)"',
@@ -360,7 +329,7 @@ def _piie_blog_date_from_html(html: str) -> date | None:
 # CBO runs Drupal with the metatag module, which emits the true publication
 # date in structured Dublin Core <meta> tags (dcterms.created / .issued /
 # .date). trafilatura *does* read these, but its date picker is order-sensitive
-# (verified, trafilatura 1.12.2): when the Open Graph block — which carries
+# (trafilatura 1.12.2): when the Open Graph block — which carries
 # ``article:published_time`` — appears earlier in <head> than the dcterms
 # block (the normal Drupal layout), trafilatura returns the OG value. On CBO
 # that OG timestamp is the 2011-12 site-migration stamp, which collapsed the
@@ -379,7 +348,7 @@ _CBO_DATE_META_KEYS = (
     "dc.date.issued",
     "dc.date",
 )
-# Match a <meta> tag carrying one of the keys above in EITHER attribute order
+# Match a <meta> tag carrying one of the keys above in either attribute order
 # (name=…/content=… or content=…/name=…), tolerating single/double quotes.
 _CBO_META_DATE_RE = re.compile(
     r"<meta\b[^>]*?"
@@ -394,9 +363,9 @@ _CBO_META_DATE_RE = re.compile(
 # captures; the publication date now renders as an OpenGraph-style
 # `book:release_date` meta ("Thu, 06/20/2024 - 12:00", US MM/DD/YYYY) plus a
 # corroborating `<time datetime="2024-06-20T12:00:00Z">`. Because the walk
-# fetches the LATEST real capture, every in-window pid now hits the redesign
+# fetches the latest real capture, every in-window pid now hits the redesign
 # markup — so these are the primary date sources, with dcterms.* kept as the
-# fallback for the pre-redesign earliest-ts captures (verified 2026-06-13).
+# fallback for the pre-redesign earliest-ts captures.
 _CBO_RELEASE_META_RE = re.compile(
     r"<meta\b[^>]*?(?:name|property)\s*=\s*['\"]book:release_date['\"][^>]*?"
     r"content\s*=\s*['\"](?P<v>[^'\"]+)['\"]"
@@ -555,7 +524,7 @@ def _extract_from_html(
 
     ``date_extractor`` (optional ``Callable[[str], date | None]``) is a
     source-specific date reader run against the raw HTML. When provided it
-    is AUTHORITATIVE: its result REPLACES trafilatura's metadata date even
+    is authoritative: its result replaces trafilatura's metadata date even
     when it returns ``None``. This exists because some CMSes stamp a
     site-migration date into ``article:published_time`` (which trafilatura
     trusts) while the true publication date lives in a structured element —
@@ -610,7 +579,7 @@ def _fetch_page_full(
     4xx (page gone/forbidden) — returns the empty tuple so the caller skips the
     candidate, indistinguishable from a legitimate <min_words drop. But a
     *transient/systemic* failure — HTTP 5xx surviving the getter's retries, or a
-    connection/timeout error — RAISES, so it can never masquerade as an empty
+    connection/timeout error — raises, so it can never masquerade as an empty
     article and silently under-capture (the failure mode the project forbids).
     The retry-decorated ``_get`` already absorbs blips; reaching here means the
     failure persisted, which is the right signal to fail the source loudly.
@@ -624,7 +593,7 @@ def _fetch_page_full(
             log.debug("Fetch %s → HTTP %s; genuine absence, skipping", url, status)
             return "", "", None, None
         raise
-    # Getters behind bot-protection (curl_cffi impersonators) do NOT call
+    # Getters behind bot-protection (curl_cffi impersonators) do not call
     # raise_for_status — they return the response at any status. Classify it
     # here so a 5xx error page can't be parsed into a short body and dropped
     # as if it were an empty article.
@@ -653,13 +622,13 @@ def _wp_rest_fetch(
 
     Pagination is fail-loud. A transient 5xx/429/network error on a page is
     retried with backoff; if it still fails after several attempts the function
-    RAISES rather than returning the partial set. The prior behavior — break on
-    any exception — let a single transient failure on page 7 of a 500-page
-    source silently truncate the tail while the checkpoint still marked the
-    sub-ingestor 'completed' (a silent under-capture hole). A genuine
-    end-of-list (WordPress returns HTTP 400/404 when paging past the last page)
-    ends pagination cleanly. The caller's per-sub-ingestor try/except marks the
-    source failed-for-retry on a raise; re-yielded pages are caught by dedup.
+    raises rather than returning the partial set, since a partial return would
+    let a single transient failure on page 7 of a 500-page source silently
+    truncate the tail while the checkpoint still marked the sub-ingestor
+    'completed'. A genuine end-of-list (WordPress returns HTTP 400/404 when
+    paging past the last page) ends pagination cleanly. The caller's
+    per-sub-ingestor try/except marks the source failed-for-retry on a raise;
+    re-yielded pages are caught by dedup.
     """
     page = 1
     while True:
@@ -743,7 +712,7 @@ def _wp_post_to_article(
 
     ``expected_host`` is the WP source's own canonical host (e.g.
     ``www.brookings.edu``). When set, any record whose ``link`` resolves to a
-    host outside that source's own domain family is DROPPED before fetching
+    host outside that source's own domain family is dropped before fetching
     (ADR-031 source-identity rule: a syndicated op-ed or a press/media-mention
     is third-party content, not this source's own output). Body-fetch failures
     on the source's own host then always raise (ADR-030: a real outage must
@@ -763,14 +732,14 @@ def _wp_post_to_article(
         return None
 
     # Source-identity rule (ADR-031): each basis-set source contributes only
-    # its OWN published content. A WP entry whose canonical link lives off the
+    # its own published content. A WP entry whose canonical link lives off the
     # source's own domain is a syndicated op-ed or a press/media-mention (a
     # scholar's piece republished in the Washington Post, a TV-appearance
     # video, a news-wire write-up) — third-party content that would re-import
     # the journalism dimension removed in ADR-010 and break the independence of
-    # the basis-set's source dimensions. Drop it. This is a PROVENANCE filter on
-    # source identity, NOT a topical filter, so it stays consistent with
-    # ADR-020's no-pre-cluster-topic-gate. Checked BEFORE any body fetch, so an
+    # the basis-set's source dimensions. Drop it. This is a provenance filter on
+    # source identity, not a topical filter, so it stays consistent with
+    # ADR-020's no-pre-cluster-topic-gate. Checked before any body fetch, so an
     # off-domain (often reachable, or paywalled-and-slow) link is never fetched:
     # this also prevents silently keeping the full body of a reachable
     # third-party page, and removes the cross-domain fetch-timeout drag.
@@ -841,7 +810,7 @@ class IMFIngestor(Ingestor):
     Listing source is the public Coveo Search endpoint that powers imf.org's
     own client search bar: ``imfproduction561s308u.org.coveo.com/rest/search/v2``
     with the public Bearer token (harvested from the Next.js chunk
-    ``/_next/static/chunks/1166-*.js`` on 2026-05-17). For each series we
+    ``/_next/static/chunks/1166-*.js``). For each series we
     filter by URL prefix + date range and paginate up to Coveo's 1000-result
     cap; over-cap windows recursively bisect the date range.
 
@@ -863,20 +832,18 @@ class IMFIngestor(Ingestor):
     Network: every imf.org and imfproduction561s308u.org.coveo.com fetch
     goes through ``curl_cffi.requests`` with ``impersonate='chrome131'``.
     Akamai Bot Manager fronts imf.org and 403s stdlib ``requests`` on TLS
-    fingerprint regardless of IP or User-Agent (ADR-014, 2026-05-17).
+    fingerprint regardless of IP or User-Agent (ADR-014).
     curl_cffi==0.15.0 is required (see requirements.txt).
     """
 
     source_id = "imf"
 
-    # imf.org sits behind Akamai (NOT Cloudflare — server: AkamaiGHost).
+    # imf.org sits behind Akamai (not Cloudflare — server: AkamaiGHost).
     # Akamai Bot Manager 403s requests that present only the basic browser UA
     # without the modern client-hint fingerprint (Sec-Fetch-*, Sec-Ch-Ua-*,
     # Upgrade-Insecure-Requests). Sending the full Chrome navigation header
-    # set passes the bot filter from residential, mobile, and university IPs
-    # (verified 2026-05-17, T-Mobile cellular AS21928). The previous
-    # diagnosis of "Cloudflare WAF IP block" in ADR-013 was a misread —
-    # this is a header-fingerprint check at Akamai's edge.
+    # set passes the bot filter from residential, mobile, and university IPs.
+    # This is a header-fingerprint check at Akamai's edge, not a WAF IP block.
     _IMF_HEADERS: dict = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -909,8 +876,8 @@ class IMFIngestor(Ingestor):
         TLS handshake fingerprint (JA3/JA4) doesn't match a real browser, even
         when the HTTP headers do. `curl_cffi` wraps curl-impersonate, which
         replicates Chrome's cipher order, TLS extensions, and HTTP/2 settings
-        verbatim. Verified 2026-05-17 (mobile + university IPs both succeed
-        with impersonation; both 403 without it).
+        verbatim (mobile + university IPs both succeed with impersonation;
+        both 403 without it).
 
         Falls back to stdlib `requests` if `curl_cffi` is not installed, which
         will reliably 403 — this is intentional so the failure surfaces loudly
@@ -930,7 +897,7 @@ class IMFIngestor(Ingestor):
             return _cffi_get_retry(lambda: requests.get(url, **kwargs), url)
 
     # ------------------------------------------------------------------
-    # Coveo Search API — listing path (ADR-014, 2026-05-17)
+    # Coveo Search API — listing path (ADR-014)
     # ------------------------------------------------------------------
 
     # Endpoint, org, and public Bearer token harvested from the imf.org
@@ -1107,9 +1074,8 @@ class IMFIngestor(Ingestor):
                 )
 
         # Fail-loud retry: a transient 429/5xx/network error is retried with
-        # backoff; a non-retryable HTTP status or exhausted retries RAISES so the
-        # caller cannot silently truncate a series (the prior code returned the
-        # bad response and the caller did `return`/`break`, dropping the tail).
+        # backoff; a non-retryable HTTP status or exhausted retries raises so the
+        # caller cannot silently truncate a series by returning a bad response.
         backoff = 2.0
         last_err: str | None = None
         for _attempt in range(5):
@@ -1212,7 +1178,7 @@ class IMFIngestor(Ingestor):
                 log.debug("IMF _next/data %s: %s", ssg_url, exc)
 
         # Authoritative body fetch. _imf_get has already absorbed transient
-        # 5xx/429/network via _cffi_get_retry, so classify the FINAL status:
+        # 5xx/429/network via _cffi_get_retry, so classify the final status:
         # 4xx → genuine absence (drop this record); 5xx → systemic, raise so
         # the source fails loud rather than silently shipping a body-less hole.
         resp = self._imf_get(full_url, headers=headers, timeout=30.0)
@@ -1247,10 +1213,10 @@ class IMFIngestor(Ingestor):
         return None
 
     # ------------------------------------------------------------------
-    # Legacy F&D article-level walker (ADR-014 addendum, 2026-06-05)
+    # Legacy F&D article-level walker (ADR-014 addendum)
     # ------------------------------------------------------------------
     #
-    # Coveo indexes pre-2018 Finance & Development ONLY as whole-issue PDFs
+    # Coveo indexes pre-2018 Finance & Development only as whole-issue PDFs
     # (en/spa/fre language variants of one /external/pubs/ft/fandd/*.pdf per
     # issue), so the @uri="/en/publications/fandd/issues/" prefix query in
     # _COVEO_SERIES misses every legacy F&D *article*. That produced a 16x
@@ -1259,7 +1225,7 @@ class IMFIngestor(Ingestor):
     # below, so we walk it directly. Article-level granularity is preserved
     # (recovering issue-level PDFs would create a volume discontinuity at the
     # 2017/2018 seam — itself a defect). Bodies must go through _imf_get:
-    # plain stdlib requests 403s at Akamai (verified 2026-06-05).
+    # plain stdlib requests 403s at Akamai.
 
     # Legacy issues live at /external/pubs/ft/fandd/{year}/{mm}/index.htm with
     # relative same-directory article slugs (e.g. blackden.htm). 2018+ F&D is
@@ -1418,7 +1384,7 @@ class BISIngestor(Ingestor):
     ) -> Iterator[Article]:
         sitemap_url = self._SITEMAP_TMPL.format(year=year)
         # Fail-loud per-year fetch: retry transient 5xx/429/network errors with
-        # backoff, then RAISE rather than silently dropping the whole year (the
+        # backoff, then raise rather than silently dropping the whole year (the
         # prior behavior returned on any exception, so one transient failure
         # lost a full year of BIS). A definitive 404 means BIS publishes no
         # sitemap for that year — a legitimate skip, logged at WARNING so a
@@ -1740,7 +1706,7 @@ class FedRegionalIngestor(Ingestor):
     # Liberty Street Economics (above) only covers the NY Fed blog, which
     # begins 2011 and excludes the bank's flagship working-paper series.
     # Staff Reports are captured here via RePEc/IDEAS, which enumerates the
-    # complete series and — verified live 2026-06-03 — exposes clean
+    # complete series and exposes clean
     # citation_* meta tags on each item page, identical in shape to the
     # NBER ingestor (citation_publication_date is YYYY/MM/DD for ~sr659+
     # and YYYY-only before that). The series listing pages give the
@@ -1932,7 +1898,7 @@ class FedRegionalIngestor(Ingestor):
     # SF Fed's single `sffed_publications` WP type is a catch-all: it serves
     # SF's own series (Economic Letter, Working Papers, FedViews, the Twelfth-
     # District Beige Book, Community Development) AND "system research" cross-
-    # posts of OTHER institutions' work (other regional Feds + the Board). The
+    # posts of other institutions' work (other regional Feds + the Board). The
     # cross-posts are dropped — ingesting them under fed_sf would duplicate
     # other basis-set dimensions (their canonical link is on frbsf.org, so URL
     # dedup never catches the duplicate) and break the 1:1 ingestor↔dimension
@@ -1950,7 +1916,7 @@ class FedRegionalIngestor(Ingestor):
         "community-development-research-briefs":
             ("frbsf_community_development", "fed_regional_research"),
     }
-    # Path segments that are NOT SF's own research (cross-posts) → skip.
+    # Path segments that are not SF's own research (cross-posts) → skip.
     _FRBSF_EXCLUDED_PREFIXES = ("system-research-", "board-of-governors")
     _FRBSF_SEGMENT_RE = re.compile(r"/publications/([^/]+)/")
 
@@ -2016,11 +1982,9 @@ class FedRegionalIngestor(Ingestor):
         (r"/publications/public-policy-papers/(\d{4})/[^/]+$", "public_policy_paper"),
         (r"/publications/profitwise-news-and-views/(\d{4})/[^/]+$", "profitwise"),
         # Chicago Fed Insights research blog lives at
-        # /publications/chicago-fed-insights/YYYY/slug (verified against the
-        # live sitemap 2026-06-11). The prior two patterns pointed at
-        # /publications/insights/ and /publications/blogs/chicago-fed-insights/,
-        # neither of which exists — they matched zero URLs, so all ~98 Insights
-        # posts were silently missed.
+        # /publications/chicago-fed-insights/YYYY/slug (per the live sitemap);
+        # the neighbouring /publications/insights/ and
+        # /publications/blogs/chicago-fed-insights/ paths do not exist.
         (r"/publications/chicago-fed-insights/(\d{4})/[^/]+$", "insights"),
         # Regional Fed president speeches — `speech` is an established corpus
         # document type (cf. Fed Board, fed.py), so capturing Chicago's is a
@@ -2113,7 +2077,7 @@ class FedRegionalIngestor(Ingestor):
             if not body or len(body.split()) < 50:
                 continue
 
-            # Date extraction strategy for Chicago Fed (verified 2026-05-21):
+            # Date extraction strategy for Chicago Fed:
             #   1. Prefer trafilatura's meta_date if it agrees with URL year.
             #      Working papers typically populate this correctly.
             #   2. Else read the structured citation block (Chicago Fed Letter
@@ -2122,7 +2086,7 @@ class FedRegionalIngestor(Ingestor):
             #   3. Else fall back to a body-text "MONTH YYYY" or "QN YYYY"
             #      regex constrained to the URL-derived year.
             #   4. Else drop — no fabricated dates.
-            # The citation block is Chicago's OWN structured publication date
+            # The citation block is Chicago's own structured publication date
             # (month granularity) and is authoritative for the MONTH; trafilatura's
             # meta_date is the order-dependent OG `article:published_time`, which
             # the 2026 site redesign overwrote on the survey templates with a
@@ -2130,9 +2094,7 @@ class FedRegionalIngestor(Ingestor):
             # precise date). So: anchor on the citation block, but keep meta_date's
             # day-precision only when meta corroborates the citation month/year.
             # When they disagree (the stamp: Jan vs. the real April) the citation
-            # block wins. The prior meta-first order silently collapsed every
-            # in-window 2026 survey onto Jan 1 (the only year where stamp-year ==
-            # URL-year). meta_date survives as a fallback for pages with no
+            # block wins. meta_date survives as a fallback for pages with no
             # citation block.
             cite_date = _chicago_fed_date_from_html(page_html, year)
             pub_date: date | None = None
@@ -2182,7 +2144,7 @@ class FedRegionalIngestor(Ingestor):
     ) -> Iterator[Article]:
         """Atlanta Fed publications via per-series JSON listing API.
 
-        URL surface (verified 2026-05-20). The 2026 site redesign retired
+        URL surface. The 2026 site redesign retired
         the old discovery surface entirely:
           - ``/sitemap.xml`` → 302 to 404 page (gone)
           - ``/blogs/macroblog/rss`` → HTML 404 (gone)
@@ -2246,7 +2208,7 @@ class FedRegionalIngestor(Ingestor):
                     "StartDateRange": api_start,
                     "EndDateRange": api_end,
                 }
-                # A request/HTTP/parse failure mid-pagination is NOT
+                # A request/HTTP/parse failure mid-pagination is not
                 # end-of-pagination — `break`-ing here truncated the section and
                 # the all-series total-zero guard below never noticed. Fail loud.
                 # Genuine end-of-pagination is an empty body, zero items, or a
@@ -2355,9 +2317,9 @@ class FedRegionalIngestor(Ingestor):
                 continue
             seen.add(url)
             # No try/except here: _fetch_page_full returns empty for a genuine
-            # 404 (caught by the <50-word drop below) but RAISES on a transient/
-            # systemic fetch failure (finding #2). Re-swallowing that raise would
-            # silently drop the page — exactly the masquerade we are removing.
+            # 404 (caught by the <50-word drop below) but raises on a transient/
+            # systemic fetch failure. Re-swallowing that raise would let a
+            # systemic failure silently drop pages instead of failing loud.
             body, fetched_title, author, meta_date = _fetch_page_full(
                 url,
                 min_words=50,
@@ -2414,7 +2376,7 @@ class FedRegionalIngestor(Ingestor):
     ):
         """GET a web.archive.org URL (CDX index or ``id_`` snapshot) for the
         ADR-033 recovery. Tuple timeout; escalating backoff on 5xx / network
-        reset; patient ``Retry-After`` cooldown on 429; fail-loud (RAISES) on
+        reset; patient ``Retry-After`` cooldown on 429; fail-loud (raises) on
         true exhaustion so a sustained outage can't masquerade as an empty page
         (ADR-030). A genuine 4xx is returned for the caller to treat as absence.
         ~340 fetches on a clean IP — no checkpoint/ban apparatus needed."""
@@ -2468,13 +2430,13 @@ class FedRegionalIngestor(Ingestor):
     ) -> dict[str, tuple[str, date, str]]:
         """Enumerate archived post URLs across ``prefixes`` whose host-stripped
         path matches ``post_re``. Returns {path: (earliest_real_timestamp,
-        url_date, original_url)}. We keep the EARLIEST snapshot, not the latest:
+        url_date, original_url)}. We keep the earliest snapshot, not the latest:
         this content was *deleted* in the 2026 redesign, so a late snapshot
         captures the post-deletion 404/redirect stub — the earliest capture is
         when the page was live and complete. The exact ``original_url`` (with its
         :port/.aspx variant) is retained so the snapshot fetch hits the URL that
         was actually archived. (The 29991231 far-future redirect stub is skipped
-        outright.) Fail-loud: a CDX HTTP error RAISES rather than yielding a
+        outright.) Fail-loud: a CDX HTTP error raises rather than yielding a
         partial set (ADR-030)."""
         out: dict[str, tuple[str, date, str]] = {}
         for prefix in prefixes:
@@ -2598,84 +2560,78 @@ class CBOIngestor(Ingestor):
     """Congressional Budget Office publications — via Wayback Machine.
 
     Why Wayback (and not cbo.gov direct):
-      cbo.gov is fronted by DataDome bot protection. The history of attempts:
-        - ADR-013/014-era curl_cffi chrome131 impersonation — defeated 2026-05-18
-          when DataDome tightened its TLS/header signal (403 from the homepage).
-        - ADR-017 Playwright + curl_cffi-with-cookies hybrid — defeated
-          2026-05-20: DataDome now detects the headless-Chromium runtime
-          fingerprint and serves the JS challenge interstitial without ever
-          resolving it (title='cbo.gov', body_len=0 after 20s+). The
-          "clearance" cookie Playwright captures is a challenge-stub cookie,
-          not real clearance, and DataDome rotates its value on every
-          response. curl_cffi requests carrying these cookies all 403.
+      cbo.gov is fronted by DataDome bot protection, which defeats the
+      approaches that work for other hosts:
+        - curl_cffi chrome131 impersonation (ADR-013/014) is caught by
+          DataDome's TLS/header signal (403 from the homepage).
+        - A Playwright + curl_cffi-with-cookies hybrid (ADR-017) is caught
+          too: DataDome detects the headless-Chromium runtime fingerprint and
+          serves the JS challenge interstitial without ever resolving it
+          (title='cbo.gov', body_len=0 after 20s+). The "clearance" cookie
+          Playwright captures is a challenge-stub cookie, not real clearance,
+          and DataDome rotates its value on every response. curl_cffi requests
+          carrying these cookies all 403.
       govinfo.gov was considered (ADR-020) and rejected: GPO deposit coverage
       is uneven over time (41 records 2010 → 6 records 2024), introducing
       a non-random time-varying filter that defeats the basis-set framing.
 
     Wayback Machine has no DataDome and serves clean snapshot HTML for
     cbo.gov/publication/* URLs going back to 2010, preserving the basis-set
-    "cbo.gov content" choice — we just retrieve it via the archive instead
-    of direct.
+    "cbo.gov content" choice via the archive.
 
-    Enumeration strategy (ADR-032, 2026-06-10) — authoritative sitemap, NOT
-    an id-range guess:
+    Enumeration strategy (ADR-032):
       The publication universe is read from ``cbo.gov/sitemap.xml`` — the
-      site's own complete index (~25k publication ids). The prior design
-      (ADR-023) guessed the id range from an id↔date anchor table and walked
-      a bounded ``/publication/{id}`` span floored at id 40000. That silently
-      under-captured: CBO node ids are NOT chronological (pid 22000→2011 sits
-      far below pid 41138→2009), so the floor dropped scattered 2010+
-      publications. The sitemap has no floor and makes any residual gap
-      measurable instead of silent.
+      site's own complete index (~25k publication ids). CBO node ids are not
+      chronological (pid 22000→2011 sits far below pid 41138→2009), so an
+      id-range floor drops scattered 2010+ publications; the sitemap has no
+      floor and makes any residual gap measurable.
 
-      Wayback snapshot timestamps (needed to build the replay URL) still come
-      from one CDX query per 100-id block (``matchType=prefix``) over the id
-      range the sitemap spans; we aggregate min/max ts per id and KEEP only
-      ids the sitemap declares real publications. Sitemap ids with NO archived
-      snapshot are logged as a MEASURABLE IA gap (cbo.gov live is
-      DataDome-blocked, so they are unrecoverable) — never a silent drop. We
-      do NOT ``collapse=urlkey``; the earliest ts feeds a crawl-date pre-filter
-      and the latest *real* ts (never the ``29991231`` far-future redirect) is
-      the capture we fetch. The authoritative page-date filter (step 3) — not
-      the id — decides 2010+ membership.
+      Wayback snapshot timestamps (needed to build the replay URL) come from
+      one CDX query per 100-id block (``matchType=prefix``) over the id range
+      the sitemap spans; min/max ts are aggregated per id, keeping only ids the
+      sitemap declares real publications. Sitemap ids with no archived snapshot
+      are logged as a measurable IA gap (cbo.gov live is DataDome-blocked, so
+      they are unrecoverable). ``collapse=urlkey`` is not used; the earliest ts
+      feeds a crawl-date pre-filter and the latest real ts (never the
+      ``29991231`` far-future redirect) is the capture fetched. The
+      authoritative page-date filter (step 3), not the id, decides 2010+
+      membership.
 
     Per-record pipeline:
-      1. Snapshot fetch: ``web.archive.org/web/{max_ts}id_/{url}`` — the
-         LATEST real capture (``id_`` modifier returns the raw archived body,
-         no Wayback toolbar rewrite). The latest real capture avoids the
-         degraded pre-2013 early-migration stubs the earliest snapshot holds,
-         and we use a concrete captured timestamp — never the ``29991231``
-         far-future redirect, which non-deterministically resolves to a
-         Wayback interstitial dated "today". Falls back to the earliest
-         capture only if the latest is unusable. Extraction via
-         ``_fetch_page_full`` (trafilatura + BS4).
+      1. Snapshot fetch: ``web.archive.org/web/{max_ts}id_/{url}`` — the latest
+         real capture (``id_`` modifier returns the raw archived body, no
+         Wayback toolbar rewrite). The latest real capture avoids the degraded
+         pre-2013 early-migration stubs the earliest snapshot holds, and uses a
+         concrete captured timestamp rather than the ``29991231`` far-future
+         redirect, which non-deterministically resolves to a Wayback
+         interstitial dated "today". Falls back to the earliest capture only if
+         the latest is unusable. Extraction via ``_fetch_page_full``
+         (trafilatura + BS4).
       2. Authoritative date: read explicitly from the page's Drupal Dublin
          Core meta tags by ``_cbo_publication_date_from_html`` (the
-         ``date_extractor``), NOT trafilatura's generic picker — trafilatura
-         is order-sensitive and would return the earlier-in-<head> Open Graph
-         ``article:published_time``, which on CBO is the 2011-12 migration
-         stamp (see that function). The Wayback snapshot timestamp is a CRAWL
-         date and is NEVER used as the publication date — only as the
-         pre-fetch filter / fetch target.
+         ``date_extractor``) rather than trafilatura's generic picker, which is
+         order-sensitive and returns the earlier-in-<head> Open Graph
+         ``article:published_time`` — on CBO the 2011-12 migration stamp (see
+         that function). The Wayback snapshot timestamp is a crawl date and is
+         used only as the pre-fetch filter / fetch target, never as the
+         publication date.
       3. Strict keep gate: page_date present AND in ``[start, end]`` AND
          body ≥ 50 words AND title is not the "Wayback Machine" interstitial.
          Records failing any are dropped (no fabricated dates, no teaser-only
          bodies).
 
     Politeness / robustness:
-      - BOTH IA-facing phases are paced at ``_REQUEST_SPACING_S`` (the measured
-        sustained-safe replay rate): the CDX enumeration sweep AND the per-pid
+      - Both IA-facing phases are paced at ``_REQUEST_SPACING_S`` (the measured
+        sustained-safe replay rate): the CDX enumeration sweep and the per-pid
         snapshot fetches. The enumeration sweep is paced because it alone is
-        enough traffic to trip IA's count-in-window ban; an unpaced sweep
-        established the ban before the first fetch and killed the walk at pid 1
-        (ADR-023, 2026-06-09 correction).
+        enough traffic to trip IA's count-in-window ban (ADR-023).
       - The CDX map is cached to disk (window-keyed) so a resume skips the
-        sweep entirely — neither re-hammering IA nor re-paying the enumeration.
-      - Exponential backoff retry on Wayback 429 / 502 / 503 / 504 — never
+        sweep entirely.
+      - Exponential backoff retry on Wayback 429 / 502 / 503 / 504, never
         403 (Wayback does not bot-block CDX).
 
     The canonical ``url`` field on each emitted Article is the cbo.gov
-    publication URL, NOT the Wayback wrapper, so downstream dedupe / cluster
+    publication URL, not the Wayback wrapper, so downstream dedupe / cluster
     reporting matches the cbo.gov source-set framing.
     """
 
@@ -2692,12 +2648,12 @@ class CBOIngestor(Ingestor):
         "academic research; via web.archive.org)"
     )
 
-    # CBO's own sitemap is the AUTHORITATIVE publication universe (ADR-032).
+    # CBO's own sitemap is the authoritative publication universe (ADR-032).
     # It returns HTTP 200 even though cbo.gov *publication pages* are
     # DataDome-blocked (403, even via curl_cffi chrome impersonation) — the
-    # sitemap path sits outside the bot wall (verified 2026-06-10). We no
+    # sitemap path sits outside the bot wall. We no
     # longer guess the id range from an id↔date anchor table: CBO node ids
-    # are NOT chronological (probed 2026-06-10: pid 21000→1981, 22000→2011,
+    # are not chronological (pid 21000→1981, 22000→2011,
     # 41138→2009, 41479→2011), so NO id floor can separate 2010+ from older
     # — any floor silently drops scattered 2010+ publications, the exact
     # under-capture failure the basis-set framing forbids. We enumerate the
@@ -2705,19 +2661,17 @@ class CBOIngestor(Ingestor):
     _SITEMAP_INDEX = "https://www.cbo.gov/sitemap.xml"
 
     # Seconds to sleep between per-publication Wayback fetches. The load-bearing
-    # knob, re-measured 2026-06-13 after the prior 12s figure proved to rest on
-    # a misdiagnosis: IA does NOT 429-rate-ban this replay endpoint. A paced
-    # probe (escalating 3s→1.5s→0.75s→0.3s over real snapshots) saw ZERO 429s at
+    # knob: IA does not 429-rate-ban this replay endpoint. A paced
+    # probe (escalating 3s→1.5s→0.75s→0.3s over real snapshots) saw zero 429s at
     # any rate; the throttle is TCP-level — IA's single edge IP starts
-    # REFUSING/RESETTING connections under burst (and stays in a refuse-all
+    # refusing/resetting connections under burst (and stays in a refuse-all
     # "recovery" state once crossed). Measured boundary: 3s clean (12/12), 1.5s
-    # stressed (4/12 connection resets), ≤0.75s a total wall. The old 12s was
-    # calibrated against three 0.3s runs that all died at the SAME pid (41672) —
-    # the signature of a frozen archived-429 block page (now skipped via the
-    # x-archive-orig-* path in _wayback_get), not a rate ban.
+    # stressed (4/12 connection resets), ≤0.75s a total wall. A frozen
+    # archived-429 block page at a given pid (e.g. 41672) is skipped via the
+    # x-archive-orig-* path in _wayback_get, not treated as a rate ban.
     #
     # Set to 3s: the fastest empirically-clean tier, ~2x margin above the 1.5s
-    # stress onset. ~4x faster than 12s → the full ~25k-pid walk lands ~26h, a
+    # stress onset. The full ~25k-pid walk lands ~26h, a
     # single 36h job. _wayback_get's retry/backoff absorbs the occasional reset;
     # a sustained-stress spill is covered by the ADR-023 checkpoint resume.
     _REQUEST_SPACING_S = 3.0
@@ -2736,7 +2690,7 @@ class CBOIngestor(Ingestor):
         # QOS cap, so CBO must be able to resume across sequential SLURM jobs
         # without re-fetching. The checkpoint is a flat one-pid-per-line file
         # (ext "txt" via run_pipeline's _make_ingestor); each pid is appended
-        # only AFTER its article has been yielded and flushed by the caller
+        # only after its article has been yielded and flushed by the caller
         # (ADR-023 resume addendum). When no path is given (the composite
         # InstitutionalIngestor path) the walk is uncheckpointed as before.
         #
@@ -2804,13 +2758,13 @@ class CBOIngestor(Ingestor):
             if self._shard_count > 1 and (pid % self._shard_count) != self._shard_index:
                 continue
             snap_date = self._ts_to_date(earliest_ts)
-            # Cheap lower-bound pre-filter ONLY. A snapshot can never predate
+            # Cheap lower-bound pre-filter only. A snapshot can never predate
             # publication, so an earliest capture before the window start
-            # proves the publication is pre-window — skip it. We must NOT
+            # proves the publication is pre-window — skip it. We must not
             # impose an upper bound on the snapshot date: CBO's /publication/
             # {id} URLs only came into existence with the 2012 site migration,
             # so the earliest archived capture of a 2010-dated publication is
-            # ~2012 (verified: the entire 415xx–428xx band first appears
+            # ~2012 (the entire 415xx–428xx band first appears
             # 2012-04+). Crawl date lags publication arbitrarily for migrated
             # content; the authoritative window gate is the post-fetch
             # page_date below. Not marked done: it costs no fetch, so
@@ -2820,8 +2774,8 @@ class CBOIngestor(Ingestor):
             # A sustained IA replay ban (cumulative request cap on the egress
             # IP) raises _WaybackBanned. Riding it out within this run is futile
             # — every subsequent pid would 429 too, and re-hammering escalates
-            # the ban. So we PAUSE cleanly: log where we stopped and RETURN from
-            # the generator. The current pid is NOT marked done (no _mark_done
+            # the ban. So we pause cleanly: log where we stopped and return from
+            # the generator. The current pid is not marked done (no _mark_done
             # below the raise), so a later run from a fresh egress IP or after a
             # ~12-24h cooldown resumes from exactly here off the checkpoint,
             # banking all prior progress. A 5xx/network outage still raises and
@@ -2864,21 +2818,20 @@ class CBOIngestor(Ingestor):
     ) -> "dict[int, tuple[str, str]]":
         """The ``{pid: (earliest_ts, latest_ts)}`` map driving the fetch walk.
 
-        Built by ONE paced sweep of the bounded CDX id-block space, then cached
+        Built by one paced sweep of the bounded CDX id-block space, then cached
         to disk (window-keyed, beside the checkpoint). This is load-bearing for
         resumability, not a mere speed-up:
 
           - The 218-block CDX sweep is itself enough Wayback traffic to trip
-            Internet Archive's count-in-window replay ban. The prior design
-            interleaved the (unpaced, 0.5s) sweep with the snapshot fetches, so
-            the sweep established the ban *before* the first snapshot fetch —
-            which then died on HTTP 429 at the very first pid (pub/41672),
-            never advancing the checkpoint. Every re-fire repeated the full
-            unpaced sweep, re-escalating the ban: four jobs, zero progress
-            (2026-06-09).
+            Internet Archive's count-in-window replay ban. Interleaving an
+            unpaced sweep with the snapshot fetches would establish the ban
+            *before* the first snapshot fetch — which would then die on HTTP
+            429 at the very first pid (pub/41672), never advancing the
+            checkpoint, and every re-fire would repeat the full unpaced sweep
+            and re-escalate the ban.
           - So the sweep is now paced at the same ``_REQUEST_SPACING_S`` as the
             fetches (count-based ban → stay below the rolling-window threshold),
-            and its result is cached. A resume LOADS the cache and skips the
+            and its result is cached. A resume loads the cache and skips the
             sweep entirely, so re-fires neither re-hammer IA with 218 blocks nor
             re-pay the ~44min enumeration — they start fetching immediately from
             the checkpoint.
@@ -2895,7 +2848,7 @@ class CBOIngestor(Ingestor):
                 len(cached), self._cdx_cache_path(),
             )
             return cached
-        # Sharded runs MUST share a pre-built cache (ADR-038). If N shards each
+        # Sharded runs must share a pre-built cache (ADR-038). If N shards each
         # ran the enumeration sweep they would (a) collide on the same egress IP
         # and re-establish the replay ban the pacing exists to avoid, and (b)
         # waste N × ~44min re-enumerating the identical pid universe. The cache
@@ -2928,7 +2881,7 @@ class CBOIngestor(Ingestor):
             if i < len(prefixes) - 1:
                 time.sleep(self._REQUEST_SPACING_S + random.uniform(0, 1.0))
         # Sitemap publications that IA never archived are unrecoverable via
-        # Wayback (cbo.gov live is DataDome-blocked). Log as a MEASURABLE gap —
+        # Wayback (cbo.gov live is DataDome-blocked). Log as a measurable gap —
         # the basis-set rule is that under-capture must be visible, not silent.
         missing = sitemap_pids - cdx_map.keys()
         if missing:
@@ -2978,7 +2931,7 @@ class CBOIngestor(Ingestor):
     def _cbo_get(cls, url: str, **kwargs) -> str:
         """GET cbo.gov via curl_cffi chrome impersonation; return response text.
 
-        Used ONLY for the sitemap — publication pages are DataDome-blocked and
+        Used only for the sitemap — publication pages are DataDome-blocked and
         come from Wayback instead. The sitemap path serves 200, but a
         datacenter egress IP is best served looking like a real browser, so we
         impersonate Chrome (same rationale as ``_piie_get``). Raises on any
@@ -3014,7 +2967,7 @@ class CBOIngestor(Ingestor):
         None when uncheckpointed (then there is no cache).
 
         The ``_shard{k}of{N}`` token (if present on a sharded checkpoint name)
-        is stripped so ALL shards resolve to the SAME cache file: the CDX map is
+        is stripped so all shards resolve to the same cache file: the CDX map is
         the full pid universe, identical for every shard, so it is built once
         and shared read-only (ADR-038). This is also why a sharded run requires
         the cache to already exist — see ``_build_or_load_cdx_map``.
@@ -3069,7 +3022,7 @@ class CBOIngestor(Ingestor):
         fail loud rather than silently truncate the series.
         """
         original_url = f"https://www.cbo.gov/publication/{pid}"
-        # Fetch the LATEST *real* capture (max ts from the block query),
+        # Fetch the latest *real* capture (max ts from the block query),
         # not the earliest. For pre-~2013 content the earliest capture
         # is a degraded early-migration stub: a truncated body, a junk
         # "CBO" title, and a less-accurate date (e.g. pub/41813
@@ -3077,7 +3030,7 @@ class CBOIngestor(Ingestor):
         # real-title/2010-01-14). The page's own metadata carries the
         # true publication date regardless of snapshot age, so a later
         # real capture is strictly higher-fidelity. We use a concrete
-        # captured timestamp — NEVER the `29991231` far-future redirect,
+        # captured timestamp — never the `29991231` far-future redirect,
         # which resolves non-deterministically to a Wayback interstitial
         # page titled "Wayback Machine" and dated "today", corrupting
         # both the body and the extracted date (and silently dropping or
@@ -3123,7 +3076,7 @@ class CBOIngestor(Ingestor):
             return None
         return _make_article(
             source_id=self.source_id,
-            # Canonical cbo.gov URL — NOT the Wayback wrapper. Keeps
+            # Canonical cbo.gov URL — not the Wayback wrapper. Keeps
             # the source-set framing on cbo.gov even though retrieval
             # went through the archive.
             url=original_url,
@@ -3157,7 +3110,7 @@ class CBOIngestor(Ingestor):
         prefix 594 → 594, 5940-5949, 59400-59499, 594000+); we keep only the
         5-digit ids and let the caller range-clamp.
 
-        We do NOT ``collapse=urlkey`` (which would keep only the earliest
+        We do not ``collapse=urlkey`` (which would keep only the earliest
         snapshot per URL). Instead we fetch every snapshot row and aggregate
         ``min`` (earliest) and ``max`` (latest) timestamp per id — CDX sorts
         ascending by timestamp within a urlkey, so the earliest feeds the
@@ -3253,7 +3206,7 @@ class CBOIngestor(Ingestor):
     ):
         """HTTP GET for Wayback snapshot URLs, with the CDX path's retry cushion.
 
-        Tuple timeout per c47fb91: a scalar float only bounds the inter-byte
+        Tuple timeout: a scalar float only bounds the inter-byte
         read gap; a Wayback edge node dripping bytes never trips a 30s single
         value.
 
@@ -3262,20 +3215,20 @@ class CBOIngestor(Ingestor):
         - **5xx / raw network error** = a transient blip on IA's single edge IP
           (``getent`` returns one A record, no pool, no IPv6 — it resets/refuses
           under burst and during recovery). Retried over ``max_attempts`` with
-          escalating backoff; a sustained outage RAISES so it can never
+          escalating backoff; a sustained outage raises so it can never
           masquerade as an empty page and silently under-capture (ADR-030
           soundness rule — the fail-loud body classification in
           ``_fetch_page_full`` is only sound if one blip can't trip it).
 
-        - **429** = a (rare) live IA replay throttle. Note (2026-06-13 probe):
-          this replay endpoint does NOT in practice 429 at any pace — its real
+        - **429** = a (rare) live IA replay throttle. Note: this replay
+          endpoint does not in practice 429 at any pace — its real
           throttle is TCP connection refusal under burst (the 5xx/network branch
           above), and the ``_REQUEST_SPACING_S`` pace is set below that refusal
           onset. This branch is kept as correct defense should IA ever issue a
-          genuine live 429: we ride it out PATIENTLY rather than give up — honor
+          genuine live 429: we ride it out patiently rather than give up — honor
           ``Retry-After`` (IA names its own cooldown) over up to ``ban_cooldowns``
-          multi-minute waits and CONTINUE the same request once the window
-          clears. Patient cooldowns are what IA asks for and do NOT escalate the
+          multi-minute waits and continue the same request once the window
+          clears. Patient cooldowns are what IA asks for and do not escalate the
           throttle. Only after the full patience budget is exhausted — a genuine
           sustained live ban needing a human
           (fresh IP / long cooldown) — do we raise ``_WaybackBanned``, which the
@@ -3305,13 +3258,13 @@ class CBOIngestor(Ingestor):
             if resp.status_code == 429:
                 # A *replayed archived* 429 — the origin (e.g. CBO's DataDome
                 # wall) returned 429 to IA's crawler and IA stored it — carries
-                # ``x-archive-orig-*`` headers and is FROZEN: every replay of
+                # ``x-archive-orig-*`` headers and is frozen: every replay of
                 # this capture returns 429 regardless of how long we wait, so
                 # the cooldown budget below would stall the whole walk on one
-                # dead snapshot (the 2026-06-11 CBO incident: a stale cache
-                # pointed pid 41672 at a captured block page). Hand it back as
+                # dead snapshot (e.g. a stale cache pointing pid 41672 at a
+                # captured block page). Hand it back as
                 # the caller's 4xx "genuine absence" so it falls through to the
-                # earliest-ts fallback, then skips. Only a LIVE IA throttle
+                # earliest-ts fallback, then skips. Only a live IA throttle
                 # (IA's own 429, no archived-origin headers) gets the patient
                 # cooldown budget.
                 if any(k.lower().startswith("x-archive-orig-") for k in resp.headers):
@@ -3393,8 +3346,7 @@ class TreasuryOFRIngestor(Ingestor):
     _OFR_BRIEFS = "https://www.financialresearch.gov/briefs/"
     # FSOC annual reports: the current index page publishes the most-recent
     # report directly; prior years live on per-year landing pages linked from
-    # the archive page. (The /studies-and-reports parent page used previously
-    # links neither, which is why FSOC ingested 0 records.)
+    # the archive page.
     _FSOC_ANNUAL_INDEX = "https://home.treasury.gov/policy-issues/financial-markets-financial-institutions-and-fiscal-service/fsoc/studies-and-reports/annual-reports"
     _FSOC_ARCHIVE = "https://home.treasury.gov/policy-issues/financial-markets-financial-institutions-and-fiscal-service/financial-stability-oversight-council/council-work/studies-and-reports/annual-reports/fsoc-annual-reports-archive"
     _FSOC_LANDING_RE = re.compile(r"fsoc-(\d{4})-annual-report")
@@ -3451,7 +3403,7 @@ class TreasuryOFRIngestor(Ingestor):
             )
             time.sleep(1.0)
 
-    # Section/supplement PDFs that share a report year but are NOT the main
+    # Section/supplement PDFs that share a report year but are not the main
     # report (chart decks, slide decks, executive summaries, glossaries, the
     # 2011 report's per-chapter split, etc.). Matched against the separator-
     # stripped lowercased filename stem.
@@ -3618,7 +3570,7 @@ class TreasuryOFRIngestor(Ingestor):
         Raises ImportError if pypdf is unavailable. FSOC publishes ~16
         born-digital text PDFs (one annual report per year); a fetch failure
         (after _get's retries) or a parse failure on one of them is systemic,
-        not a transient miss, so we RAISE rather than return "" — silently
+        not a transient miss, so we raise rather than return "" — silently
         dropping a whole year's report is exactly the under-capture failure
         mode the basis set forbids.
         """
@@ -3650,9 +3602,9 @@ class TreasuryOFRIngestor(Ingestor):
 class VoxEUIngestor(Ingestor):
     """VoxEU / CEPR columns: date-filtered archive search, sharded by year.
 
-    Access pattern (verified 2026-05-20)
-    ----------------------------------
-    Host: ``cepr.org`` is fronted by **Cloudflare**. As of 2026-05-20 every
+    Access pattern
+    --------------
+    Host: ``cepr.org`` is fronted by **Cloudflare**. Every
     request from non-browser TLS clients (stdlib ``requests`` / ``urllib3``,
     plain ``curl``) receives ``HTTP 403`` with ``cf-mitigated: challenge`` —
     the JS-challenge variant of Cloudflare's bot mitigation. Header tweaks
@@ -3660,7 +3612,7 @@ class VoxEUIngestor(Ingestor):
     of OpenSSL is the rejection signal, same root cause as ADR-014 (IMF /
     Akamai). The challenge does not require JS execution if the TLS+HTTP/2
     fingerprint matches a real Chrome — i.e. unlike CBO/DataDome (ADR-017)
-    we do NOT need Playwright; ``curl_cffi`` with ``impersonate='chrome131'``
+    we do not need Playwright; ``curl_cffi`` with ``impersonate='chrome131'``
     is sufficient.
 
     Listing path
@@ -3696,10 +3648,8 @@ class VoxEUIngestor(Ingestor):
     History
     ~~~~~~~
     - Originally stdlib ``requests`` worked because CEPR was un-protected.
-    - 2024 site redesign moved CEPR onto Cloudflare; the protection
-      tightened around 2026-05-19/20 to consistently challenge non-browser
-      TLS fingerprints. Integration suite caught it the next day with
-      VoxEU returning zero records across all year shards.
+    - The 2024 site redesign moved CEPR onto Cloudflare; the protection has
+      since tightened to consistently challenge non-browser TLS fingerprints.
     """
 
     source_id = "voxeu"
@@ -3908,7 +3858,7 @@ class BrookingsIngestor(Ingestor):
     in non-macro JEL codes (I, J, K, L, R, …) are reported but excluded
     from dynamics analysis only. The section label
     ``brookings_economic_studies`` is a pre-ADR-020 cosmetic identifier
-    retained for downstream code that grouped by section; it does NOT
+    retained for downstream code that grouped by section; it does not
     indicate a pre-clustering filter to that program.
     """
 
@@ -3953,8 +3903,8 @@ class BrookingsIngestor(Ingestor):
 class PIIEIngestor(Ingestor):
     """Peterson Institute for International Economics: sitemap-based discovery.
 
-    Access pattern (verified 2026-05-24)
-    ----------------------------------
+    Access pattern
+    --------------
     Host: ``piie.com`` is fronted by **Cloudflare** with the same JS-challenge
     posture as VoxEU/CEPR (ADR-021) and IMF/Akamai (ADR-014). ``curl_cffi``
     with ``impersonate='chrome131'`` clears the challenge; stdlib ``requests``
@@ -3964,7 +3914,7 @@ class PIIEIngestor(Ingestor):
     PIIE migrated CMS around 2016; pre-2016 publications live at flat-slug
     URLs (``/publications/policy-briefs/2008-oil-price-bubble``) while 2016+
     items use a ``/YYYY/`` segment (``/publications/policy-briefs/2016/...``).
-    The Drupal xmlsitemap (``?page=N``) lists ONLY the ``/YYYY/`` URLs plus a
+    The Drupal xmlsitemap (``?page=N``) lists only the ``/YYYY/`` URLs plus a
     thin recent slice of blogs — it structurally cannot reach the ~889 legacy
     flat-slug publications or the bulk of the blog history (CDX shows ~1,971
     realtime-blog URLs alone vs ~857 sitemap total). So CDX is now the
@@ -3974,7 +3924,7 @@ class PIIEIngestor(Ingestor):
     candidate set. Flat-slug URLs carry no path year, so every CDX URL is
     fetched-then-date-checked against the window (the page's own publication
     date is authoritative; the slug year is never trusted). Bodies are fetched
-    from LIVE piie.com via curl_cffi — the legacy URLs still resolve 200.
+    from live piie.com via curl_cffi — the legacy URLs still resolve 200.
 
     Publication dates (ADR-029): publication pages stamp
     ``article:published_time`` with the 2016-03-02 Drupal-migration timestamp,
@@ -3987,17 +3937,16 @@ class PIIEIngestor(Ingestor):
 
     RealTime blog two-era paths (ADR-029): the blog's new posts moved from the
     legacy ``/blogs/realtime-economic-issues-watch/<slug>`` scheme to
-    ``/blogs/realtime-economics/<YYYY>/<slug>`` ~2022, which the prior prefix
-    set did not follow — the blog hard-zeroed after 2022. Both prefixes are now
-    enumerated and the ~199 posts present under both are collapsed by a
-    trailing-slug dedup in ``fetch``.
+    ``/blogs/realtime-economics/<YYYY>/<slug>`` ~2022. Both prefixes must be
+    enumerated to cover the full history; the ~199 posts present under both are
+    collapsed by a trailing-slug dedup in ``fetch``.
 
     Why CDX, not ``?page=N`` listing pagination
     -------------------------------------------
     Listing pagination (the ADR-017 strategy) burns post-window pages per
     section and Cloudflare tightens on deep page=N requests within a session
-    (the 2026-05-21 integration test got HTTP 403 on page 3 of working-papers,
-    yielding 11 records vs the floor of 15). Sitemap discovery (ADR-021)
+    (HTTP 403 on page 3 of working-papers, yielding 11 records vs the floor
+    of 15). Sitemap discovery (ADR-021)
     avoided that tripwire but silently capped coverage at the 2016+ window.
     CDX queries hit archive.org (no Cloudflare), return the full historical
     URL set in one request per prefix, and fail loud on outage.
@@ -4032,7 +3981,7 @@ class PIIEIngestor(Ingestor):
 
     # Wayback CDX enumeration (ADR-026). One prefix query per content type;
     # collapse=urlkey + statuscode:200 yields the distinct canonical URL set,
-    # which includes BOTH the pre-2016 flat-slug URLs (absent from the sitemap)
+    # which includes both the pre-2016 flat-slug URLs (absent from the sitemap)
     # and the 2016+ /YYYY/ URLs. The trade blog appears under two slug eras
     # (with and without "and-") and china-economic-watch is a macro blog the
     # sitemap-era patterns never targeted — all are enumerated here for full
@@ -4040,13 +3989,13 @@ class PIIEIngestor(Ingestor):
     # fetched-then-date-checked against the window (the page date is
     # authoritative; the slug year is not).
     #
-    # The RealTime blog lives under TWO path eras: the 2016-vintage flat-slug
+    # The RealTime blog lives under two path eras: the 2016-vintage flat-slug
     # ``realtime-economic-issues-watch`` (1,972 distinct posts, but new posts
     # stopped landing there ~2022 — the hard-zero blog tail we were missing)
     # and the current ``realtime-economics/{YYYY}/`` scheme (carries the
     # post-2022 posts plus a migrated 2008-2021 back-catalog). ~199 posts
     # exist under both; the trailing-slug dedup in fetch() collapses them.
-    # realtime-economics is listed FIRST so its current /YYYY/ canonical URL
+    # realtime-economics is listed first so its current /YYYY/ canonical URL
     # wins that dedup (more likely to resolve live than the legacy slug).
     _CDX_BASE = "http://web.archive.org/cdx/search/cdx"
     _CDX_PREFIXES: list[tuple[str, str]] = [
@@ -4118,8 +4067,8 @@ class PIIEIngestor(Ingestor):
             )
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
-        # The live piie.com sitemap (DIRECT) is the preferred surface and is
-        # comprehensive from the 2016 CMS migration onward — verified 2026-06-11:
+        # The live piie.com sitemap (direct) is the preferred surface and is
+        # comprehensive from the 2016 CMS migration onward:
         # 100+ realtime-economics blog posts/yr for 2020-2026 and all /YYYY/
         # publications 2016-present, so the recent tail needs no archive. The
         # Wayback CDX enumeration (IA) backfills only what the live site dropped
@@ -4334,9 +4283,9 @@ class PIIEIngestor(Ingestor):
         Uses ``matchType=prefix`` rather than the ``url=…*`` bulk-wildcard
         form. Both prefix-match the same URL set, but ADR-023 found the bulk
         wildcard non-deterministic under load (0/849/6575 rows across three
-        runs of one query) and 503-prone — exactly the burst that killed job
-        50493138. The ``matchType=prefix`` endpoint returns deterministically
-        and is what CBO's ``_cdx_block`` already relies on. The trailing
+        runs of one query) and 503-prone. The ``matchType=prefix`` endpoint
+        returns deterministically and is what CBO's ``_cdx_block`` already
+        relies on. The trailing
         ``/`` base filter below still discards any sibling that shares the
         prefix string (e.g. realtime-economics vs realtime-economic-…).
         """
@@ -4377,15 +4326,15 @@ class PIIEIngestor(Ingestor):
         """GET a CDX endpoint with fail-loud jittered backoff.
 
         archive.org's CDX server 503s / times out *in multi-minute bursts*
-        under load (observed repeatedly 2026-06-05). Retries transient
+        under load. Retries transient
         failures and raises only on sustained outage or a hard status, so a
         Wayback hiccup can never silently truncate enumeration. Uses a
         (connect, read) tuple timeout per the project HTTP-timeout rule.
 
         10 attempts with the 5·2^n backoff (capped 240s) spans ~20 min of
         patience per query — enough to ride out a typical 503 burst. PIIE
-        fires one query per prefix (8 of them); the prior 6-attempt / ~5-min
-        ceiling let a single unlucky prefix kill a 2-hour job (job 50493138).
+        fires one query per prefix (8 of them); a shorter ceiling would let a
+        single unlucky prefix kill a multi-hour job.
         """
         last: str | None = None
         for attempt in range(attempts):
@@ -4429,7 +4378,7 @@ class CongressionalIngestor(Ingestor):
     To avoid duplicating Fed Chair testimony, this ingestor only fetches
     Treasury Secretary testimony.
 
-    Dual retrieval path (introduced 2026-05-20 to close 2010-2023 coverage gap):
+    Dual retrieval path (closes the 2010-2023 coverage gap):
 
       Path A — Treasury Drupal press-release listing
         (``home.treasury.gov/news/press-releases?category=Secretary Statements & Remarks``)
@@ -4443,9 +4392,9 @@ class CongressionalIngestor(Ingestor):
         ``/testimonies/<slug>``, ``/readouts/<slug>`` URLs) and legacy
         ``jl####`` (Lew), ``sm####`` (Yellen), ``mnu####`` (Mnuchin),
         ``tg####`` (Geithner) slug-based pages that Treasury preserved in
-        the Drupal listing. ``_MAX_LISTING_PAGES`` was raised from 1200 to
-        2500 on 2026-05-20 to ensure a 2010-window descent finishes within
-        the page cap; sleep is 0.5s/page so a full descent is ~20 min wall.
+        the Drupal listing. ``_MAX_LISTING_PAGES`` is set to 2500 so a
+        2010-window descent finishes within the page cap; sleep is 0.5s/page
+        so a full descent is ~20 min wall.
 
       Path B — GovInfo CHRG (Congressional Hearings) collection
         (``api.govinfo.gov/collections/CHRG``)
@@ -4504,9 +4453,9 @@ class CongressionalIngestor(Ingestor):
     # historical window. Treasury press releases run ~5–10 per day under the
     # Secretary category; 2010-2026 covers roughly 16,000 entries at ~10
     # page-specific entries per Drupal page, so a 2010-anchored full descent
-    # is ~1100-1200 pages. Bumped from 1200 to 2500 on 2026-05-20 — page 1500
-    # surfaces 1998-vintage releases so 2500 gives a comfortable floor below
-    # 2010 plus headroom for the runaway-loop bound. At 0.5s/page politeness
+    # is ~1100-1200 pages. Set to 2500 because page 1500 surfaces 1998-vintage
+    # releases, giving a comfortable floor below 2010 plus headroom for the
+    # runaway-loop bound. At 0.5s/page politeness
     # sleep a full 2500-page descent is ~21 min wall, acceptable for a
     # one-time historical ingest. Drupal returns 200 (with the
     # "Latest releases" widget but no new content) past the true end of the
@@ -4537,8 +4486,8 @@ class CongressionalIngestor(Ingestor):
     ) -> Iterator[Article]:
         """Scrape Treasury Secretary Statements & Remarks for testimony items.
 
-        Treasury's Drupal listing IGNORES `date_filter[min]/[max]` query params
-        on the server side as of 2026-05 — supplying them returns the standard
+        Treasury's Drupal listing ignores `date_filter[min]/[max]` query params
+        on the server side — supplying them returns the standard
         newest-first ordering. To reach a historical window we therefore must
         paginate backward until the rows on a page are older than `start`.
 
@@ -4547,13 +4496,6 @@ class CongressionalIngestor(Ingestor):
         fallback for older listing layouts. We filter on these before fetching
         individual article pages — avoiding one HTTP request per out-of-window
         release.
-
-        Pre-fix bug (2026-05-13 dry run, 0 articles for 2024 window): the
-        regex only matched `[a-zA-Z]{2}\\d+` slugs (e.g. sb0498), missing
-        modern `/statements/<slug>`, `/testimonies/<slug>`, `/readouts/<slug>`
-        URL forms. The relevance filter additionally hardcoded the Bessent-era
-        "Economic Fury" branding as an exclusion, which dropped legitimate
-        macro-financial Secretary remarks. Both fixed below.
         """
         consecutive_no_match_pages = 0
         total_yielded = 0
@@ -4727,7 +4669,7 @@ class CongressionalIngestor(Ingestor):
     def _extract_row_date(self, link) -> date | None:
         """Find the publication date for a release link in the listing HTML.
 
-        Modern listings (2024+) render a `<time datetime="2026-05-11T...">`
+        Modern listings (2024+) render a `<time datetime="YYYY-MM-DDT...">`
         element next to each release. We prefer that when present (most
         reliable), falling back to a text-regex over up to 4 ancestor nodes
         for older layouts.
@@ -4813,9 +4755,9 @@ class CongressionalIngestor(Ingestor):
             if not self._CHRG_TITLE_RE.search(title):
                 continue
             total_title_match += 1
-            # IMPORTANT: package.dateIssued is the GPO publication date —
+            # package.dateIssued is the GPO publication date —
             # the date the transcript was deposited, which can be months
-            # AFTER the hearing actually happened. For the dynamics analysis
+            # after the hearing actually happened. For the dynamics analysis
             # the discourse event is dated to when it was given (testimony
             # date), not when GPO published the record. Fetch the package
             # summary to read heldDates[0] (the authoritative hearing date).
@@ -4881,12 +4823,11 @@ class CongressionalIngestor(Ingestor):
     ) -> Iterator[dict]:
         """Yield CHRG package summaries whose lastModified is in a window.
 
-        IMPORTANT: GovInfo's ``/collections/{name}/{since}/{until}`` endpoint
-        filters on the package's ``lastModified`` timestamp, NOT on the
+        GovInfo's ``/collections/{name}/{since}/{until}`` endpoint
+        filters on the package's ``lastModified`` timestamp, not on the
         hearing date or publication date. The semantics is "packages that
-        appeared or were re-indexed within [since, until]." We therefore
-        need to walk a LARGER lastModified window than the requested
-        hearing-date window:
+        appeared or were re-indexed within [since, until]," so the walk spans
+        a larger lastModified window than the requested hearing-date window:
 
         - A hearing held on 2010-03-15 might have its transcript published
           to GovInfo on 2010-09-XX (typical 3-9 month publish lag).
@@ -4966,7 +4907,7 @@ class CongressionalIngestor(Ingestor):
         dynamics analysis aligns records with when the testimony was given,
         not when GPO published the transcript.
 
-        CHRG body strategy (verified 2026-05-20 on CHRG-115hhrg33428):
+        CHRG body strategy:
           1. Public PDF (``govinfo.gov/content/pkg/{pkg}/pdf/{pkg}.pdf``)
              — typically 5-50 MB per hearing, contains the complete verbatim
              transcript. No API key required. We extract text with pypdf,
@@ -4977,7 +4918,7 @@ class CongressionalIngestor(Ingestor):
              will succeed at step 1.
 
         Why PDF and not html: GovInfo CHRG HTML renderings frequently
-        contain only the title page with "[NO TEXT AVAILABLE]" body
+        contain only the title page with "[NO TEXT available]" body
         (the full text is delivered as PDF only). PDF parsing is slower
         but produces the actual transcript text needed for embedding.
         """
@@ -5073,14 +5014,9 @@ class CongressionalIngestor(Ingestor):
         releases by under/assistant secretaries and deputies. Everything else
         (topic relevance, sanctions-vs-macro-framing disambiguation) is
         delegated to Stage 2's canonical filter where the BODY of each
-        release is available, not just the title.
-
-        Pre-2026-05-13 the filter additionally hardcoded a "sanctions"
-        exclusion that misfired on Treasury's "Economic Fury" branding (which
-        IS macro-financial discourse — Iran oil sanctions framing, banking
-        penalties). Removing the title-only sanctions gate avoids that whole
-        class of mis-rejection; the canonical Stage 2 filter sees the full
-        body and applies the same keyword + embedding gates as everywhere else.
+        release is available, not just the title. No title-only topic gate is
+        applied here: the canonical Stage 2 filter sees the full body and
+        applies the same keyword + embedding gates as everywhere else.
         """
         tl = title.lower()
         if re.search(r"\bunder ?secretary\b|\bassistant secretary\b|\bdeputy\b", tl):
@@ -5149,7 +5085,7 @@ class CEAIngestor(Ingestor):
     def _govinfo_get_json(cls, url: str, *, max_attempts: int = 6) -> dict:
         """GET a govinfo JSON endpoint, retrying 429 / 5xx / network.
 
-        The shared ``_get`` does NOT retry 429 (it classifies 4xx as
+        The shared ``_get`` does not retry 429 (it classifies 4xx as
         non-retryable), but govinfo throttles bursts with 429 even on a
         real key. A swallowed 429 on a listing call would silently truncate
         the package/granule enumeration — a coverage hole. So we retry here
@@ -5326,16 +5262,16 @@ class CEAIngestor(Ingestor):
     def _extract_pdf_text(cls, pdf_url: str) -> str:
         """Download a granule PDF and return its extracted text.
 
-        Two failure registers, deliberately distinguished so we never
-        silently drop a chapter (the user's "no holes" requirement):
-          - FETCH failure (429 / 5xx / network) — transient infrastructure.
+        Two failure registers, distinguished so a chapter is never silently
+        dropped:
+          - Fetch failure (429 / 5xx / network) — transient infrastructure.
             ``_fetch_pdf_bytes`` retries with backoff and raises RuntimeError
             on exhaustion, so a persistent throttle fails the CEA ingest
             loudly (checkpoint re-run + dedup) instead of emitting a partial
             chapter set. This matters because govinfo throttles bursts even
-            with a real key, and the shared ``_get`` does NOT retry 429
+            with a real key, and the shared ``_get`` does not retry 429
             (it's a 4xx) — so the retry has to live here.
-          - PARSE failure (pypdf can't read a successfully-downloaded PDF) —
+          - Parse failure (pypdf can't read a successfully-downloaded PDF) —
             a permanent property of that one granule; retrying can't help.
             Logged at WARNING (not silent) and skipped via "".
 
@@ -5401,23 +5337,21 @@ class CEAIngestor(Ingestor):
 
 
 # ---------------------------------------------------------------------------
-# Tier 2 — academic primary work (NBER restored, ADR-020)
+# Tier 2 — academic primary work (NBER, ADR-020)
 # ---------------------------------------------------------------------------
 
 
 class NBERIngestor(Ingestor):
     """NBER working papers via direct URL enumeration.
 
-    Restored by ADR-020 (2026-05-20). The prior NBERIngestor (deleted in
-    ADR-019) relied on the search API, which is bot-protected. This
-    implementation enumerates ``/papers/wNNNNN`` directly — the spike
-    on 2026-05-20 confirmed every probe returned HTTP 200, plain
-    Drupal/nginx, no Cloudflare or DataDome, with citation_* meta tags
-    (Google Scholar convention) providing structured metadata.
+    The NBER search API is bot-protected, so this implementation enumerates
+    ``/papers/wNNNNN`` directly — every probe returns HTTP 200, plain
+    Drupal/nginx, no Cloudflare or DataDome, with citation_* meta tags (Google
+    Scholar convention) providing structured metadata.
 
     Strategy:
-      - Use a per-year paper-number floor (calibrated 2026-05-20) so the
-        ingest doesn't pay the cost of enumerating every wNNNNN ID since
+      - Use a per-year paper-number floor (calibrated against probed IDs) so
+        the ingest doesn't pay the cost of enumerating every wNNNNN ID since
         1973.
       - Enumerate forward from the start-year floor through the end-year
         ceiling (capped at the head of NBER's series, discovered by
@@ -5427,7 +5361,7 @@ class NBERIngestor(Ingestor):
       - Body = title + abstract (NBER's working papers page exposes
         the abstract in the page body; trafilatura extracts it cleanly).
 
-    Pre-clustering filter NOT applied (ADR-020). Every NBER paper in the
+    Pre-clustering filter not applied (ADR-020). Every NBER paper in the
     window is ingested; post-clustering JEL classification decides which
     clusters are macro for dynamics analysis. This is symmetric with the
     other basis-set sources.
@@ -5441,7 +5375,7 @@ class NBERIngestor(Ingestor):
 
     _PAPER_URL_TEMPLATE = "https://www.nber.org/papers/{paper_id}"
 
-    # Calibrated by probing /papers/wNNNNN dates on 2026-05-20.
+    # Calibrated by probing /papers/wNNNNN dates.
     # Each entry is the first paper ID whose citation_publication_date
     # is on or after January 1 of that year. Conservative starting
     # points (a few hundred IDs early so we don't miss late-published
@@ -5467,7 +5401,7 @@ class NBERIngestor(Ingestor):
     }
 
     # Stop enumeration after this many consecutive 404s — indicates we've
-    # walked past the head of the series. This is the REAL terminator for
+    # walked past the head of the series. This is the real terminator for
     # open-ended (to-present) runs: overshooting the true head is free
     # because the walk stops 30 IDs past it, so the ceiling below only
     # needs to be a generous backstop that never binds below the head.
@@ -5670,7 +5604,7 @@ class NBERIngestor(Ingestor):
 class InstitutionalIngestor(Ingestor):
     """Composite: runs all basis-set institutional ingestors.
 
-    ADR-020 (2026-05-20) — basis-set source selection:
+    ADR-020 — basis-set source selection:
       Fed Board + 4 regional Feds + IMF + BIS + CBO + CEA + Treasury OFR +
       Brookings + PIIE + NBER + VoxEU + Congressional Treasury Sec testimony.
       CFR removed (redundant with PIIE on the international-policy dimension).
@@ -5778,11 +5712,11 @@ class InstitutionalIngestor(Ingestor):
                     log.warning("Checkpoint: %s returned 0 articles; marked failed for retry", sid)
                     failures.append((sid, "0 articles"))
             except Exception as exc:
-                # Record and keep going so ONE run surfaces every broken source
-                # (not whack-a-mole), and the sources that DO work still get
-                # written + checkpointed. But a fail-loud raise must not let the
-                # composite complete clean — re-raise an aggregate below so the
-                # process exits non-zero and the afterok downstream chain holds.
+                # Record and keep going so one run surfaces every broken source,
+                # and the sources that work still get written + checkpointed. A
+                # fail-loud raise must not let the composite complete clean —
+                # re-raise an aggregate below so the process exits non-zero and
+                # the afterok downstream chain holds.
                 log.error("Sub-ingestor %s failed: %s", sid, exc)
                 checkpoint[sid] = {"status": "failed", "error": str(exc)}
                 self._save_checkpoint(checkpoint)

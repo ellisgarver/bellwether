@@ -5,7 +5,7 @@ large news collections. Its role is a display/validation overlay: plot broad/
 premium press volume against institutional discourse volume to show the
 institutional-vs-press timing of a narrative ("timing, not cause").
 
-This layer does NOT feed embedding, clustering, or dynamics fitting — Media
+This layer does not feed embedding, clustering, or dynamics fitting — Media
 Cloud text is outside the ADR-020 basis set and these counts are a post-hoc
 overlay (ADR-042). A forward-looking early-detector is a deferred add-on.
 

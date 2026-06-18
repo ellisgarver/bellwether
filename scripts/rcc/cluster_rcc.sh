@@ -3,7 +3,7 @@
 #
 # BERTopic/HDBSCAN is CPU-bound after UMAP reduction. No GPU required.
 #
-# Resource spec (confirmed 2026-05-04):
+# Resource spec:
 #   Account:   pi-dachxiu
 #   Partition: caslake (standard compute — 32 GB fits comfortably)
 #   CPUs:      8

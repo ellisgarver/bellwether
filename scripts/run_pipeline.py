@@ -1,16 +1,16 @@
 """Pipeline orchestration CLI.
 
 Dispatches pipeline stages:
-  ingest              — fetch raw articles from the basis-set sources (ADR-020)
-  filter-pre-embed    — drop archived journalism sources from raw JSONL (ADR-010)
-  filter              — date-range filter + near-duplicate removal (NO topic filter, ADR-020)
-  embed               — encode articles (primary: Qwen3-Embedding-8B; comparator: mpnet)
-  cluster             — BERTopic single-granularity clustering (ADR-019)
+  ingest              — fetch raw articles from the basis-set sources
+  filter-pre-embed    — drop archived journalism sources from raw JSONL
+  filter              — date-range filter + near-duplicate removal
+  embed               — encode articles (Qwen3-Embedding-8B)
+  cluster             — BERTopic single-granularity clustering
   stability           — bootstrap stability diagnostic (mean NMI reported, not gated)
   validate            — anchor narrative recovery (reported as rate, not gated)
-  analyze             — clusters → normalize (ADR-045) → JEL → dynamics → stages →
+  analyze             — clusters → normalize → JEL → dynamics → stages →
                         similar → dashboard artifacts (the pipeline→front-end seam)
-  corpus-composition  — report article counts per source per year (Phase 2 QA step)
+  corpus-composition  — report article counts per source per year
 
 All paths default to config.paths.*. Override with --input / --output flags.
 
@@ -67,13 +67,11 @@ def cli(ctx: click.Context) -> None:
     "--sources", default="institutional",
     show_default=True,
     help=(
-        "Comma-separated source IDs. 'institutional' runs the full basis-set composite "
-        "(ADR-020): federalreserve, fed_regional, congressional, imf, bis, treasury_ofr, "
+        "Comma-separated source IDs. 'institutional' runs the full basis-set composite: "
+        "federalreserve, fed_regional, congressional, imf, bis, treasury_ofr, "
         "cea, voxeu, brookings, piie, cbo, nber. Any of those names can also be passed "
         "individually to run a single source standalone — used to split the ingest into "
-        "parallel SLURM jobs so no source starves behind a long pole. arXiv and Jackson "
-        "Hole removed in ADR-012; AP News, Reuters, MarketWatch removed in ADR-010; CFR "
-        "removed in ADR-020 (all recoverable from git history)."
+        "parallel SLURM jobs so no source starves behind a long pole."
     ),
 )
 @click.option("--output-dir", default=None, help="Output directory for raw JSONL files (overrides config default)")
@@ -334,15 +332,14 @@ def cbo_merge_shards(
 
 
 # ---------------------------------------------------------------------------
-# filter-pre-embed  (new in ADR-010)
+# filter-pre-embed
 # ---------------------------------------------------------------------------
 
+# Archived before embedding: the journalism tier, arXiv, and the standalone
+# Jackson Hole feed (now covered by FederalReserveIngestor).
 _EXCLUDED_SOURCES = {
-    # Journalism tier removed in ADR-010 (2026-05-11)
     "ap_news", "apnews", "marketwatch", "reuters",
-    # arXiv removed in ADR-012 (2026-05-13): 2017-only coverage, low macro volume
     "arxiv",
-    # Jackson Hole removed in ADR-012: covered by FederalReserveIngestor
     "jackson_hole",
 }
 
@@ -501,11 +498,7 @@ def filter_cmd(
     "--role", default="primary",
     type=click.Choice(["primary", "comparator"]),
     show_default=True,
-    help=(
-        "Embedding role (ADR-011). 'primary' = Qwen3-Embedding-0.6B (production). "
-        "'comparator' = all-mpnet-base-v2 (look-ahead sensitivity check only — "
-        "compares Δ_NMI pre-2021 vs post-2021 against primary)."
-    ),
+    help="Embedding role. 'primary' is the production Qwen3 embedder.",
 )
 @click.option("--input", "input_path", default=None, help="Input parquet path")
 @click.option("--output", default=None, help="Output .npy path")
@@ -513,7 +506,7 @@ def filter_cmd(
 def embed(
     ctx: click.Context, role: str, input_path: str | None, output: str | None
 ) -> None:
-    """Encode articles to embeddings (Qwen3 primary; mpnet comparator for look-ahead check)."""
+    """Encode articles to embeddings with the Qwen3 production embedder."""
     from mnd.embedding.embedder import Embedder
 
     cfg = ctx.obj["cfg"]
