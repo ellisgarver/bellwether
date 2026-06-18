@@ -422,7 +422,7 @@ def filter_cmd(
     Per MND_PROJECT_SPEC rev3 Stage 2: no topic filter is applied — all Layer 1A
     sources are macro-relevant by construction. Only two operations run:
       1. Date range filter: retain documents with publication_date in [2010-01-01, present]
-      2. Near-duplicate removal: MinHash-based dedup within rolling 48-hour windows
+      2. Near-duplicate removal: MinHash-based dedup across the full corpus
 
     Input precedence (auto-detected to enforce ADR-010 / ADR-012 source exclusion):
       1. --input <jsonl>                           (explicit override)
