@@ -52,6 +52,7 @@ class FitResult:
     converged: bool
     aicc: float = float("inf")
     r0_mean: float | None = None
+    r0_median: float | None = None
     r0_ci_low: float | None = None
     r0_ci_high: float | None = None
     peak_time_mean: float | None = None
@@ -223,6 +224,8 @@ class DynamicsFitter:
         k_hi = float(summary.loc["k", "hdi_97%"])
         L_mean = float(summary.loc["L", "mean"])
         t0_mean = float(summary.loc["t0", "mean"])
+        # logistic_r0 is monotonic in k, so the median commutes through it.
+        k_median = float(np.median(np.asarray(trace.posterior["k"]).reshape(-1)))
         curve = logistic(t, L_mean, k_mean, t0_mean)
         ll = _gaussian_loglik(y, curve)
 
@@ -232,6 +235,7 @@ class DynamicsFitter:
             converged=converged,
             aicc=aicc(ll, k=3, n=len(y)),
             r0_mean=logistic_r0(k_mean, gamma_prior),
+            r0_median=logistic_r0(k_median, gamma_prior),
             r0_ci_low=logistic_r0(k_lo, gamma_prior),
             r0_ci_high=logistic_r0(k_hi, gamma_prior),
             peak_time_mean=t0_mean,
@@ -292,6 +296,11 @@ class DynamicsFitter:
         gamma_lo = float(summary_bg.loc["gamma", "hdi_3%"])
         gamma_hi = float(summary_bg.loc["gamma", "hdi_97%"])
         I0_mean = float(summary_I0.loc["I0", "mean"])
+        # R0=beta/gamma is a ratio, so median(R0) needs the per-draw ratio,
+        # not the ratio of the marginal medians.
+        beta_draws = np.asarray(trace.posterior["beta"]).reshape(-1)
+        gamma_draws = np.clip(np.asarray(trace.posterior["gamma"]).reshape(-1), 1e-6, None)
+        r0_median = float(np.median(beta_draws / gamma_draws))
         y_hat = sir_prevalence(t, N_pop, I0_mean, beta_mean, gamma_mean)
         ll = _gaussian_loglik(y, y_hat)
         peak = sir_peak_time(N_pop, I0_mean, beta_mean, gamma_mean)
@@ -302,6 +311,7 @@ class DynamicsFitter:
             converged=converged,
             aicc=aicc(ll, k=3, n=len(y)),
             r0_mean=sir_r0(beta_mean, gamma_mean),
+            r0_median=r0_median,
             r0_ci_low=sir_r0(beta_lo, max(gamma_hi, 1e-6)),
             r0_ci_high=sir_r0(beta_hi, max(gamma_lo, 1e-6)),
             peak_time_mean=peak,

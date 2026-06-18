@@ -65,6 +65,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 046 | **Analyze every cluster; JEL scope is a display flag, not a dynamics gate (out-of-scope shown with code)** | Live (supersedes 020 "dropped from dynamics"; relates 019/044) |
 | 047 | **Markets overlay + Granger for every narrative; VIX canonical (lag tied to it), extra series display-only; `wave_count`→"peaks (≥ ½ max)"** | Live (amends 041; relates 039/043/045) |
 | 048 | **Broad-press lead-lag — bidirectional Granger between institutional discourse and Media Cloud press, beside the markets readout** | Live (amends 042; relates 041/047) |
+| 049 | **Dashboard artifact contract align-up: producers emit `r0_median` + R₀ interval + threshold in `stage_detail`; `shape_facts` keys renamed to the front-end's; undefined R₀ peak/min row dropped** | Live (relates 039/043/047) |
 
 ---
 
@@ -3587,6 +3588,72 @@ markets readout (two-column, mirroring the stage / shape-facts pair):
 - This is the thesis test made visible: a "press precedes discourse" verdict is a
   point **against** the upstream-first story for that narrative, and the tool shows
   it honestly rather than hiding disconfirming cases.
+
+---
+
+## ADR-049: Dashboard artifact contract align-up (stage_detail + shape_facts)
+
+- **Status**: Accepted
+- **Date**: 2026-06-18
+- **Relates to**: ADR-043 (the artifact contract this tightens), ADR-039 (the
+  fits whose R₀ this surfaces), ADR-047 (the `shape_facts` relabel this completes)
+
+### Context
+
+The artifact builder (`build_artifacts.py`) passes `shape_facts` and
+`stage_detail` through to the front end as opaque dicts — no key remap — so the
+Astro narrative view reads producer keys verbatim. The hand-built sample artifact
+set masked a drift between the two sides:
+
+- The stage table read `sd.r0_median`, `sd.r0_ci_low/high`, and `sd.threshold`,
+  but `classify_stage` only emitted `r0_mean`, `peak_time_mean`, `converged`,
+  `total_articles`, `elapsed_days` — so on real pipeline output those cells would
+  render "—".
+- The stage table also read `sd.r0_peak` / `sd.r0_min`, which **no producer ever
+  computed**. Under the constant-β/γ SIR fit (ADR-039) R₀=β/γ is a single
+  posterior quantity; there is no time-varying R₀, so "peak" and "min" R₀ have no
+  definition. (The sample's `r0_mean=0.55` with `r0_peak=2.6` was an impossible
+  placeholder — even an effective R_t = R₀·S(t)/N is bounded above by R₀.)
+- `shape_facts` keys (`peak_height`, `time_to_peak`, `duration_above_half_peak`)
+  did not match the front-end's (`peak_volume`, `time_to_peak_days`,
+  `active_days`); the sample data had already been written in the new names, so
+  only real output would have surfaced the mismatch.
+
+The choice was to dumb the front end down to current producer output, or to
+**align up** — make the producers emit the richer set the front end was built
+for. These are features we want to keep, so we align up.
+
+### Decision
+
+- `FitResult` gains `r0_median`. `_fit_sir` computes it as the per-draw median
+  `median(β_draws/γ_draws)` (a ratio, so it does **not** equal the ratio of the
+  marginal medians); `_fit_logistic` computes `logistic_r0(median(k_draws), γ)`
+  (monotonic in k, so the median commutes through). `r0_mean` and the staging
+  logic are untouched — this is display enrichment, not a staging change.
+- `classify_stage`'s `detail` dict gains `r0_median`, `r0_ci_low`, `r0_ci_high`,
+  and `threshold` (= `config.stages.growth_min_r0`), read via `getattr` so a
+  minimal FitResult stand-in stays valid.
+- `shape_facts` keys are renamed to the front-end contract: `peak_height` →
+  `peak_volume`, `time_to_peak` → `time_to_peak_days`, `duration_above_half_peak`
+  → `active_days` (`total_volume`, `wave_count` unchanged).
+- The front-end "R₀ (peak / min)" row is **dropped** (no coherent definition under
+  a constant-R₀ fit), and the interval label is corrected "95%" → "94%" to match
+  the `hdi_prob=0.94` the fits actually report.
+
+### Consequences
+
+- Real pipeline output now populates the R₀ mean/median/interval/threshold cells
+  the stage table was already built to show; no front-end logic changed beyond the
+  row drop and label fix.
+- The artifact schema is additive — `stage_detail` gains keys, `shape_facts` keys
+  are renamed; `SCHEMA_VERSION` is unchanged because no consumer keyed off the old
+  `shape_facts` names (the front end already used the new ones).
+- A genuine "how hot did it peak" statistic (effective R_t over the fitted
+  trajectory) is deferred to a future ADR if wanted; it is intentionally **not**
+  faked here.
+- Safe to deploy mid-run: the change is producer-additive and only the `analyze`
+  stage emits these fields, so an RCC `git pull` while jobs are queued lets the
+  downstream analyze step write the enriched artifacts.
 
 ---
 

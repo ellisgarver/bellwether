@@ -53,6 +53,10 @@ def classify_stage(
         "total_articles": int(daily_counts.sum()),
         "elapsed_days": elapsed,
         "r0_mean": r0,
+        "r0_median": getattr(fit_result, "r0_median", None),
+        "r0_ci_low": getattr(fit_result, "r0_ci_low", None),
+        "r0_ci_high": getattr(fit_result, "r0_ci_high", None),
+        "threshold": float(sc["growth_min_r0"]),
         "peak_time_mean": peak_t,
         "converged": fit_result.converged,
     }

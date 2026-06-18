@@ -107,9 +107,9 @@ class TestShapeFacts:
         facts = shape_facts(T, logistic(T, 100.0, 0.3, 30.0))
         assert set(facts) == {
             "total_volume",
-            "peak_height",
-            "time_to_peak",
-            "duration_above_half_peak",
+            "peak_volume",
+            "time_to_peak_days",
+            "active_days",
             "wave_count",
         }
 
@@ -128,7 +128,7 @@ class TestShapeFacts:
         y = logistic(T, 100.0, 0.3, 30.0)
         f = shape_facts(T, y)
         assert f["wave_count"] == 1
-        assert f["time_to_peak"] == pytest.approx(T[-1])
+        assert f["time_to_peak_days"] == pytest.approx(T[-1])
 
     def test_two_humps_two_waves(self):
         # Two well-separated equal bumps above half-max → two waves
@@ -141,7 +141,7 @@ class TestShapeFacts:
     def test_flat_zero_curve(self):
         f = shape_facts(T, np.zeros_like(T))
         assert f["wave_count"] == 0
-        assert f["peak_height"] == 0.0
+        assert f["peak_volume"] == 0.0
         assert f["total_volume"] == 0.0
 
     def test_empty_series(self):
