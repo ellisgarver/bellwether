@@ -25,9 +25,9 @@ overlay and is never embedded.
 
 | Layer | Role | Sources |
 |---|---|---|
-| Semantic text corpus | Embedding + clustering | Fed Board, 4 Regional Feds (NY/SF/Chicago/Atlanta), IMF, BIS, CBO, CEA, Treasury/OFR, Brookings, PIIE, NBER, VoxEU, Congressional Treasury-Sec testimony |
-| Dynamics | Volume time series, cross-validation (no text) | Media Cloud premium-press collection |
-| Detection | Story-count anomaly flagging (no text) | Media Cloud broad outlet collection |
+| Semantic text corpus | Embedding, clustering, dynamics fitting | Fed Board, 4 Regional Feds (NY/SF/Chicago/Atlanta), IMF, BIS, CBO, CEA, Treasury/OFR, Brookings, PIIE, NBER, VoxEU, Congressional Treasury-Sec testimony |
+| Press overlay | Story-count time series and discourse-vs-press lead/lag, display and validation only (no text) | Media Cloud |
+| Markets overlay | Market-series vs discourse lead/lag, display and validation only (no text) | FRED |
 | Validation | Outcome correlation, business-cycle context | FRED, NBER Business Cycle Dating |
 
 ## Quick start
@@ -44,8 +44,8 @@ pip install -e . -r requirements.txt
 
 # 3. Configure environment
 cp .env.example .env
-# Edit .env: set FRED_API_KEY (validation) and MEDIACLOUD_API_KEY (dynamics and
-# detection). On Apple Silicon, set MND_MAX_SEQ_LEN=512 to avoid Qwen3 OOM on MPS.
+# Edit .env: set FRED_API_KEY (validation and markets overlay) and MEDIACLOUD_API_KEY
+# (press overlay). On Apple Silicon, set MND_MAX_SEQ_LEN=512 to avoid Qwen3 OOM on MPS.
 
 # 4. Run pre-flight checks
 make preflight                # skips embedding model download
@@ -93,7 +93,7 @@ src/mnd/               Python package
   clustering/            BERTopic (UMAP/HDBSCAN/c-TF-IDF) + JEL scope classifier
   dynamics/              SIR + logistic + Bass + non-parametric shape facts; 7-day MA smoothing
   stages/                Life-cycle classification keyed to R₀ direction
-  detection/             Media Cloud module (premium-press dynamics + broad detection)
+  detection/             Press (Media Cloud) and markets (FRED) overlays — display and validation, no text
   validation/            Anchor recovery (reporting only)
   dashboard/             JSON-artifact builder feeding the Astro site
   utils/                 Config loader, logging

@@ -100,13 +100,12 @@ The classifier reports a `runner_up_gap` per cluster — the cosine-similarity d
 
 ### Stage 6 — Volume signals (institutional and press)
 
-Each narrative cluster yields three weekly volume series.
+Each narrative cluster yields two weekly volume series.
 
-- **Institutional volume** — articles in the cluster per week; the primary signal.
-- **Premium-press volume** — weekly counts from the Media Cloud API against a curated premium-press collection (WSJ, Bloomberg, FT, Reuters, NYT, Barron's, Dow Jones Newswires, MarketWatch), queried by the cluster's top 5–10 c-TF-IDF terms joined with Boolean OR.
-- **Broad-press volume** — the same query against the broader Media Cloud catalog of thousands of outlets, used to detect emergence in the press.
+- **Institutional volume** — articles in the cluster per week; the primary signal and the curve the dynamics models are fit to.
+- **Press volume** — weekly story counts from the Media Cloud API against its broad U.S. national news collection, queried by the cluster's top c-TF-IDF terms joined with Boolean OR.
 
-The three series support cross-validation and lead-lag reading. A narrative present in both institutional discourse and the premium press is corroborated across both; institutional volume without press volume marks a procedural artifact; press volume without institutional discourse is downstream of the corpus and outside scope. Institutional discourse typically leads the premium press by days to weeks, and plotting both on one axis shows the offset directly. Broad-press spikes flag emerging narratives in the weekly update before they reach institutional sources.
+The two series support cross-validation and lead-lag reading. A narrative present in both institutional discourse and the press is corroborated across both; institutional volume without press volume marks a procedural artifact; press volume without institutional discourse is downstream of the corpus and outside scope. Institutional discourse typically leads the press by days to weeks, and plotting both on one axis shows the offset directly.
 
 Media Cloud is a volume signal only; its text never enters embedding or clustering. Each series is smoothed with a 7-day centered moving average to remove the weekend drop in daily output (Shumway & Stoffer).
 
