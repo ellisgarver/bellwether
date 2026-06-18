@@ -1,9 +1,9 @@
-"""Bayesian dynamics fitting with PyMC (ADR-019, ADR-039).
+"""Bayesian dynamics fitting with PyMC.
 
 Fits every configured lens (logistic, SIR, Bass) to a cluster's daily
-article-count series and returns them all side by side -- ADR-039 removed the
-AICc best-of-N selection gate; AICc is retained only as a displayed diagnostic
-on each FitResult. Model-free shape-facts are computed alongside.
+article-count series and returns them all side by side; AICc is a displayed
+diagnostic on each FitResult, not a selection gate. Model-free shape-facts are
+computed alongside.
 
 Stage classification still needs a single R_0: it keys off the SIR fit, falling
 back to the logistic fit when SIR did not converge (ADR-002 keeps logistic as
@@ -14,10 +14,8 @@ SIR model: uses a pytensor.scan discrete-time Euler loop so the ODE is
 differentiable through PyMC's NUTS sampler without an external ODE solver.
 
 Graceful failure: convergence failures (low ESS, high R-hat, exceptions) are
-recorded in FitResult.failure_reason; the pipeline continues. The prior
-min_r_squared and max_r0_ci_width kill-criterion thresholds were removed by
-ADR-019 -- R^2 and R_0 credible-interval width are reported as diagnostics,
-not gated.
+recorded in FitResult.failure_reason; the pipeline continues. R^2 and R_0
+credible-interval width are reported as diagnostics, not gates.
 
 Configuration: config.dynamics.{inference, priors, models_to_fit}.
 """

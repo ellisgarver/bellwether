@@ -1,4 +1,4 @@
-"""Downstream analysis driver: clusters.parquet → dashboard artifacts (ADR-043/045).
+"""Downstream analysis driver: clusters.parquet → dashboard artifacts.
 
 ``cluster`` persists ``clusters.parquet`` (+ ``topic_info.parquet``) and
 ``embeddings.npy``; the front end reads the small JSON in
@@ -9,8 +9,8 @@ the entire analysis layer from the persisted clustering, with no re-embedding
 Pipeline assembled here, in order:
 
   1. corpus-base-rate normalization of per-cluster daily volume (ADR-045) — the
-     series both the fit and the dashboard use, so corpus growth no longer
-     confounds either.
+     series both the fit and the dashboard use, so corpus growth does not
+     confound either.
   2. JEL scope classification of each cluster (ADR-020); the JEL code is a
      per-narrative flag, not a gate — every non-noise cluster is carried into
      dynamics and out-of-scope ones (JEL ∉ {E,F,G,H}) are shown flagged with

@@ -1,20 +1,18 @@
-"""Markets overlay + bidirectional Granger readout (ADR-041).
+"""Markets overlay + bidirectional Granger readout.
 
-A reader of a macro narrative wants to know: "did the discourse move before or
-after the market did?" This module overlays a free FRED market series (VIX, 10y
-yield, equity index, credit spreads) against a narrative's weekly discourse
-volume, and — on demand — runs a **bidirectional Granger** test to report which
-direction, if any, shows statistically significant temporal precedence.
+This module overlays a free FRED market series (VIX, 10y yield, equity index,
+credit spreads) against a narrative's weekly discourse volume and, on demand,
+runs a bidirectional Granger test to report which direction, if any, shows
+statistically significant temporal precedence — whether discourse moved before
+or after the market.
 
-This is a **display/diagnostic layer only** (ADR-041). Market series NEVER feed
+This is a display/diagnostic layer only (ADR-041). Market series never feed
 embedding, clustering, or dynamics fitting — the overlay is computed after the
 corpus is built, so the no-paid-dep core invariant and ADR-020 (no external
 signal into clustering) are untouched. FRED is free.
 
-Granger precedence is temporal ordering, NOT causation. Every readout carries
-the caption "this shows timing, not cause" (feedback_frontend_clarity) so the UI
-cannot mis-educate. The prior Bloomberg CPI-surprise control (paid, removed
-source per ADR-010) is intentionally dropped.
+Granger precedence is temporal ordering, not causation; every readout is
+captioned "this shows timing, not cause".
 """
 from __future__ import annotations
 

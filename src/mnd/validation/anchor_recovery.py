@@ -1,4 +1,4 @@
-"""Anchor narrative recovery validation (ADR-019).
+"""Anchor narrative recovery validation.
 
 For each anchor, locates articles published within its reference window in the
 clustered DataFrame and checks whether >=50% fall in a single cluster. The
@@ -6,11 +6,8 @@ dominant cluster is reported alongside the concentration; an anchor is marked
 "recovered" when concentration >= 0.50 and the dominant cluster is not the
 BERTopic outlier bucket (-1).
 
-ADR-019: recovery is reported as a rate, not gated. The prior kill criterion
-(`config.validation.required_anchors_recovered`, default 7/10) was removed
-because no field-accepted literature anchor exists for a specific cutoff --
-anchor recovery is a diagnostic quality signal, not a pre-registered pass/fail
-test.
+Recovery is reported as a rate, not as a pass/fail gate. Anchor recovery is a
+diagnostic quality signal, and no parameter is tuned toward it.
 
 Configuration: config.validation.anchor_tolerance_days.
 """

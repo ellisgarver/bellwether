@@ -1,13 +1,13 @@
-"""Media Cloud press-volume overlay (ADR-042).
+"""Media Cloud press-volume overlay.
 
 Media Cloud provides free daily *story counts over time* for a keyword query
 across large news collections — aggregate counts only, no article text. Its role
-here is a **display/validation overlay**: for a given narrative we plot broad/
-premium press volume against the institutional discourse volume to make the
+here is a display/validation overlay: for a given narrative, broad/premium
+press volume is plotted against the institutional discourse volume to make the
 "narratives form upstream in institutional/academic discourse, surface later in
 the press" dynamic visible.
 
-This layer is **display/validation only**. It must NEVER feed embedding,
+This layer is display/validation only. It must never feed embedding,
 clustering, or dynamics fitting — Media Cloud text is not in the ADR-020 basis
 set and these counts are a post-hoc overlay (ADR-042, ADR-020). Press counts may
 serve as a *secondary* cross-check of the institutional fit; the SIR/logistic
@@ -18,10 +18,10 @@ narratives may have sparse or absent counts. Callers should degrade gracefully
 ("press coverage data unavailable before ~2017") rather than show a misleading
 flat line.
 
-Migration note: the old `api.mediacloud.org/api/v2` REST API was retired
-(Dec 2023). This module uses the current `mediacloud` PyPI package
-(`SearchApi.story_count_over_time`). The separate Media Cloud "Wayback Machine"
-title-search API is a different product and is NOT used here.
+This module uses the `mediacloud` PyPI package (`SearchApi.story_count_over_time`).
+The legacy `api.mediacloud.org/api/v2` REST API was retired in December 2023.
+The separate Media Cloud "Wayback Machine" title-search API is a different
+product and is not used here.
 
 Output schema (one record per query per day):
     {

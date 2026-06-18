@@ -1,15 +1,13 @@
-"""BERTopic clustering pipeline (ADR-019).
+"""BERTopic clustering pipeline.
 
 Wraps BERTopic with UMAP + HDBSCAN parameters from config and adds:
   - Class-based TF-IDF (c-TF-IDF) for cluster representation
   - Bootstrap stability evaluation: NMI + ARI across replicates
 
 Every UMAP / HDBSCAN / c-TF-IDF parameter is the BERTopic v0.16.4 library
-default (Grootendorst 2022, arXiv:2203.05794). The prior three-level
-granularity hierarchy and the NMI-threshold kill criterion were removed by
-ADR-019 -- single granularity is the field convention (Bybee et al. 2024 JF;
-Hansen et al. 2018 QJE; Larsen & Thorsrud 2019 JoE) and stability is now a
-reported diagnostic rather than a gate.
+default (Grootendorst 2022, arXiv:2203.05794). Single granularity is the field
+convention (Bybee et al. 2024 JF; Hansen et al. 2018 QJE; Larsen & Thorsrud
+2019 JoE); stability is a reported diagnostic, not a gate.
 
 All random seeds flow from config.reproducibility.global_random_seed.
 """
@@ -127,8 +125,7 @@ class BertopicPipeline:
         Seeds: config.validation.bootstrap_random_seed through +n_replicates.
         Replicate count: config.validation.bootstrap_replicates (Efron &
         Tibshirani 1993 recommend B >= 500-1000 for confidence intervals).
-        Reported as a diagnostic; the prior NMI >= threshold kill criterion
-        was removed by ADR-019.
+        Reported as a diagnostic, not a pass/fail gate.
         """
         from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 

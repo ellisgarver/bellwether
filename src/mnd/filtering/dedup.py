@@ -1,11 +1,11 @@
 """Near-duplicate detection using MinHash LSH.
 
-Jaccard similarity on character 5-grams. Per ADR-019, the rolling time window
-is removed by default (config.filtering.dedup.window_hours is no longer
-required) — full-corpus MinHash LSH is feasible at this scale. The
-``window_hours`` constructor argument is retained for callers (and tests) that
-explicitly want a time-bounded window; when not provided and not in config,
-the effective window is unbounded (100 years).
+Jaccard similarity on character 5-grams. There is no rolling time window by
+default — full-corpus MinHash LSH is feasible at this scale, so
+``config.filtering.dedup.window_hours`` is optional. The ``window_hours``
+constructor argument is retained for callers (and tests) that explicitly want
+a time-bounded window; when not provided and not in config, the effective
+window is unbounded (100 years).
 
 Configuration: config.filtering.dedup.{num_perm, threshold}. Anchored to
 Broder 1997 (MinHash) and Henzinger 2006 (~0.8-0.9 Jaccard threshold band

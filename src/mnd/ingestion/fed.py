@@ -76,11 +76,9 @@ def _is_retryable(exc: Exception) -> bool:
     retry=retry_if_exception(_is_retryable),
 )
 def _get(url: str, *, timeout=30.0) -> requests.Response:
-    # Normalize float timeout to a (connect, read) tuple. Single-value timeouts
-    # in stdlib `requests` are unreliable on TCP-level stalls — the read timeout
-    # only counts inter-byte gaps, not total time, so a server that drips one
-    # byte every 29s never trips a 30s timeout. The 2026-05-18 patch ingest
-    # hung for 2+ hours on a single Fed speech URL in exactly that state.
+    # Normalize float timeout to a (connect, read) tuple. A single-value timeout
+    # in stdlib `requests` only bounds inter-byte gaps, not total time, so a
+    # server that drips one byte every 29s never trips a 30s timeout.
     if isinstance(timeout, (int, float)):
         timeout = (10.0, float(timeout))
     resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout)
@@ -282,11 +280,6 @@ class FederalReserveIngestor(Ingestor):
                - 2010-16: /monetarypolicy/beigebook/beigebookYYYYMM.htm
                           (extra `beigebook/` subdirectory)
              We try both variants for every (year, month) and accept 404s.
-
-        Earlier code relied only on (1) and missed ~97% of historical Beige
-        Books because beige-book-default.htm doesn't link to prior years.
-        The single-pattern enumeration added on 2026-05-18 fixed 2017+ but
-        still missed 2010-2016 because that era uses the subdirectory variant.
         """
         seen_urls: set[str] = set()
 
@@ -533,10 +526,10 @@ class FederalReserveIngestor(Ingestor):
             /econresdata/notes/feds-notes/{YEAR}/{slug}-{YYYYMMDD}.html
             (extra ``data`` segment and per-year subdirectory)
 
-        The per-year index pages (.../feds-notes/{YEAR}-index.htm) link to BOTH
+        The per-year index pages (.../feds-notes/{YEAR}-index.htm) link to both
         URL variants depending on the publication date, so walking the per-year
         indexes for the full window discovers the historical legacy URLs that
-        the modern-only regex previously dropped.
+        a modern-only regex would miss.
         """
         import re as _re
         import time as _time

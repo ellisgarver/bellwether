@@ -193,5 +193,5 @@ def test_embedder_factory_produces_primary_only_post_adr019(monkeypatch):
     assert primary.instruction_aware is True
     assert primary.max_seq_len == 1024
 
-    with pytest.raises(ValueError, match="ADR-019"):
+    with pytest.raises(ValueError, match="not supported"):
         Embedder.from_config("comparator")

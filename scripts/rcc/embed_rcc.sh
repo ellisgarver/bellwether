@@ -3,7 +3,7 @@
 #
 # Two-model strategy (ADR-001, restored by ADR-011):
 #
-#   ROLE=primary     Qwen3-Embedding-0.6B (1024-dim)
+#   ROLE=primary     Qwen3-Embedding-8B (4096-dim)
 #                    Long context (32,768 tokens) — essential for FOMC minutes,
 #                    BIS QR articles, Jackson Hole papers. Production embeddings.
 #                    Output: data/processed/embeddings.npy
@@ -17,7 +17,7 @@
 # Canonical chain (use scripts/rcc/submit_parallel_ingest.sh):
 #   ingest → filter-pre-embed → filter → embed (primary) → cluster
 #   The fan-out also submits embed --role comparator in parallel
-#   with the primary embed when COMPARATOR=1 (default).
+#   with the primary embed when COMPARATOR=1.
 #
 # Resource spec:
 #   Account:   pi-dachxiu
@@ -26,13 +26,12 @@
 #              activations — comfortable on 40 GB (was V100 16GB for 0.6B, which
 #              cannot hold 8B). The gpu partition has a100 nodes (gold-6248r,384g).
 #              all-mpnet-base-v2 comparator at 384 tokens: < 2 GB — trivially fits.
-#              (Job 49622334 OOMed on 2026-05-13 on V100 at seq=2048 + batch=32;
-#              config is now batch=8 + seq=1024; see config/config.yaml comments.)
+#              config uses batch=8 + seq=1024 (see config/config.yaml).
 #   CPUs:      8
 #   RAM:       64 GB
 #   Time:      18 h   (Qwen3-8B primary on A100 ~6-12 h; mpnet comparator ~2 h)
 #
-# All output in /scratch/midway3/ehgarver/ — never in PI project folder.
+# All output goes under the user scratch space, never in the PI project folder.
 
 #SBATCH --job-name=mnd-embed
 #SBATCH --account=pi-dachxiu
@@ -65,10 +64,9 @@ echo "Python: $PYTHON_USED"
 export USE_TF=0
 export KERAS_BACKEND=torch
 export MND_EMBEDDING_DEVICE=cuda
-# Reduce VRAM fragmentation. The torch hint from the prior OOM error.
+# Reduce VRAM fragmentation.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-# MND_MAX_SEQ_LEN not set → config default (1024 for Qwen3, lowered from 2048
-# after 2026-05-13 OOM). mpnet comparator uses its own max_seq_len (384).
+# MND_MAX_SEQ_LEN not set → config default (1024 for Qwen3).
 
 ROLE="${ROLE:-primary}"
 

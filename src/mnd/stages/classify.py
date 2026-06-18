@@ -1,4 +1,4 @@
-"""Stage classification: fitted dynamics -> lifecycle stage (ADR-019).
+"""Stage classification: fitted dynamics -> lifecycle stage.
 
 Three stages keyed to R_0 direction (classical SIR threshold R_0=1, Kermack &
 McKendrick 1927):
@@ -7,11 +7,8 @@ McKendrick 1927):
   decay   -- R_0 < growth_min_r0
   dormant -- fit did not produce a usable R_0 (no convergence, or missing)
 
-The prior five-stage scheme (pre_emergence / early_spread / peak / decay /
-dormant) used researcher-set count and window thresholds with no literature
-anchor and was removed by ADR-019. "Newly emerging" is now a 4-week recency
-filter on the dashboard, not a stage. The CI width on R_0 is the honest
-signal of fit reliability.
+"Newly emerging" is a dashboard recency filter (4 weeks), separate from stage
+classification. The credible-interval width on R_0 indicates fit reliability.
 """
 from __future__ import annotations
 

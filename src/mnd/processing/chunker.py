@@ -1,4 +1,4 @@
-"""Document chunker (ADR-019).
+"""Document chunker.
 
 Splits documents into overlapping chunks that fit within the embedding model's
 context window. Anchored to the BEIR retrieval-evaluation convention (Thakur
@@ -7,8 +7,7 @@ standard 10-20% band (LangChain/LlamaIndex library defaults).
 
 Uses the embedding model's own tokenizer (Qwen3 SentencePiece) so chunk size in
 tokens maps 1:1 to the model's effective sequence length. Documents that fit
-within the chunk window produce a single chunk; no word-count gate (the prior
->2000-word rule from ADR-008 had no published anchor and is removed by ADR-019).
+within the chunk window produce a single chunk; there is no word-count gate.
 
 Input:  pandas DataFrame matching the Article schema (article_id, body, title,
         word_count, source_id, published_at, ...).

@@ -1,6 +1,6 @@
 """FRED (Federal Reserve Economic Data) validation-data fetcher.
 
-This is NOT an article ingestor — it pulls macro time series used to
+This is not an article ingestor — it pulls macro time series used to
 validate narrative life-cycles against actual macroeconomic outcomes
 (plan §10.4). Series IDs below correspond to the validation outcomes
 referenced in the project plan.

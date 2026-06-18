@@ -1,14 +1,14 @@
-"""Corpus-base-rate volume normalization for the dynamics layer (ADR-045).
+"""Corpus-base-rate volume normalization for the dynamics layer.
 
 Raw weekly/daily article counts confound a narrative's true spread with corpus
 growth: the embedded corpus has more active sources and higher publishing
 cadence in 2024 than in 2013, so a recent narrative sits on a larger denominator
-of total discourse and its raw count overstates its reach. ADR-045 normalizes
-this away with a single, global, whole-corpus base rate, expressed back in count
-units so the existing PyMC priors (which are in article-count units) stay valid.
+of total discourse and its raw count overstates its reach. This is normalized
+away with a single, global, whole-corpus base rate, expressed back in count
+units so the PyMC priors (which are in article-count units) stay valid.
 
 For each day d:
-  N(d)   = unique articles published that day across the ENTIRE embedded corpus
+  N(d)   = unique articles published that day across the entire embedded corpus
            (all clusters, including the BERTopic outlier bucket and out-of-scope
            clusters — the base of *all* discourse, not just in-scope macro).
   N̄(d)  = centered rolling mean of N over `smoothing_window_days` (kills the
@@ -18,11 +18,9 @@ For each day d:
            = the count cluster c would have if the corpus were always at its
              average daily size. adj_c(d) = 0 where N̄(d) == 0.
 
-The original RavenPack denominator (ADR-008) is gone — RavenPack/WRDS was removed
-in ADR-016. The `above_threshold` count gate is gone too: it conflicts with
-ADR-019's report-don't-gate stance (a low-volume cluster gets a fit with a wide
-credible interval, which is the honest signal). `compute_source_contamination`
-is retained as a diagnostic.
+Every cluster is fit; there is no count gate, so a low-volume cluster receives a
+fit with a correspondingly wide credible interval. `compute_source_contamination`
+is provided as a diagnostic.
 """
 from __future__ import annotations
 
@@ -104,7 +102,7 @@ def adjusted_cluster_volumes(
 
     Computes the global base rate from the whole frame (unless one is supplied),
     then for each cluster returns ``adj_c(d) = c(d) / N̄(d) * N̄_mean`` over the
-    cluster's OWN active span (min→max day it has articles, reindexed daily and
+    cluster's own active span (min→max day it has articles, reindexed daily and
     0-filled). Fitting each cluster on its own window — not the full 16-year
     corpus grid — keeps the lifecycle shape meaningful.
 

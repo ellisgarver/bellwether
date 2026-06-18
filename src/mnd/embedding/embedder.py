@@ -1,16 +1,9 @@
-"""Article embedding (ADR-019).
+"""Article embedding.
 
-Single embedder: Qwen3-Embedding-8B (4096-d, 32K-token context, Apache 2.0,
-instruction-aware; ADR-036, was 0.6B). Top of MTEB clustering benchmark.
-Runs on A100-40GB (gpu partition --constraint=a100); ~16 GB fp16 weights.
-
-The comparator (mpnet) look-ahead sensitivity check from ADR-011 was removed
-by ADR-019 under the "anchored or removed" principle — sensitivity checks are
-researcher-introduced robustness apparatus that the field-anchored methodology
-excludes. The negative finding from the prior look-ahead run is preserved in
-the project history as evidence, not as an active methodology element.
-
-Returns numpy arrays for downstream BERTopic compatibility.
+Single production embedder: Qwen3-Embedding-8B (4096-d, 32K-token context,
+Apache 2.0, instruction-aware). Tops the MTEB clustering benchmark. Runs on
+A100-40GB (gpu partition --constraint=a100); ~16 GB fp16 weights. Returns
+numpy arrays for downstream BERTopic compatibility.
 """
 from __future__ import annotations
 
@@ -27,7 +20,7 @@ ModelRole = Literal["primary"]
 
 
 class Embedder:
-    """Production embedder (Qwen3-Embedding-8B; ADR-036).
+    """Production embedder (Qwen3-Embedding-8B).
 
     Use ``Embedder.from_config()`` to instantiate from project config.
     """
@@ -56,16 +49,14 @@ class Embedder:
 
     @classmethod
     def from_config(cls, role: ModelRole = "primary") -> "Embedder":
-        """Construct from `config.embedding.primary`. The role parameter is
-        retained for backwards compatibility but only ``"primary"`` is valid
-        after ADR-019 removed the comparator embedder.
+        """Construct from ``config.embedding.primary``. Only the ``primary``
+        role is available.
         """
         import os
         if role != "primary":
             raise ValueError(
-                f"Embedder role {role!r} is not supported. The comparator "
-                "(mpnet) look-ahead sensitivity check was removed by ADR-019; "
-                "only 'primary' (Qwen3-Embedding-8B) is available."
+                f"Embedder role {role!r} is not supported; only 'primary' "
+                "(Qwen3-Embedding-8B) is available."
             )
         cfg = load_config()
         emb_cfg = cfg["embedding"]["primary"]

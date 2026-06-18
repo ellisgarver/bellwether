@@ -17,7 +17,7 @@ The methodological rationale:
     AEA's own descriptions as classifier prototypes and applying them at
     the cluster level (where there's enough content to support a robust
     classification) is symmetric across sources, free of researcher
-    keyword choices, and uses the SAME embedding space as the clustering
+    keyword choices, and uses the same embedding space as the clustering
     itself.
 
 Public surface:
@@ -174,7 +174,7 @@ JEL_CODE_DESCRIPTIONS: dict[str, str] = {
 
 # Macro-finance scope per ADR-020. Clusters whose primary JEL code is in this
 # set are retained for SIR/logistic dynamics analysis. Out-of-scope clusters
-# are reported but excluded from fitting — they are NOT dropped from the
+# are reported but excluded from fitting — they are not dropped from the
 # embedded corpus.
 DEFAULT_MACRO_JEL_SCOPE: frozenset[str] = frozenset({"E", "F", "G", "H"})
 

@@ -1,11 +1,7 @@
 """Weekly cluster volume aggregation + 7-day centered moving average.
 
-ADR-019: the source-stratified-then-summed smoothing scheme from earlier
-versions (institutional / academic / journalism tiers smoothed separately)
-was removed -- the tier partition had no literature anchor and added
-researcher-introduced complexity. Smoothing is now a simple 7-day centered
-moving average on the combined weekly volume (Shumway & Stoffer for the
-natural weekly cycle in daily count data).
+Smoothing is a simple 7-day centered moving average on the combined weekly
+volume (Shumway & Stoffer, for the natural weekly cycle in daily count data).
 
 Output columns:
   week_start      date

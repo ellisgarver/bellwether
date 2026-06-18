@@ -1,7 +1,7 @@
-"""Pure functions for the narrative-dynamics lenses (ADR-019, ADR-039).
+"""Pure functions for the narrative-dynamics lenses.
 
-Four lenses, shown side by side rather than selected by AICc (ADR-039) -- each
-answers a different question about the same volume curve:
+Four lenses, shown side by side -- each answers a different question about the
+same volume curve:
   1. Logistic  f(t) = L / (1 + exp(-k * (t - t0)))  -- Verhulst 1838 / 3 params
                  "how fast did it take off, and where did it level off?"
   2. SIR       dS/dt = -beta*S*I/N, dI/dt = beta*S*I/N - gamma*I
@@ -12,14 +12,14 @@ answers a different question about the same volume curve:
   4. shape-facts -- model-free descriptive statistics off the smoothed curve
                  "how big, how fast, how long, how many comebacks?"
 
-Gompertz (1825, biological) and bare exponential have no narrative-economics
-anchor and were removed by ADR-019 -- SIR's early phase already approximates
-exponential growth, so adding a separate exponential model is redundant.
+Gompertz (1825, biological) and bare exponential are not included: neither has
+a narrative-economics anchor, and SIR's early phase already approximates
+exponential growth, so a separate exponential model would be redundant.
 
 All curve functions take a float64 time array (days since first article) and
 return predicted article volume. They are pure numpy/scipy and are used:
   - by fitting.py for point-estimate log-likelihoods (AICc computation)
-  - by stages/classify.py for R_0 calculations (SIR R_0, ADR-039)
+  - by stages/classify.py for SIR R_0 calculations
   - directly in unit tests
 """
 from __future__ import annotations
