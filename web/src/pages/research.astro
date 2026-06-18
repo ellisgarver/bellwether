@@ -14,18 +14,17 @@ const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
     <p class="eyebrow">the goal</p>
     <h2>a tool for reading the recent past</h2>
     <p>
-      built as an educational and historical-analysis tool,
-      walk back through fifteen years of macro-financial discourse and watch how
-      specific stories — the 2013 taper tantrum, the transitory-inflation debate,
-      the 2023 soft-landing turn — emerged, took hold, peaked and faded, in the
-      words of the institutions that shaped them. or just keep an eye out for how the most
-      recent stories are turning out.
+      an educational and historical-analysis tool spanning fifteen years of
+      macro-financial discourse: how specific stories — the 2013 taper tantrum,
+      the transitory-inflation debate, the 2023 soft-landing turn — emerged, took
+      hold, peaked, and faded, in the words of the institutions that shaped them,
+      alongside how the most recent stories are unfolding.
     </p>
     <p>
-      the aim is to make an abstract idea more concrete. Shiller's claim that narratives
-      spread like contagions is easy to state and hard to feel. here you can see the
-      curve, switch the lens, line it up against the markets, and judge the analogy
-      for yourself. free and reproducible.
+      the aim is to make an abstract idea concrete. Shiller's claim that narratives
+      spread like contagions is easy to state and hard to see. the tool renders the
+      volume curve, switches the analytical lens, and aligns each narrative against
+      market series for direct comparison.
     </p>
   </section>
 
@@ -60,33 +59,28 @@ const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
       presidential address; 2019 book): economic stories spread through a population
       the way contagious diseases do — a story is "caught" from exposure, carried for
       a while, and eventually dropped, and its prevalence over time traces the same
-      rise-and-fall shape as an outbreak. this project seeks to quantify that analogy.
+      rise-and-fall shape as an outbreak. this project quantifies that analogy.
     </p>
     <p>
       Shiller maps cleanly onto SIR compartments: people who have not yet
       encountered a story are <em>susceptible</em>, those actively repeating it are
       <em>infected</em>, and those who have moved on are <em>recovered</em>. the same
-      mechanics that determine whether a disease takes off also determine whether a story does. specifically,
-      we measure the lifecycle half of Shiller's claim —
-      emergence, growth, peak, decay — using century-old models economists
-      and epidemiologists share, applied to the volume of institutional
-      macro writing rather than to surveys or social media.
+      mechanics that determine whether a disease takes off also determine whether a
+      story does. this project measures the lifecycle half of Shiller's claim —
+      emergence, growth, peak, decay — using century-old models economists and
+      epidemiologists share, applied to the volume of institutional macro writing.
     </p>
   </section>
 
   <section class="section reveal">
     <p class="eyebrow">the grounding</p>
-    <h2>field-standard, not hand-tuned</h2>
+    <h2>field-standard parameters</h2>
     <p>
-      results are credible because nothing is tuned
-      to make the output look better. every parameter in the pipeline is either a
-      published library default or a value taken from the primary literature with a
-      citation; all of them live in a single configuration file, and every random
-      step flows from one fixed seed. where no field-accepted anchor existed, that
-      knob was removed rather than guessed or predicted. there are no sensitivity
-      sweeps, no thresholds nudged toward a nicer-looking chart, and crucially,
-      nothing is ever adjusted to improve how well the system recovers known
-      events. with no train/test split, the no-tuning rule keeps the exercise honest.
+      every parameter in the pipeline is a published library default or a value
+      taken from the primary literature with a citation. all of them live in a
+      single configuration file, and every random step flows from one fixed seed.
+      where no field-accepted anchor exists, the parameter is removed. no parameter
+      is adjusted to change how well the system recovers known events.
     </p>
     <p>
       those known events are a fixed set of ten documented narratives — the 2023
@@ -97,8 +91,8 @@ const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
     </p>
     <p>
       the press and markets overlays on each narrative are display and validation
-      only. neither is ever an input to the embedding, the clustering, or the
-      curve fits — they sit alongside the result, never inside it.
+      only. neither is an input to the embedding, the clustering, or the curve
+      fits.
     </p>
     <p class="muted">
       see the full methodology, with citations in
