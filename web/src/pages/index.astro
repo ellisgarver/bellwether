@@ -38,11 +38,11 @@ const curves = [
     <p class="eyebrow reveal">ellis garver · macro narrative dynamics</p>
     <h1 class="hero-title reveal">stories spread like epidemics.</h1>
     <p class="hero-thesis reveal">
-      the US macro-finance world develops theme-stories, and those stories rise and
-      fade in quantifiable waves. this project reads the institutional and academic
-      records — the Fed, IMF, BIS, NBER and their peers — clusters them into
-      narratives, and analyzes each similarly to how epidemiologists analyze
-      outbreaks.
+      U.S. macro-finance discourse develops recurring theme-stories, and those
+      stories rise and fade in quantifiable waves. this project reads the
+      institutional and academic record — the Fed, IMF, BIS, NBER and their peers —
+      clusters it into narratives, and analyzes each with the models epidemiologists
+      use for outbreaks.
     </p>
     <div class="hero-stats reveal">
       <div><span class="num">{index.n_narratives}</span><span class="lbl">narratives</span></div>
@@ -70,11 +70,12 @@ const curves = [
       <p class="eyebrow reveal">the landscape</p>
       <h2 class="reveal">every narrative, mapped by attributes</h2>
       <p class="caption reveal">
-        each point is one narrative; nearby points read about similar things. color
-        is the life-cycle — <span style="color:var(--growth)">growing</span>,
+        each point is one narrative; nearby points cover similar topics. color is
+        the life-cycle — <span style="color:var(--growth)">growing</span>,
         <span style="color:var(--decay)">fading</span>,
         <span style="color:var(--dormant)">dormant</span> — shape is the JEL field,
-        size is how much was written. pinch/scroll to zoom, drag to orbit, click to open.
+        and size is the volume written. drag orbits, scroll zooms, and a click
+        opens the narrative.
       </p>
       <div id="map" class="map3d reveal" data-base={base}></div>
       <script id="map-data" type="application/json" set:html={JSON.stringify(entries)}></script>

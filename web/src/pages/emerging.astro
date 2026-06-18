@@ -45,9 +45,9 @@ const sparks: Record<number, number[]> = Object.fromEntries(
   <p class="eyebrow reveal">the frontier</p>
   <h1 class="reveal">emerging narratives</h1>
   <p class="lede reveal">
-    the freshest threads — narratives whose onset falls within four weeks of the
-    corpus frontier. note that emerging classification is a recency flag, not a distinct stage: a narrative here can
-    already be growing or fading. fastest first.
+    narratives whose onset falls within four weeks of the corpus frontier.
+    emerging marks recency: a narrative here may already be growing or fading.
+    ordered fastest first.
   </p>
 
   {emerging.length > 0 ? (
@@ -71,7 +71,7 @@ const sparks: Record<number, number[]> = Object.fromEntries(
       <p id="empty" class="muted hidden">no narratives match that filter.</p>
     </>
   ) : (
-    <p class="muted reveal">nothing is within the emerging window for this corpus build.</p>
+    <p class="muted reveal">no narratives fall within the emerging window.</p>
   )}
 
   <script>

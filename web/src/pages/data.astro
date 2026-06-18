@@ -59,8 +59,8 @@ const jelBars = [...jelTotals.entries()]
   }))
   .sort((a, b) => b.articles - a.articles);
 
-// the basis set (ADR-020): one row per independent dimension of U.S. macro
-// discourse, with the source(s) covering it.
+// the basis set: one row per independent dimension of U.S. macro discourse,
+// with the source(s) covering it.
 const sources: [string, string][] = [
   [
     "U.S. monetary authority",
@@ -117,8 +117,7 @@ const stats: [string, string][] = [
   <p class="eyebrow reveal">the data</p>
   <h1 class="reveal">the corpus behind the tool</h1>
   <p class="lede reveal">
-    a fixed, complete body of institutional and academic
-    macro writing. here's the breakdown:
+    a fixed, complete body of institutional and academic macro writing.
   </p>
 
   <div class="stat-row reveal">
@@ -131,10 +130,11 @@ const stats: [string, string][] = [
     <p class="eyebrow">the sources</p>
     <h2>where the words come from</h2>
     <p>
-      the source set is fixed. it is purposefully built as a basis set: the smallest group of
-      sources that covers every independent dimension of U.S. macro discourse, with
-      nothing redundant. these are the upstream sources, narratives from
-      policymakers, researchers and analysts. eight independent discourse dimensions plus a cross-cutting Q&A register, twelve active feeds, each with varying data types — open a row for the underlying series:
+      the source set is fixed: a basis set covering every independent dimension of
+      U.S. macro discourse — the upstream writing of policymakers, researchers, and
+      analysts. eight discourse dimensions plus a cross-cutting Q&A register, across
+      twelve active feeds, each carrying several document types. open a row for the
+      underlying series:
     </p>
     <div class="feeds">
       {sources.map(([dim, src], i) => (
@@ -157,7 +157,8 @@ const stats: [string, string][] = [
       decided later, in clustering.
     </p>
     <p class="muted">
-      financial press itself (WSJ, Bloomberg, FT, etc) is downstream, its text is not ingested; but its volume is tracked separately as an overlay.
+      the financial press itself (WSJ, Bloomberg, FT, and the like) is downstream:
+      its text is not ingested. its volume is tracked separately as an overlay.
     </p>
   </section>
 

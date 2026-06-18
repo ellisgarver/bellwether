@@ -12,7 +12,8 @@ const example =
   <p class="eyebrow reveal">the guide</p>
   <h1 class="reveal">how the tool works</h1>
   <p class="lede reveal">
-    the tool's pipeline from institutional writing to narratives to analysis made readable.
+    how the pipeline turns institutional writing into clustered narratives and
+    lifecycle analysis.
   </p>
 
   <section class="section reveal">
@@ -77,7 +78,7 @@ const example =
     <p>
       each article is split into passages of roughly 512 tokens or less — the
       retrieval unit from the BEIR benchmark — so long reports are read in
-      coherent pieces not averaged into mush. each passage is transformed into
+      coherent pieces. each passage is transformed into
       a vector by a sentence-embedding model — Qwen3-Embedding-8B, 4,096 numbers
       per passage — where geometric closeness mimics semantic closeness: two
       passages with the same argument land near each other.
@@ -152,11 +153,10 @@ const example =
       </div>
     </div>
     <p>
-      each fit is done with Bayesian inference (PyMC). instead of a single
-      best-guess parameter, the fit returns a posterior distribution, so every
-      estimate additionally carries a confidence interval. the lenses are
-      compared with AICc, a small-sample penalised likelihood — providing a
-      diagnostic of which lens fits best but does not rule out any narrative as a valid progression.
+      each fit is done with Bayesian inference (PyMC): the fit returns a posterior
+      distribution, so every estimate carries a confidence interval. the lenses are
+      compared with AICc, a small-sample penalised likelihood, as a diagnostic of
+      which lens fits best; all four fits remain available for every narrative.
     </p>
     <p>the number borrowed from epidemiology is R₀, the reproduction number, and it does the staging:</p>
     <ul class="r0">
@@ -172,33 +172,34 @@ const example =
     <p>
       take <a href={`${base}/narratives/${example.cluster_id}`}>{example.label}</a> for example. the
       bars are its weekly article volume, and the line is the selected lens, switched
-      via tabs. the press overlay shows when premium press media picked the story up,
-      usually but not strictly later than the institutional sources. the markets overlay compares the narrative against a standard series such as the VIX or
-      the 10-year yield. note that each overlay is rescaled onto
-      the same axis as the volume bars to compare directional rise and fall, timing, and magnitude of change.
+      via tabs. the press overlay marks when broad-press coverage of the story
+      appeared, alongside the institutional timing. the markets overlay compares the
+      narrative against a standard series such as the VIX or the 10-year yield. each
+      overlay is rescaled onto the same axis as the volume bars to compare direction,
+      timing, and magnitude of change.
     </p>
     <p>
-      underneath sits two bidirectional Granger causality tests:
-      it sweeps over a range of lags and checks, in both directions, to observe whether past
-      values of one series help predict the other better than the series predicts
-      itself, and reports the lag with the strongest signal. this provides a statement about
-      temporal precedence — whether discourse moved before or after the market and before or after broad/premium press.
-      crucially, a story can lead a market even without driving it. also note that one lag = 1 week, 
-      lags range from 1-4.
+      underneath sit two bidirectional Granger causality tests. each sweeps over a
+      range of lags and checks, in both directions, whether past values of one
+      series help predict the other better than the series predicts itself, and
+      reports the lag with the strongest signal — a statement about temporal
+      precedence, whether discourse moved before or after the market and before or
+      after the press. one lag is one week; lags range from one to four.
     </p>
     <p class="muted">
-      further, a caution on both lead-lag readouts: Granger precedence is timing, not cause,
-      and each narrative undergoes one test among many — at the thresholds some
-      &ldquo;significant&rdquo; verdicts will turn up purely by chance. narratives with too few weeks of market overlap,
-      or press coverage that only begins around 2017 via Media Cloud, report &ldquo;insufficient
+      Granger precedence measures timing, not cause. each narrative runs one test
+      among many, so at the stated thresholds some &ldquo;significant&rdquo; verdicts
+      arise by chance. narratives with too few weeks of market overlap, or press
+      coverage that begins around 2017 with Media Cloud, report &ldquo;insufficient
       data&rdquo;.
     </p>
     <p>
-      top articles for each narrative are provided for context. the similar-narratives list ranks neighbours by three complementary measures:
-      semantic closeness (cosine distance between cluster centers in embedding
-      space), lexical overlap (shared distinctive terms), and a correlation of the
-      two volume curves over time. a narrative that is close on all three is considered near
-      sibling.
+      top articles for each narrative are listed for context. the
+      similar-narratives list ranks neighbours by three measures: semantic
+      closeness (cosine distance between cluster centers in embedding space),
+      lexical overlap (shared distinctive terms), and the correlation of the two
+      volume curves over time. a narrative that scores high on all three ranks as
+      a close neighbour.
     </p>
   </section>
 </Base>
