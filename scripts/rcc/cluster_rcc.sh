@@ -32,7 +32,7 @@
 #SBATCH --account=pi-dachxiu
 #SBATCH --partition=caslake
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --mem=128G
 #SBATCH --time=08:00:00
 #SBATCH --output=logs/cluster_rcc_%j.log
 #SBATCH --mail-type=END,FAIL
