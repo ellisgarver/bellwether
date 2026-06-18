@@ -59,17 +59,17 @@ Ingestion is content-neutral: every article from every active source enters the 
 Two operations:
 
 1. Restrict to publication dates in [2010-01-01, present].
-2. Remove near-duplicates within rolling 48-hour windows by MinHash over character 5-grams at a Jaccard threshold of 0.85 (Broder 1997; Henzinger 2006).
+2. Remove near-duplicates across the full corpus by MinHash over character 5-grams at a Jaccard threshold of 0.85 (Broder 1997; Henzinger 2006).
 
 The basis-set source selection is the only macro-scope constraint applied at ingest. Topical relevance is assigned after clustering by the JEL classifier (Stage 5b), using the AEA's published taxonomy applied uniformly across sources.
 
 ### Stage 3 — Chunking
 
-Documents within the embedding model's 512-token window pass through unchanged. Longer documents — FOMC minutes (~12,000 words), BIS Quarterly Review articles (~6,000 words), IMF flagship chapters (~8,000 words) — are split into 512-token chunks with ~64-token overlap. A long document carries several distinct narratives — staff outlook, participants' inflation views, forward-guidance discussion — and chunking gives each its own embedding instead of averaging them into one vector. The 512-token unit follows the BEIR benchmark (Thakur et al. 2021, NeurIPS), which uses the first 512 word-pieces of every document across all its datasets.
+Documents shorter than 512 tokens pass through unchanged. Longer documents — FOMC minutes (~12,000 words), BIS Quarterly Review articles (~6,000 words), IMF flagship chapters (~8,000 words) — are split into 512-token chunks with ~64-token overlap. A long document carries several distinct narratives — staff outlook, participants' inflation views, forward-guidance discussion — and chunking gives each its own embedding instead of averaging them into one vector. The 512-token unit follows the BEIR benchmark (Thakur et al. 2021, NeurIPS), which uses the first 512 word-pieces of every document across all its datasets.
 
 ### Stage 4 — Embedding
 
-Each chunk is embedded with Qwen3-Embedding-8B, an open-source transformer that maps text to a 4,096-dimensional vector. Chunks about the same narrative lie close together in this space; chunks about different narratives lie far apart. The model leads the MTEB benchmark, carries an Apache 2.0 license, and accepts a 32k-token context. It is instruction-aware: each chunk is prefixed with "Represent this financial policy document for narrative clustering" to bias the vector toward semantic content over writing style.
+Each chunk is embedded with Qwen3-Embedding-8B, an open-source transformer that maps text to a 4,096-dimensional vector. Chunks about the same narrative lie close together in this space; chunks about different narratives lie far apart. The model leads the MTEB benchmark and carries an Apache 2.0 license. It is instruction-aware: each chunk is prefixed with "Represent this financial policy document for narrative clustering" to bias the vector toward semantic content over writing style.
 
 ### Stage 5 — Clustering
 
@@ -92,7 +92,7 @@ Each cluster is assigned a primary JEL code from the American Economic Associati
 3. Embed the cluster terms and the JEL descriptions in the same Qwen3 space used for clustering.
 4. Assign the JEL code whose description is the nearest cosine neighbor.
 
-Clusters whose primary code falls in the macro-finance scope — E (macroeconomics and monetary), F (international), G (financial), H (public economics, including fiscal H6) — proceed to dynamics fitting (Stages 6–8). Clusters outside that scope are reported with their JEL label and held out of dynamics fitting; the full clustering output is retained for diagnostics and replication.
+Every non-noise cluster proceeds to dynamics fitting (Stages 6–8); the JEL code is a per-narrative display flag, not a gate. Clusters whose primary code falls in the macro-finance scope — E (macroeconomics and monetary), F (international), G (financial), H (public economics, including fiscal H6) — are marked in-scope. Clusters outside that scope carry their JEL label rather than being dropped, and are fit, staged, and shown alongside the rest.
 
 The taxonomy is external and unedited: the AEA maintains it and uses it to classify journal submissions. The classifier embeds the AEA's own descriptions and assigns by cosine similarity — the operation that produced the clusters — with no intermediate keyword choices. The {E, F, G, H} scope is the standard macro-finance mapping. Running the classifier after clustering uses cluster-level content (typically 100–1,000 documents and their c-TF-IDF terms), which carries more signal than a single article's title and body, and keeps the embedding and clustering steps independent of any topic taxonomy.
 
@@ -107,11 +107,11 @@ Each narrative cluster yields two weekly volume series.
 
 The two series support cross-validation and lead-lag reading. A narrative present in both institutional discourse and the press is corroborated across both; institutional volume without press volume marks a procedural artifact; press volume without institutional discourse is downstream of the corpus and outside scope. Institutional discourse typically leads the press by days to weeks, and plotting both on one axis shows the offset directly.
 
-Media Cloud is a volume signal only; its text never enters embedding or clustering. Each series is smoothed with a 7-day centered moving average to remove the weekend drop in daily output (Shumway & Stoffer).
+Media Cloud is a volume signal only; its text never enters embedding or clustering. The institutional series is smoothed with a 7-day centered moving average to remove the weekend drop in daily output (Shumway & Stoffer); the press series is shown as reported.
 
 ### Stage 7 — Dynamics fitting
 
-Each cluster that clears the minimum cumulative-volume and sustained-rate gates set in the configuration is fit on its smoothed weekly institutional curve by four lenses, reported side by side:
+Each non-noise cluster is fit on its smoothed weekly institutional curve by four lenses, reported side by side:
 
 - **Logistic curve** (Verhulst 1838) — S-shaped growth to saturation; carrying capacity *L*, growth rate *k*, midpoint *t₀*.
 - **SIR model** (Kermack & McKendrick 1927) — Susceptible, Infected, and Recovered compartments with transmission rate β and recovery rate γ, giving R₀ = β/γ (R₀ > 1 spreading, R₀ < 1 fading).
@@ -122,14 +122,13 @@ The parametric fits use Bayesian inference (PyMC) with weakly-informative priors
 
 ### Stage 8 — Stage classification
 
-Each fitted narrative receives one of four lifecycle stages from the SIR R₀ posterior and basic volume:
+Each fitted narrative receives one of three lifecycle stages from the SIR R₀ posterior:
 
-- **Pre-emergence** — too little volume for a reliable fit; descriptive statistics only.
-- **Growth** — R₀ > 1; spreading.
+- **Growth** — R₀ ≥ 1; spreading.
 - **Decay** — R₀ < 1; fading.
-- **Dormant** — past peak by months, with low residual volume.
+- **Dormant** — the fit did not produce a usable R₀ (no convergence, or none returned).
 
-The R₀ = 1 boundary is the classical epidemic threshold (Kermack & McKendrick 1927).
+The R₀ = 1 boundary is the classical epidemic threshold (Kermack & McKendrick 1927). "Newly emerging" is a separate dashboard recency filter — narratives active within the trailing four weeks — and does not enter stage classification.
 
 ---
 
@@ -137,7 +136,7 @@ The R₀ = 1 boundary is the classical epidemic threshold (Kermack & McKendrick 
 
 A fixed set of ten anchor narratives spans 2010–2023, each with a documented ignition date and primary-source citation: SVB collapse (2023-03-09), COVID market crash (2020-02-24), Brexit aftermath (2016-06-24), the transitory-inflation debate (2021-Q2), Credit Suisse stress (2023-03-15), regional banking contagion (2023-03-13), the 2022 inflation peak (Q2–Q3), soft-landing emergence (2023-Q3–Q4), the 2013 taper tantrum (2013-05-22), and the 2015 China devaluation scare (2015-08-11).
 
-For each anchor, validation records whether the clustering produced a narrative whose volume spike falls within ±14 days of the documented ignition date — the event-study window of Brown & Warner (1985). The recovery rate is reported per anchor and in aggregate as a face-validity diagnostic; no pass/fail threshold is applied to it, and it never informs the filter, the embedding, the clustering, or any hyperparameter.
+For each anchor, validation collects the articles published within ±14 days of the documented ignition date — the event-study window of Brown & Warner (1985) — and records whether at least half of them land in a single non-noise cluster. The recovery rate is reported per anchor and in aggregate as a face-validity diagnostic; no pass/fail threshold is applied to it, and it never informs the filter, the embedding, the clustering, or any hyperparameter.
 
 ---
 
@@ -162,13 +161,13 @@ The rules below govern every parameter choice.
 1. **Anchored or removed.** Each value is a published library default (cited), a primary-literature value (cited), or absent because no field-accepted anchor exists.
 2. **Single field-accepted values.** Each parameter is fixed at one field-accepted value; the pipeline runs no sensitivity sweeps.
 3. **Reported, not gated.** Diagnostics — anchor recovery rate, clustering NMI, fit R², R₀ interval width, AICc — are reported for the reader to judge; none is a pass/fail gate.
-4. **One topical filter, applied after clustering.** The post-clustering JEL classifier (`jel_classifier.py`) assigns each cluster to its nearest AEA prototype and holds clusters outside {E, F, G, H} out of dynamics fitting. The only ingest-time filters are the 2010-present window and URL/content dedup.
+4. **Scope assigned after clustering, never gated.** The post-clustering JEL classifier (`jel_classifier.py`) assigns each cluster to its nearest AEA prototype; the resulting code is a per-narrative display flag, so clusters outside {E, F, G, H} are labeled rather than dropped. The only ingest-time filters are the 2010-present window and URL/content dedup.
 5. **Single clustering granularity.** The pipeline reports BERTopic's default output without hierarchical merging.
 6. **Anchors validate only.** They never influence the filter, the embedding, the clustering, or any hyperparameter.
 7. **Field-standard taxonomies.** The JEL classification anchors topical scope; the BEIR convention anchors chunk size; BERTopic defaults anchor the clustering.
 8. **Abandoned components are deleted.** Retired ingestors, code paths, and configuration are removed from the pipeline, not retained inactive.
 9. **Full corpus, no split, no pre-registration.** No parameter is tuned, and none is tuned toward anchor recovery, so there is no train-fitted quantity for a held-out boundary to test; the pipeline runs over the full 2010-present corpus without a temporal split or a registered analysis plan. Credibility rests on principles 1–8.
-10. **Four dynamics lenses.** Every in-scope cluster is fit by the logistic, SIR, and Bass models alongside model-free shape facts, reported side by side; stage classification keys off the SIR R₀ posterior.
+10. **Four dynamics lenses.** Every non-noise cluster is fit by the logistic, SIR, and Bass models alongside model-free shape facts, reported side by side; stage classification keys off the SIR R₀ posterior.
 
 ---
 

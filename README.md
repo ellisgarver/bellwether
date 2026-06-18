@@ -61,7 +61,7 @@ primary literature. The full citation list and rationale lives in
 | Choice | Value | Anchor |
 |---|---|---|
 | Embedding model | `Qwen/Qwen3-Embedding-8B` (4096-d, instruction-aware) on RCC A100; `Qwen3-Embedding-0.6B` (1024-d) local-MPS fallback | MTEB benchmark; Apache 2.0 |
-| Embedding context | 1024 tokens (RCC) / 512 tokens (local MPS) | Hardware constraint |
+| Max sequence length | 1024 tokens (RCC) / 512 tokens (local MPS) | Hardware constraint |
 | Document chunking | 512 Qwen3 tokens, ~64-token overlap | Thakur et al. 2021 *BEIR* (NeurIPS) |
 | Scope filter | None pre-clustering; post-cluster JEL classification flags out-of-scope clusters (JEL ∉ {E,F,G,H}) without dropping them | AEA JEL Classification System |
 | Clustering | BERTopic with library defaults (UMAP + HDBSCAN + c-TF-IDF) | Grootendorst 2022 |
@@ -69,7 +69,7 @@ primary literature. The full citation list and rationale lives in
 | Dynamics models | SIR, logistic, Bass, model-free shape facts | Kermack & McKendrick 1927; Verhulst 1838; Bass 1969 |
 | Smoothing window | 7-day centered moving average | Shumway & Stoffer (weekly cycle for daily counts) |
 | Bayesian priors | Weakly informative, anchored to epidemic-modeling conventions | Bjørnstad 2018; Gelman et al. *BDA3* |
-| Stage classification | 4 stages keyed to R₀ direction | Kermack & McKendrick 1927 (R₀=1 epidemic threshold) |
+| Stage classification | 3 stages (growth / decay / dormant) keyed to R₀ direction | Kermack & McKendrick 1927 (R₀=1 epidemic threshold) |
 | Anchor tolerance | ±14 days | Brown & Warner 1985 (event-study convention) |
 | Bootstrap replicates | 1000 | Efron & Tibshirani 1993 |
 | Dedup | MinHash over character 5-grams, 128 permutations, Jaccard 0.85 | Broder 1997; Henzinger 2006 |
