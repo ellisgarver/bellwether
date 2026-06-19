@@ -10,15 +10,16 @@ references and supersedes the old one.
 
 ADRs are append-only history. This index is the fast path: it shows which
 decisions are still live. The **current methodology lock-in is ADR-019 +
-ADR-020**, as amended by ADR-039 (four dynamics lenses) and ADR-040 (no held-out
-split, no formal pre-registration). Cite these plus the per-source ADRs they
+ADR-020**, as amended by ADR-039 (four dynamics lenses), ADR-040 (no held-out
+split, no formal pre-registration), and ADR-052 (model-free attention-trajectory
+staging — SIR is a lens, not the law). Cite these plus the per-source ADRs they
 reference; credibility rests on field-anchored values + no hand-tuning (ADR-040),
 not a registered plan. Bodies below are preserved verbatim for that defense.
 
 | ADR | Decision | Status |
 |---|---|---|
 | 001 | Two-model embedding (Qwen3 primary + mpnet comparator) | Live (as amended by 011) |
-| 002 | Logistic growth as MVP fallback for SIR | Live |
+| 002 | Logistic growth as MVP fallback for SIR | Live as a lens (039); R₀-staging clause superseded by 052 |
 | 003 | Streamlit for the dashboard | Superseded by 043 (static Astro/GH Pages) |
 | 004 | GDELT as discovery layer only | Superseded by 005 |
 | 005 | Wayback CDX replaces GDELT discovery | Superseded by 010/020 (basis-set ingestors) |
@@ -68,6 +69,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 049 | **Dashboard artifact contract align-up: producers emit `r0_median` + R₀ interval + threshold in `stage_detail`; `shape_facts` keys renamed to the front-end's; undefined R₀ peak/min row dropped** | Live (relates 039/043/047) |
 | 050 | **Incremental embedding cache — `(chunk_id, text_sha1)` sidecar lets `embed` reuse vectors and re-encode only new/changed chunks; full rebuild still re-embeds all** | Live (relates 036/016/030) |
 | 051 | **Fit/display floor — only clusters with ≥ `min_articles_to_fit` (42) unique articles are fit, staged, and surfaced; all clusters stay in `clusters.parquet`, total reported on the data page. Map edges are focus-lit on hover, not static.** | Live (amends 046; relates 019/040/044) |
+| 052 | **Lifecycle stage is a model-free attention-trajectory classification (Mann–Kendall trend + Mann–Whitney level); growth/stable/decay/dormant + emerging flag; fitted lenses are display-only; reframe — Shiller/SIR is a lens, not the law** | Live (supersedes 002 staging clause + 019 §E; amends 030/039) |
 
 ---
 
@@ -3825,6 +3827,133 @@ constant, not reverse-engineered from the output.
   (ADR-016), a separate layer this floor does not gate.
 - No artifact-schema break for consumers: existing fields are unchanged; two
   optional index fields are added.
+
+---
+
+## ADR-052: Lifecycle stage is a model-free attention-trajectory classification
+
+- **Status**: Accepted
+- **Date**: 2026-06-19
+
+### Context
+
+The first full-corpus `analyze` run staged 365 narratives as **253 growth /
+112 dormant / 0 decay**. Zero converging decay states is not a finding — it is a
+compound failure, and unpicking it exposed a methodology error that would survive
+the bug fix.
+
+**Proximate cause (a crash, not a result).** All 365 SIR fits raised
+`AttributeError: module 'pytensor.tensor' has no attribute 'scan'` —
+`fitting.py` calls `pt.scan(...)` where `pt = pytensor.tensor`; `scan` lives at
+`pytensor.scan`. The broad `except Exception` in `_fit_model` caught it and
+recorded each as ordinary `converged=False` (the ADR-030 fail-loud gap: a code
+error that killed *every* cluster was logged 365× as benign per-cluster
+non-convergence). Staging then fell back to logistic, whose implied
+`R_0 = 1 + k/gamma` has `k >= 0` (HalfNormal) and is therefore **structurally
+>= 1** — decay was mathematically unreachable on the fallback path. The 253
+clusters where logistic converged → growth; the 112 where it also failed →
+dormant. Zero decay was over-determined.
+
+**Deeper cause (R_0 is the wrong quantity).** Even with the crash fixed,
+keying stage to R_0 is wrong. R_0 = beta/gamma is the *basic* reproduction
+number — whether a narrative ever spread. In SIR, `R_0 > 1` is exactly what
+*produces* a rise-and-fall hump; `R_0 < 1` means the contagion never caught.
+So a risen-and-fallen narrative — the normal "faded" case — has `R_0 > 1` and
+gets mislabeled "growth." Decay is a *current-phase* statement (the effective
+`R_t` crossing below 1 at the peak), not a basic-`R_0` statement. The corpus is
+full of decline the `R_0` mapping cannot express: 357/365 rose-then-fell, the
+median narrative is 55% of its span past peak, 31% are declining over their last
+quarter.
+
+**Framing has diverged.** The project is now an educational/analysis tool
+spanning narrative identification (clustering) + trajectory dynamics +
+statistics. Shiller's narrative-economics and the SIR contagion analogy were the
+catalyst and remain a *lens*, not the organizing law.
+
+### Decision
+
+1. **Stage is model-free.** Lifecycle stage = the narrative's recent attention
+   trajectory, decided by robust non-parametric tests on the smoothed daily
+   volume series over a recent window `W`, **independent of any fitted model**.
+   "Now" = the corpus end date; `W` = the existing 4-week emerging horizon,
+   clamped to the series span.
+
+2. **Two rank-based tests over `W`:**
+   - **Trend** — modified Mann–Kendall with the Hamed–Rao (1998)
+     autocorrelation correction (the 7-day smoothing induces serial correlation
+     that would otherwise inflate the false-positive rate). Theil–Sen slope on
+     `log(1+y)` gives the robust growth-rate magnitude for display.
+   - **Level** — Mann–Whitney U comparing the recent window to the narrative's
+     own lowest-activity baseline window ("is current attention significantly
+     elevated above this narrative's floor?").
+
+3. **Four mutually-exclusive trajectory states:**
+   - **growth** — significant upward trend.
+   - **decay** — significant downward trend.
+   - **stable** — no significant trend, level elevated above the narrative's own
+     floor (sustained attention — perennial topics like debt-ceiling / Fed
+     policy that sit at steady volume).
+   - **dormant** — no significant trend, level at the floor (faded and settled,
+     or never rose).
+
+   `emerging` stays an **orthogonal recency flag** (significant upward trend
+   AND first article within `W`), layered on growth — not a fifth state. It is
+   not a distinct shape, would double a "rising" bucket, and is near-empty in a
+   static run; live emerging detection is Phase-6's Media Cloud job (ADR-016).
+   The existing `is_emerging` field already carries it.
+
+4. **Significance, not magnitude.** Both splits use a field-standard `alpha`
+   (0.05); there are **no tuned volume thresholds**, and the only horizon (`W`)
+   is reused from the emerging window. ADR-040's no-hand-tuning basis is
+   preserved and, if anything, strengthened (the old `growth_min_r0` threshold
+   no longer gates staging).
+
+5. **Fitted models are display-only lenses.** logistic / SIR / Bass (ADR-039)
+   no longer touch the stage label. `R_0` is shown as the SIR lens's headline
+   ("was it contagious?"), not the stage driver. The four-lens panel is
+   unchanged.
+
+6. **Reframe.** Stages are described as *attention trajectory*, not epidemic
+   compartments. Shiller (2017/2019) + SIR is the marquee interpretive lens, not
+   the foundation; the growth-rate ↔ `R_t` link (Wallinga & Lipsitch 2007,
+   `sign(R_t − 1) = sign(r)` regardless of the generation interval) is offered as
+   an optional connection for the curious, not the justification.
+
+7. **Fail-loud hardening (ADR-030).** A model lens that fails on *every* cluster
+   must raise, not be silently recorded as per-cluster non-convergence. Staging
+   no longer depends on a fit converging, but the lens *display* does, and a
+   100%-failure mode must never again masquerade as a result.
+
+### Consequences
+
+- **Decay becomes expressible and abundant**, matching what is plainly in the
+  data. The dormant/decay boundary is now a clean significance call —
+  significantly falling = decay; not moving + at floor = dormant — so the two
+  cannot collide.
+- **Dormant stops being polluted by fit-failure.** All 112 prior "dormant"
+  clusters were dormant *only* because logistic did not converge; under the new
+  rule dormant means "the series is quiet," a real property.
+- **Robustness dividend.** Staging no longer breaks when a sampler fails — the
+  exact failure mode that produced the zero-decay artifact would now yield a
+  broken SIR *display* but **correct stages**.
+- **New `stable` state** needs a fourth colour/label in the front end
+  (`Stage` union + `STAGE_COLOR`/`STAGE_LABEL` in `web/src/lib/data.ts` and
+  `chart.ts`), plus a methodology/UI copy pass for the reframe and an "as of
+  <generated_at>" date line for honesty.
+- **Left-censoring caveat.** A narrative already high before 2010 that stayed
+  high has no in-window floor and may read dormant — rare, accepted, and
+  consistent with "analysis is as-of the latest ingest" (the static-corpus
+  tradeoff already acknowledged in ADR-051).
+- **Dependency.** Modified Mann–Kendall is not in scipy; either add the free,
+  open `pymannkendall` (BSD — allowed under the core-pipeline free/reproducible
+  rule) or implement the Hamed–Rao correction in-repo on top of
+  `scipy.stats.kendalltau`/`theilslopes`/`mannwhitneyu`. Implementation-time
+  choice.
+- **Supersession.** Supersedes ADR-002's staging-selection clause
+  (logistic-as-SIR-fallback driving `R_0` staging) and ADR-019 §E's
+  `R_0`-threshold staging. The four-lens display (ADR-039), the corpus base-rate
+  normalization (ADR-045), and the fit/display floor (ADR-051) are unchanged.
+  Amends `src/mnd/stages/classify.py`.
 
 ---
 
