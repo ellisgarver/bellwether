@@ -124,6 +124,10 @@ export interface DashboardIndex {
   n_narratives: number;
   narratives: IndexEntry[];
   median_article_words: number | null;
+  // ADR-051: total non-noise clusters detected vs. the n_narratives surfaced
+  // (those with >= min_articles_to_fit articles). Optional — absent in sample data.
+  n_clusters_total?: number | null;
+  min_articles_to_fit?: number | null;
   schema_version: string;
 }
 

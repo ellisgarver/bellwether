@@ -103,6 +103,9 @@ const sources: [string, string][] = [
 const fmt = (n: number) => n.toLocaleString("en-US");
 const stats: [string, string][] = [
   [fmt(index.n_narratives), "narratives"],
+  ...(index.n_clusters_total
+    ? ([[fmt(index.n_clusters_total), "clusters detected"]] as [string, string][])
+    : []),
   [fmt(totalArticles), "articles"],
   ...(index.median_article_words
     ? ([[fmt(index.median_article_words), "median words / article"]] as [string, string][])

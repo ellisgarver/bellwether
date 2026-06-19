@@ -194,6 +194,11 @@ class DashboardIndex:
     # Median words per clustered article — a corpus-shape stat for the data page
     # (article-level, non-noise). None when no bodies are available to count.
     median_article_words: int | None = None
+    # Total non-noise clusters detected before the ADR-051 fit/display floor. The
+    # data page reports "<n_clusters_total> detected, <n_narratives> surfaced
+    # (>= min_articles_to_fit articles)". None for sample/partial artifacts.
+    n_clusters_total: int | None = None
+    min_articles_to_fit: int | None = None
     schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:

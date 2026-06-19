@@ -147,26 +147,46 @@ def run_analysis(
     )
 
     all_ids = sorted(c for c in adj if c != NOISE_TOPIC)
-    cluster_terms = {cid: _terms_from_topic_info(topic_info, cid)[1] for cid in all_ids}
-
-    # 2. JEL scope (ADR-020 / ADR-046). Every non-noise cluster is analyzed; the
-    # JEL label is a per-narrative flag, not a gate — out-of-scope clusters are
-    # shown with their JEL code, not dropped from dynamics (ADR-046 reverses
-    # ADR-020's "dropped from dynamics only").
-    embedder = embedder if embedder is not None else _default_embedder()
-    jel = classify_clusters(cluster_terms, embedder=embedder)
-    fit_ids = list(all_ids)
-    in_scope_n = sum(1 for cid in fit_ids if cid in jel and jel[cid].in_scope)
+    # 2. Fit/display floor (ADR-051) + JEL scope flag (ADR-046).
+    # BERTopic at the library-default min_cluster_size (ADR-019) yields thousands
+    # of micro-topics (median ~7 articles): too few points to identify a
+    # 3-parameter lifecycle curve, and far too many to navigate. Only clusters
+    # with >= dynamics.min_articles_to_fit unique articles are fit, staged, and
+    # surfaced (map/narratives/emerging/search); the rest stay in clusters.parquet
+    # and are reported as an aggregate count (n_clusters_total) but get no
+    # dynamics, map point, or search entry. Clustering is untouched — the floor is
+    # a post-clustering display/analysis selection, not a tuned hyperparameter
+    # (ADR-040 holds; fixed a priori, never adjusted to improve anchor recovery).
+    floor = int(cfg["dynamics"]["min_articles_to_fit"])
+    article_counts = (
+        clusters_df.loc[clusters_df["topic"] != NOISE_TOPIC]
+        .groupby("topic")["article_id"]
+        .nunique()
+    )
+    fit_ids = [cid for cid in all_ids if int(article_counts.get(cid, 0)) >= floor]
     log.info(
-        "JEL scope: %d/%d non-noise clusters in-scope (E/F/G/H); all %d analyzed, "
-        "out-of-scope flagged by JEL code (ADR-046)",
-        in_scope_n, len(fit_ids), len(fit_ids),
+        "Fit/display floor (ADR-051): %d of %d non-noise clusters have >=%d "
+        "articles — fitting + surfacing those; %d sub-threshold clusters retained "
+        "in clusters.parquet but not surfaced.",
+        len(fit_ids), len(all_ids), floor, len(all_ids) - len(fit_ids),
     )
     if not fit_ids:
         raise RuntimeError(
-            "No non-noise clusters to analyze — refusing to write an empty "
-            "dashboard. Check clusters.parquet and topic_info."
+            f"No clusters have >= {floor} articles — refusing to write an empty "
+            "dashboard. Lower dynamics.min_articles_to_fit or check clusters.parquet."
         )
+
+    # JEL scope is a per-narrative display flag, not a gate (ADR-046): out-of-scope
+    # narratives are shown with their code, not dropped. Computed for surfaced only.
+    cluster_terms = {cid: _terms_from_topic_info(topic_info, cid)[1] for cid in fit_ids}
+    embedder = embedder if embedder is not None else _default_embedder()
+    jel = classify_clusters(cluster_terms, embedder=embedder)
+    in_scope_n = sum(1 for cid in fit_ids if cid in jel and jel[cid].in_scope)
+    log.info(
+        "JEL scope: %d/%d surfaced narratives in-scope (E/F/G/H); out-of-scope "
+        "flagged by JEL code, not dropped (ADR-046)",
+        in_scope_n, len(fit_ids),
+    )
 
     # 3. Four-lens fit + stage on the adjusted series (ADR-039 / ADR-019).
     fitter = fitter if fitter is not None else DynamicsFitter(cfg)
@@ -205,6 +225,7 @@ def run_analysis(
         umap_xyz=umap_xyz,
         markets=markets,
         mediacloud=mediacloud,
+        n_clusters_total=len(all_ids),
         cfg=cfg,
     )
     return write_dashboard_artifacts(index, narratives, out_dir)
