@@ -67,7 +67,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 048 | **Broad-press lead-lag — bidirectional Granger between institutional discourse and Media Cloud press, beside the markets readout** | Live (amends 042; relates 041/047) |
 | 049 | **Dashboard artifact contract align-up: producers emit `r0_median` + R₀ interval + threshold in `stage_detail`; `shape_facts` keys renamed to the front-end's; undefined R₀ peak/min row dropped** | Live (relates 039/043/047) |
 | 050 | **Incremental embedding cache — `(chunk_id, text_sha1)` sidecar lets `embed` reuse vectors and re-encode only new/changed chunks; full rebuild still re-embeds all** | Live (relates 036/016/030) |
-| 051 | **Fit/display floor — only clusters with ≥ `min_articles_to_fit` (50) unique articles are fit, staged, and surfaced; all clusters stay in `clusters.parquet`, total reported on the data page** | Live (amends 046; relates 019/040/044) |
+| 051 | **Fit/display floor — only clusters with ≥ `min_articles_to_fit` (42) unique articles are fit, staged, and surfaced; all clusters stay in `clusters.parquet`, total reported on the data page. Map edges are focus-lit on hover, not static.** | Live (amends 046; relates 019/040/044) |
 
 ---
 
@@ -3746,6 +3746,10 @@ ADR, before the first delta re-ingest.
 - **Relates to**: ADR-019 (BERTopic library-default `min_cluster_size`, untouched),
   ADR-040 (credibility via no hand-tuning), ADR-044 (the narrative map this thins),
   ADR-045 (corpus base rate, still computed over the whole corpus)
+- **Revised 2026-06-19** (same day, pre-`analyze`): floor 50 → 42 (pinned to the
+  global random seed; identifiability is the binding bound, see Decision) and the
+  ADR-044 map switched to focus-lit (hover-only) edges, which removed the
+  static-hairball pressure that had argued for a larger floor.
 
 ### Context
 
@@ -3773,10 +3777,19 @@ stability/anchor-recovery metrics are the credibility basis.
 ### Decision
 
 Add a post-clustering **fit/display floor**, `dynamics.min_articles_to_fit`
-(default **50**). Only non-noise clusters with at least that many *unique articles*
+(default **42**). Only non-noise clusters with at least that many *unique articles*
 are fit, staged, and surfaced on the front end (map, narratives, emerging, search).
 Sub-threshold clusters are retained verbatim in `clusters.parquet` and counted, but
 get no dynamics, stage, map point, story card, or search entry.
+
+The floor is set by the **identifiability bound**, not navigability: the
+~10-observations-per-parameter heuristic for the 3-parameter lenses implies ~30+
+informative points before a fit means anything, so any defensible floor sits at
+~30 or above. Within that band the value is fixed by convention to the project's
+`reproducibility.global_random_seed` (**42**) — a single, non-arbitrary anchor that
+clears the bound with margin, rather than a round number chosen to hit a target
+narrative count. This keeps the choice auditable: it is pinned to an existing
+constant, not reverse-engineered from the output.
 
 - Clustering is **untouched** — `min_cluster_size` and every other BERTopic/UMAP
   parameter stay at the ADR-019 defaults; stability and anchor-recovery metrics are
@@ -3794,11 +3807,19 @@ get no dynamics, stage, map point, story card, or search entry.
 
 ### Consequences
 
-- 50 surfaces 268 narratives — a navigable map and a fast `analyze` (well within
-  12 h) — while keeping every cluster in the corpus artifact for the reported total.
+- 42 surfaces a few hundred narratives (between the measured ≥30 → 641 and
+  ≥50 → 268; the exact count is logged by `analyze` and reported on the data page) —
+  a navigable map and a fast `analyze` (well within 12 h) — while keeping every
+  cluster in the corpus artifact for the reported total.
+- Map edges no longer render statically. The ADR-044 narrative map draws each
+  node's incident `similar_edges` only while that node is hovered (focus-lit,
+  `mountMap3d` in `web/src/lib/chart.ts`), so node count no longer trades off
+  against edge-hairball density. This is why the floor is now governed purely by
+  identifiability (~30) rather than being pushed higher to keep the static graph
+  legible — the earlier rationale for a larger floor no longer binds.
 - The floor is a single config value (no hardcoding; honors the config invariant).
   Changing it is a presentation/identifiability call recorded here, not a model tune.
-- A genuinely new narrative below 50 articles will not appear in the dashboard's
+- A genuinely new narrative below 42 articles will not appear in the dashboard's
   emerging lens until it crosses the floor. That is a deliberate static-corpus
   tradeoff; Phase-6 live emerging detection runs off Media Cloud press counts
   (ADR-016), a separate layer this floor does not gate.

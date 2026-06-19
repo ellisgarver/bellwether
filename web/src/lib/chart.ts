@@ -92,29 +92,35 @@ export function mountMap3d(
   );
   const xyz = (p: any) => p.umap_xyz ?? [...(p.umap_xy ?? [0, 0]), 0];
 
-  // de-duplicated undirected edges → one line trace with null breaks
-  const seen = new Set<string>();
-  const ex: (number | null)[] = [];
-  const ey: (number | null)[] = [];
-  const ez: (number | null)[] = [];
+  // Focus-lit edges (ADR-044): hovering a node lights up only its incident
+  // edges, so the map never renders the full static hairball. Build an
+  // undirected adjacency (union of each node's top-3 and any node that lists
+  // it), de-duplicated so a reciprocal pair isn't stored twice.
+  const adj: Record<number, number[]> = {};
+  const linked = new Set<string>();
+  const link = (a: number, b: number) => {
+    (adj[a] ??= []).push(b);
+  };
   for (const p of pts) {
     for (const [nbr] of p.similar_edges ?? []) {
+      if (!byId[nbr]) continue;
       const key = [p.cluster_id, nbr].sort((a: number, b: number) => a - b).join("-");
-      if (seen.has(key) || !byId[nbr]) continue;
-      seen.add(key);
-      const a = xyz(p);
-      const b = xyz(byId[nbr]);
-      ex.push(a[0], b[0], null);
-      ey.push(a[1], b[1], null);
-      ez.push(a[2], b[2], null);
+      if (linked.has(key)) continue;
+      linked.add(key);
+      link(p.cluster_id, nbr);
+      link(nbr, p.cluster_id);
     }
   }
 
+  // Edge trace starts empty; plotly_hover fills it with the focused node's
+  // incident segments (accent blue, intentionally visible), unhover clears it.
   const edgeTrace = {
     type: "scatter3d",
     mode: "lines",
-    x: ex, y: ey, z: ez,
-    line: { color: "rgba(111,106,96,0.22)", width: 1.5 },
+    x: [] as (number | null)[],
+    y: [] as (number | null)[],
+    z: [] as (number | null)[],
+    line: { color: "rgba(58,90,147,0.55)", width: 2 },
     hoverinfo: "skip",
     showlegend: false,
   };
@@ -173,6 +179,29 @@ export function mountMap3d(
   el.on("plotly_click", (ev: any) => {
     const cd = ev.points?.[0]?.customdata;
     if (cd !== undefined) window.location.href = `${base}/narratives/${cd}`;
+  });
+
+  // Light up the hovered node's incident edges; clear on unhover. Edge trace is
+  // index 0 in the newPlot call below, so restyle targets [0].
+  el.on("plotly_hover", (ev: any) => {
+    const cid = ev.points?.[0]?.customdata;
+    const src = cid === undefined ? undefined : byId[cid];
+    if (!src) return;
+    const a = xyz(src);
+    const hx: (number | null)[] = [];
+    const hy: (number | null)[] = [];
+    const hz: (number | null)[] = [];
+    for (const nbr of adj[cid] ?? []) {
+      const b = xyz(byId[nbr]);
+      hx.push(a[0], b[0], null);
+      hy.push(a[1], b[1], null);
+      hz.push(a[2], b[2], null);
+    }
+    Plotly.restyle(el, { x: [hx], y: [hy], z: [hz] }, [0]);
+  });
+
+  el.on("plotly_unhover", () => {
+    Plotly.restyle(el, { x: [[]], y: [[]], z: [[]] }, [0]);
   });
 
   // gentle auto-orbit. Any interaction (drag/scroll/touch) pauses it; it resumes

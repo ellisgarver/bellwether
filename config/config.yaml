@@ -119,12 +119,16 @@ dynamics:
   # articles are fit, staged, and surfaced on the front end (map, narratives,
   # emerging, search). BERTopic at the library-default min_cluster_size (ADR-019)
   # yields ~7k micro-topics (median ~7 articles) — too few points to identify a
-  # 3-parameter lifecycle curve (~10 obs/parameter heuristic) and far too many to
-  # navigate. Sub-threshold clusters stay in clusters.parquet and are reported as
-  # an aggregate count (n_clusters_total); clustering is untouched, so this is a
-  # post-hoc display selection, not a tuned hyperparameter (ADR-040 holds — fixed
-  # a priori, never adjusted to improve anchor recovery).
-  min_articles_to_fit: 50
+  # 3-parameter lifecycle curve. The floor is set by the identifiability bound
+  # (~10 obs/parameter → ~30 minimum); 42 clears it with margin and is fixed by
+  # convention to the project's reproducibility.global_random_seed. The map no
+  # longer draws static edges (focus-lit on hover, ADR-044), so the binding
+  # constraint is identifiability, not on-screen clutter. Sub-threshold clusters
+  # stay in clusters.parquet and are reported as an aggregate count
+  # (n_clusters_total); clustering is untouched, so this is a post-hoc display
+  # selection, not a tuned hyperparameter (ADR-040 holds — fixed a priori, never
+  # adjusted to improve anchor recovery).
+  min_articles_to_fit: 42
   # Four lenses shown side by side, NOT selected by AICc (ADR-039). shape-facts
   # is model-free (no entry here -- always computed). Staging keys off SIR R_0,
   # logistic as fallback (ADR-002).
