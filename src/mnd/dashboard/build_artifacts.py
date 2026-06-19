@@ -211,6 +211,7 @@ def build_dashboard_artifacts(
     cfg: dict[str, Any] | None = None,
     top_k_edges: int = 3,
     generated_at: str | None = None,
+    n_clusters_total: int | None = None,
 ) -> tuple[DashboardIndex, list[NarrativeArtifact]]:
     """Assemble the dashboard index + per-narrative artifacts.
 
@@ -312,6 +313,12 @@ def build_dashboard_artifacts(
         n_narratives=len(index_rows),
         narratives=index_rows,
         median_article_words=_median_article_words(clusters_df),
+        n_clusters_total=n_clusters_total,
+        min_articles_to_fit=(
+            int(cfg["dynamics"]["min_articles_to_fit"])
+            if "min_articles_to_fit" in cfg.get("dynamics", {})
+            else None
+        ),
     )
 
     log.info(

@@ -67,6 +67,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 048 | **Broad-press lead-lag — bidirectional Granger between institutional discourse and Media Cloud press, beside the markets readout** | Live (amends 042; relates 041/047) |
 | 049 | **Dashboard artifact contract align-up: producers emit `r0_median` + R₀ interval + threshold in `stage_detail`; `shape_facts` keys renamed to the front-end's; undefined R₀ peak/min row dropped** | Live (relates 039/043/047) |
 | 050 | **Incremental embedding cache — `(chunk_id, text_sha1)` sidecar lets `embed` reuse vectors and re-encode only new/changed chunks; full rebuild still re-embeds all** | Live (relates 036/016/030) |
+| 051 | **Fit/display floor — only clusters with ≥ `min_articles_to_fit` (50) unique articles are fit, staged, and surfaced; all clusters stay in `clusters.parquet`, total reported on the data page** | Live (amends 046; relates 019/040/044) |
 
 ---
 
@@ -3731,6 +3732,78 @@ ADR, before the first delta re-ingest.
   `chunks.parquet` so the first Phase-6 delta can reuse all ~429k vectors.
 - New pure module `src/mnd/embedding/cache.py` (unit-tested without ML deps);
   `embed` gains `--full`; new `embed-index` command.
+
+---
+
+## ADR-051: Fit/display volume floor — fit and surface only clusters above an article threshold
+
+- **Status**: Accepted
+- **Date**: 2026-06-19
+- **Amends**: ADR-046 ("analyze every non-noise cluster"). The noise bucket
+  (`topic == -1`) is still the only *hard* clustering exclusion, and ADR-046's
+  rule that JEL is a display flag (not a gate) is unchanged — it now applies to
+  the surfaced set.
+- **Relates to**: ADR-019 (BERTopic library-default `min_cluster_size`, untouched),
+  ADR-040 (credibility via no hand-tuning), ADR-044 (the narrative map this thins),
+  ADR-045 (corpus base rate, still computed over the whole corpus)
+
+### Context
+
+The first full-corpus cluster run produced 7,242 non-noise BERTopic topics from
+~429k chunks at the locked, library-default `min_cluster_size=10` (ADR-019). The
+article-per-topic distribution is sharply power-law: median 7 articles, p90 27,
+max 492; only 268 topics have ≥50 articles, 79 have ≥100.
+
+Two independent problems follow, with one shared cause (too many tiny topics):
+
+1. **Identifiability.** The four lenses fit 3-parameter curves (logistic L/k/t₀,
+   Bass p/q/m, SIR β/γ/I₀) to each topic's daily volume series over its own active
+   span (ADR-045). A ~7-article topic is a near-flat series with no identifiable
+   rise/peak/decline; the standard ~10-observations-per-parameter heuristic for
+   nonlinear models implies ~30+ informative points before a fit means anything.
+   Fitting the long tail emits noise dressed as dynamics.
+2. **Presentability.** `analyze` fits PyMC for *every* topic with no floor, so the
+   long tail blows the 12 h analyze budget (3 NUTS fits × 7,242), and 7,242 nodes
+   is unnavigable on the UMAP map / narratives / emerging / search.
+
+Lowering granularity (raising `min_cluster_size`) would "fix" the count but is
+exactly the hand-tuning ADR-040 forbids — it would alter the clustering whose
+stability/anchor-recovery metrics are the credibility basis.
+
+### Decision
+
+Add a post-clustering **fit/display floor**, `dynamics.min_articles_to_fit`
+(default **50**). Only non-noise clusters with at least that many *unique articles*
+are fit, staged, and surfaced on the front end (map, narratives, emerging, search).
+Sub-threshold clusters are retained verbatim in `clusters.parquet` and counted, but
+get no dynamics, stage, map point, story card, or search entry.
+
+- Clustering is **untouched** — `min_cluster_size` and every other BERTopic/UMAP
+  parameter stay at the ADR-019 defaults; stability and anchor-recovery metrics are
+  still computed on the full clustering. The floor is a selection applied *after*
+  clustering — a property of what we can fit and usefully show, not a tuned
+  hyperparameter. It is fixed a priori on the two grounds above and is **never**
+  adjusted to improve anchor recovery (ADR-040 holds).
+- The driver (`run_analysis`) sets `fit_ids` to the ≥floor set; because
+  `build_dashboard_artifacts` emits one artifact per cluster in `dynamics`, and
+  centroids/UMAP/JEL/similar all key off `fit_ids`, restricting `fit_ids` thins the
+  entire front-end surface in one place.
+- Transparency: the index artifact carries `n_clusters_total` (all non-noise
+  clusters detected) and `min_articles_to_fit`, so the data page reports
+  "N detected, M surfaced (≥ floor articles)".
+
+### Consequences
+
+- 50 surfaces 268 narratives — a navigable map and a fast `analyze` (well within
+  12 h) — while keeping every cluster in the corpus artifact for the reported total.
+- The floor is a single config value (no hardcoding; honors the config invariant).
+  Changing it is a presentation/identifiability call recorded here, not a model tune.
+- A genuinely new narrative below 50 articles will not appear in the dashboard's
+  emerging lens until it crosses the floor. That is a deliberate static-corpus
+  tradeoff; Phase-6 live emerging detection runs off Media Cloud press counts
+  (ADR-016), a separate layer this floor does not gate.
+- No artifact-schema break for consumers: existing fields are unchanged; two
+  optional index fields are added.
 
 ---
 

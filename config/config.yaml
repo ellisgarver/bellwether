@@ -115,6 +115,16 @@ dynamics:
                                    # Natural weekly cycle for daily count data
                                    # (Shumway & Stoffer). Source-stratified
                                    # smoothing removed by ADR-019.
+  # Fit/display floor (ADR-051): only clusters with at least this many unique
+  # articles are fit, staged, and surfaced on the front end (map, narratives,
+  # emerging, search). BERTopic at the library-default min_cluster_size (ADR-019)
+  # yields ~7k micro-topics (median ~7 articles) — too few points to identify a
+  # 3-parameter lifecycle curve (~10 obs/parameter heuristic) and far too many to
+  # navigate. Sub-threshold clusters stay in clusters.parquet and are reported as
+  # an aggregate count (n_clusters_total); clustering is untouched, so this is a
+  # post-hoc display selection, not a tuned hyperparameter (ADR-040 holds — fixed
+  # a priori, never adjusted to improve anchor recovery).
+  min_articles_to_fit: 50
   # Four lenses shown side by side, NOT selected by AICc (ADR-039). shape-facts
   # is model-free (no entry here -- always computed). Staging keys off SIR R_0,
   # logistic as fallback (ADR-002).
