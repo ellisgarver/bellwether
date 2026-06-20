@@ -5,17 +5,21 @@ article-count series and returns them all side by side; AICc is a displayed
 diagnostic on each FitResult, not a selection gate. Model-free shape-facts are
 computed alongside.
 
-Stage classification still needs a single R_0: it keys off the SIR fit, falling
-back to the logistic fit when SIR did not converge (ADR-002 keeps logistic as
-the SIR fallback). Bass has no R_0 (its headline is the innovation/imitation
-balance), so it never drives staging.
+Stage classification no longer keys off these fits; stage is a model-free trend
+test. The fits are display lenses. `staging_fit` is retained only to surface a
+representative R_0 headline -- the SIR fit when it converged, else the logistic
+fit -- as the "was it contagious?" SIR-lens value. Bass has no R_0 (its headline
+is the innovation/imitation balance).
 
 SIR model: uses a pytensor.scan discrete-time Euler loop so the ODE is
 differentiable through PyMC's NUTS sampler without an external ODE solver.
 
-Graceful failure: convergence failures (low ESS, high R-hat, exceptions) are
-recorded in FitResult.failure_reason; the pipeline continues. R^2 and R_0
-credible-interval width are reported as diagnostics, not gates.
+Graceful failure: genuine per-cluster convergence failures (low ESS, high R-hat,
+numerical exceptions) are recorded in FitResult.failure_reason and the pipeline
+continues. Programming errors that would break every cluster identically
+(AttributeError, NameError, ImportError, TypeError) are re-raised rather than
+swallowed, so a regression surfaces immediately instead of as silent
+non-convergence across every cluster.
 
 Configuration: config.dynamics.{inference, priors, models_to_fit}.
 """
@@ -135,10 +139,11 @@ class DynamicsFitter:
     def _select_staging_fit(
         cluster_id: int | str, all_fits: list[FitResult]
     ) -> FitResult:
-        """SIR R_0 drives staging; fall back to logistic when SIR fails (ADR-002).
+        """Pick the fit whose R_0 headline is displayed (display only).
 
-        Bass carries no R_0 and never stages. If neither SIR nor logistic was
-        fit/converged, return SIR (or any fit) so the cluster lands 'dormant'.
+        Prefer the converged SIR fit (its beta/gamma R_0 is the genuine "was it
+        contagious?" value), else the converged logistic fit, else any fit. This
+        no longer decides the stage; that is the model-free trend test.
         """
         by_name = {f.model_name: f for f in all_fits}
         sir_fit = by_name.get("sir")
@@ -180,6 +185,12 @@ class DynamicsFitter:
                 converged=False,
                 failure_reason=f"Unknown model: {model_name}",
             )
+        except (AttributeError, NameError, ImportError, TypeError):
+            # Programming errors (bad attribute, missing import, wrong signature)
+            # are not per-cluster convergence failures; they break every cluster
+            # identically. Re-raising surfaces such a regression immediately rather
+            # than recording it as silent non-convergence across the whole corpus.
+            raise
         except Exception as exc:
             log.warning(
                 "Cluster %s model %s failed: %s", cluster_id, model_name, exc
@@ -253,6 +264,7 @@ class DynamicsFitter:
         self, cluster_id: int | str, t: np.ndarray, y: np.ndarray
     ) -> FitResult:
         import pymc as pm
+        import pytensor
         import pytensor.tensor as pt
 
         priors = self._cfg["dynamics"]["priors"]["sir"]
@@ -274,7 +286,7 @@ class DynamicsFitter:
                 rec = pt.clip(g * I_prev, 0.0, I_prev)
                 return S_prev - new_inf, I_prev + new_inf - rec, R_prev + rec
 
-            (_, I_seq, _), _ = pt.scan(
+            (_, I_seq, _), _ = pytensor.scan(
                 sir_step,
                 outputs_info=[S_init, I0, R_init],
                 non_sequences=[beta, gamma, pt.as_tensor_variable(N_pop)],
