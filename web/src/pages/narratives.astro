@@ -35,6 +35,7 @@ const sparks: Record<number, number[]> = Object.fromEntries(
   <div class="toolbar reveal">
     <input id="search" type="search" placeholder="filter by name or term…" />
     <label class="toggle"><input type="checkbox" id="f-growth" checked /> growth</label>
+    <label class="toggle"><input type="checkbox" id="f-stable" checked /> stable</label>
     <label class="toggle"><input type="checkbox" id="f-decay" checked /> decay</label>
     <label class="toggle"><input type="checkbox" id="f-dormant" checked /> dormant</label>
   </div>
@@ -54,6 +55,7 @@ const sparks: Record<number, number[]> = Object.fromEntries(
     const search = document.getElementById("search");
     const flags = {
       growth: document.getElementById("f-growth"),
+      stable: document.getElementById("f-stable"),
       decay: document.getElementById("f-decay"),
       dormant: document.getElementById("f-dormant"),
     };

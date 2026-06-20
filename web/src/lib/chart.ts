@@ -23,6 +23,7 @@ export const COL = {
 
 export const STAGE_COLOR: Record<string, string> = {
   growth: COL.growth,
+  stable: COL.accent,
   decay: COL.decay,
   dormant: COL.dormant,
 };

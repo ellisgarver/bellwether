@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import { loadIndex } from "@lib/data";
 
 interface Props {
   title: string;
@@ -9,6 +10,7 @@ interface Props {
 const { title, active, wide = false } = Astro.props;
 const base = import.meta.env.BASE_URL;
 const href = (p: string) => (base.replace(/\/$/, "") + p) || "/";
+const asOf = loadIndex().generated_at?.slice(0, 10) ?? "";
 ---
 
 <!doctype html>
@@ -66,6 +68,7 @@ const href = (p: string) => (base.replace(/\/$/, "") + p) || "/";
       <div class="wrap">
         <span>ellis garver · macro narrative dynamics</span>
         <span>
+          {asOf && <>data as of {asOf} · </>}
           <a href="https://github.com/ellisgarver/macro-narrative-dynamics" target="_blank" rel="noopener">github</a>
           · <a href="mailto:ehgarver@uchicago.edu">ehgarver@uchicago.edu</a>
         </span>
