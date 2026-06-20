@@ -21,8 +21,8 @@ import mnd.dashboard.run as driver
 
 
 CFG = {
-    "dynamics": {"smoothing_window_days": 7},
-    "stages": {"newly_emerging_recency_weeks": 4, "growth_min_r0": 1.0},
+    "dynamics": {"smoothing_window_days": 7, "min_articles_to_fit": 5},
+    "stages": {"newly_emerging_recency_weeks": 4, "trend_alpha": 0.05, "growth_min_r0": 1.0},
     "reproducibility": {"global_random_seed": 42},
     "clustering": {"umap": {"n_neighbors": 15, "min_dist": 0.0, "metric": "cosine"}},
 }
@@ -138,7 +138,10 @@ def test_run_analysis_writes_adjusted_artifacts(tmp_path, monkeypatch):
         art = json.loads((out / f"narrative_{cid}.json").read_text())
         assert art["cluster_id"] == cid
         assert len(art["volume"]["values"]) > 0
-        assert art["stage"] == "growth"               # r0_mean 1.6 ≥ 1.0
+        # stage is model-free (trajectory of the adjusted series); this wiring test
+        # only checks a valid label is emitted -- staging semantics live in
+        # test_stage_classify.
+        assert art["stage"] in {"growth", "stable", "decay", "dormant"}
 
 
 def test_corpus_adjustment_indexes_to_count_units():

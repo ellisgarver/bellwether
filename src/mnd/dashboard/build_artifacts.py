@@ -176,11 +176,12 @@ def _median_article_words(clusters_df: pd.DataFrame) -> int | None:
 def _compute_emerging(
     date_range: tuple[str, str] | None, frontier: str | None, weeks: int
 ) -> bool:
-    """Newly-emerging = the narrative's onset is within ``weeks`` of the corpus frontier.
+    """Recency half of the emerging flag: onset within ``weeks`` of the corpus frontier.
 
     Reference point is the corpus frontier (the latest last-active date across all
     narratives), not wall-clock now, so a corpus built weeks ago still flags its own
-    freshest narratives correctly (ADR-019 recency filter, not a stage).
+    freshest narratives correctly. The caller combines this with stage == "growth"
+    so a just-arrived but already-flat cluster is not flagged emerging.
     """
     if not date_range or not frontier:
         return False
@@ -296,7 +297,12 @@ def build_dashboard_artifacts(
                 date_range=card.date_range,
                 in_scope=jel_obj.in_scope if jel_obj else True,
                 jel_code=jel_obj.primary_code if jel_obj else None,
-                is_emerging=_compute_emerging(card.date_range, frontier, recency_weeks),
+                # Emerging = rising and just-arrived: the growth gate keeps a
+                # freshly-onset but already-flat or fading cluster off the feed.
+                is_emerging=(
+                    stage == "growth"
+                    and _compute_emerging(card.date_range, frontier, recency_weeks)
+                ),
                 umap_xy=umap_xy.get(cid),
                 umap_xyz=umap_xyz.get(cid),
                 similar_edges=edges.get(cid, []),
