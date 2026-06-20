@@ -155,3 +155,59 @@ def test_corpus_adjustment_indexes_to_count_units():
     assert set(adj) == {0, 1, 2, -1}
     # Adjusted volume is on the order of article counts, not tiny fractions.
     assert adj[0].max() > 0.1
+
+
+def _series_by_cid() -> dict:
+    return {
+        0: pd.Series([1.0, 2.0, 3.0, 2.0, 1.0]),
+        1: pd.Series([0.0, 1.0, 4.0, 1.0, 0.0]),
+    }
+
+
+def _echo_dynamics(cluster_id, daily_counts):
+    fit = FitResult(
+        cluster_id=cluster_id, model_name="sir", converged=True,
+        curve=[float(v) for v in daily_counts.to_numpy()],
+    )
+    return ClusterDynamics(
+        cluster_id=cluster_id, staging_fit=fit, all_fits=[fit],
+        time_series=daily_counts, raw_series=daily_counts,
+    )
+
+
+def test_fit_with_resume_reuses_cache_and_invalidates_on_config_change(tmp_path):
+    """A warm re-run reloads fits without refitting; a config change refits.
+
+    This is the property the SLURM dynamics step relies on: resubmitting after a
+    wall-clock timeout must continue from the cached clusters, and a corpus or
+    config edit must not silently serve stale fits.
+    """
+    series = _series_by_cid()
+    cache_dir = tmp_path / ".fit_cache"
+
+    calls: list = []
+
+    class _CountingFitter:
+        def fit_cluster(self, cluster_id, daily_counts):
+            calls.append(cluster_id)
+            return _echo_dynamics(cluster_id, daily_counts)
+
+    # Cold run: both clusters are fit and written to the cache.
+    first = driver._fit_with_resume(_CountingFitter(), series, CFG, cache_dir)
+    assert sorted(calls) == [0, 1]
+    assert set(first) == {0, 1}
+
+    # Warm run: a fitter that raises if called proves every result came from disk.
+    class _NoFitFitter:
+        def fit_cluster(self, cluster_id, daily_counts):
+            raise AssertionError(f"cluster {cluster_id} refit despite a warm cache")
+
+    warm = driver._fit_with_resume(_NoFitFitter(), series, CFG, cache_dir)
+    assert {cid: cd.cluster_id for cid, cd in warm.items()} == {0: 0, 1: 1}
+
+    # Changing the seed changes the signature, so the cold fitter runs again.
+    calls.clear()
+    changed_cfg = {**CFG, "reproducibility": {"global_random_seed": 7}}
+    counting = _CountingFitter()
+    driver._fit_with_resume(counting, series, changed_cfg, cache_dir)
+    assert sorted(calls) == [0, 1]

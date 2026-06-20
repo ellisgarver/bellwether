@@ -47,7 +47,7 @@ from mnd.dashboard.build_artifacts import (
     write_dashboard_artifacts,
 )
 from mnd.dashboard.story_card import NOISE_TOPIC, _terms_from_topic_info
-from mnd.dynamics.fitting import DynamicsFitter
+from mnd.dynamics.fitting import ClusterDynamics, DynamicsFitter
 from mnd.dynamics.normalize import adjusted_cluster_volumes, corpus_base_rate
 from mnd.stages.classify import classify_all
 from mnd.utils.config import load_config
@@ -100,6 +100,65 @@ def _umap_positions(
     return {
         cid: tuple(float(v) for v in coords[i]) for i, cid in enumerate(ordered_ids)
     }
+
+
+def _fit_signature(series: pd.Series, cfg: dict[str, Any]) -> str:
+    """Content hash of a cluster's fit inputs, used as the fit-cache key.
+
+    Covers the source series and every config knob that affects a fit — the model
+    set, inference settings, priors, smoothing window, and the global seed — so a
+    corpus change or any config edit produces a new key and invalidates a stale
+    cache entry. Because the seed is fixed, a cache hit is identical to a refit.
+    """
+    import hashlib
+
+    payload = (
+        np.ascontiguousarray(series.to_numpy(dtype=float)).tobytes()
+        + repr(cfg["dynamics"]).encode()
+        + repr(cfg["reproducibility"]["global_random_seed"]).encode()
+    )
+    return hashlib.sha1(payload).hexdigest()[:12]
+
+
+def _fit_with_resume(
+    fitter: DynamicsFitter,
+    series_by_cid: dict[int, pd.Series],
+    cfg: dict[str, Any],
+    cache_dir: Path,
+) -> dict[int, ClusterDynamics]:
+    """Fit every cluster, persisting each result so a re-run resumes mid-corpus.
+
+    Each cluster's ``ClusterDynamics`` is pickled under a content-hashed filename
+    as soon as it is fit; a later invocation reloads any cluster whose inputs are
+    unchanged and fits only the remainder. This lets the dynamics step survive a
+    wall-clock timeout — resubmitting the job continues from the last completed
+    cluster instead of refitting the whole corpus. An unreadable cache entry is
+    discarded and refit rather than aborting the run.
+    """
+    import pickle
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    out: dict[int, ClusterDynamics] = {}
+    loaded = 0
+    for cid, series in series_by_cid.items():
+        path = cache_dir / f"cluster_{cid}_{_fit_signature(series, cfg)}.pkl"
+        if path.exists():
+            try:
+                out[cid] = pickle.loads(path.read_bytes())
+                loaded += 1
+                continue
+            except Exception as exc:  # partial/corrupt write — refit this cluster
+                log.warning(
+                    "Fit cache unreadable for cluster %s (%s); refitting", cid, exc
+                )
+        cd = fitter.fit_cluster(cid, series)
+        path.write_bytes(pickle.dumps(cd))
+        out[cid] = cd
+    log.info(
+        "Dynamics fits: %d/%d loaded from cache, %d freshly fit (cache dir: %s)",
+        loaded, len(series_by_cid), len(series_by_cid) - loaded, cache_dir,
+    )
+    return out
 
 
 def run_analysis(
@@ -188,9 +247,13 @@ def run_analysis(
         in_scope_n, len(fit_ids),
     )
 
-    # 3. Four-lens fit + stage on the adjusted series (ADR-039 / ADR-019).
+    # 3. Four-lens fit + stage on the adjusted series (ADR-039 / ADR-019). Fits
+    # are checkpointed per cluster under out_dir so a re-run resumes mid-corpus
+    # rather than refitting from scratch after a wall-clock timeout.
     fitter = fitter if fitter is not None else DynamicsFitter(cfg)
-    dynamics = {cid: fitter.fit_cluster(cid, adj[cid]) for cid in fit_ids}
+    dynamics = _fit_with_resume(
+        fitter, {cid: adj[cid] for cid in fit_ids}, cfg, Path(out_dir) / ".fit_cache"
+    )
     stages = {sc.cluster_id: sc for sc in classify_all(list(dynamics.values()), cfg)}
 
     # 4. Centroids → UMAP positions → similar narratives (ADR-044 / ADR-019 §H).
