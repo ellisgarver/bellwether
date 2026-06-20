@@ -73,10 +73,23 @@ def _terms_from_topic_info(topic_info: pd.DataFrame | None, cluster_id: int) -> 
     terms: list[str] = []
     if "Representation" in row.columns:
         rep = r["Representation"]
+        # Parquet round-trips BERTopic's Representation list into a numpy ndarray,
+        # which matches neither the list/tuple nor the str branch, leaving terms
+        # empty and pushing every cluster to JEL "Y" (out of scope). tolist()
+        # normalizes any array-like (ndarray, pandas extension array) to a list.
+        if hasattr(rep, "tolist"):
+            rep = rep.tolist()
         if isinstance(rep, (list, tuple)):
-            terms = [str(t) for t in rep if str(t).strip()]
+            terms = [str(t).strip() for t in rep if str(t).strip()]
         elif isinstance(rep, str) and rep.strip():
             terms = [t.strip() for t in re.split(r"[,\s]+", rep) if t.strip()]
+    if not terms and label != f"Cluster {cluster_id}":
+        # Fall back to BERTopic's Name ("<id>_term_term_term"): drop the leading
+        # numeric topic id and keep the keyword stems.
+        parts = label.split("_")
+        if parts and parts[0].lstrip("-").isdigit():
+            parts = parts[1:]
+        terms = [p for p in parts if p.strip()]
     return label, terms
 
 
