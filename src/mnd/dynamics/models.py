@@ -24,9 +24,12 @@ return predicted article volume. They are pure numpy/scipy and are used:
 """
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 from scipy.integrate import odeint
 from scipy.signal import find_peaks
+from scipy.stats import norm, rankdata, theilslopes
 
 
 # ---------------------------------------------------------------------------
@@ -182,3 +185,97 @@ def aicc(log_likelihood: float, k: int, n: int) -> float:
     if n - k - 1 <= 0:
         return float("inf")
     return -2.0 * log_likelihood + 2.0 * k + 2.0 * k * (k + 1) / (n - k - 1)
+
+
+# ---------------------------------------------------------------------------
+# Trend test (model-free)
+# ---------------------------------------------------------------------------
+
+def _autocorr(x: np.ndarray, nlags: int) -> np.ndarray:
+    """Biased (divide-by-n) sample autocorrelation of x at lags 0..nlags."""
+    x = np.asarray(x, dtype=float)
+    n = x.size
+    y = x - x.mean()
+    var = float(np.dot(y, y))
+    if var == 0.0:  # constant series -- no autocorrelation structure
+        out = np.zeros(nlags + 1)
+        out[0] = 1.0
+        return out
+    return np.array([float(np.dot(y[: n - k], y[k:])) for k in range(nlags + 1)]) / var
+
+
+def mann_kendall(y: np.ndarray, alpha: float = 0.05) -> dict[str, Any]:
+    """Modified Mann-Kendall trend test (Hamed & Rao 1998 variance correction).
+
+    A non-parametric, rank-based test for a monotonic trend in ``y`` (Mann 1945,
+    Kendall 1948). Distribution-free -- it asks only whether later values tend to
+    exceed earlier ones, so a spiky attention curve does not need to look like any
+    particular model for the test to apply.
+
+    The Hamed-Rao (1998) modification inflates Var(S) to absorb serial
+    correlation. This is needed here because the daily series is 7-day smoothed,
+    which induces autocorrelation that would otherwise shrink the p-value and
+    over-declare trends. The series is detrended with the Theil-Sen slope, the
+    residuals are ranked, and Var(S) is inflated by the significant
+    rank-autocorrelations.
+
+    Returns a dict:
+      trend  -- "increasing" | "decreasing" | "no trend"  (at level ``alpha``)
+      p      -- two-sided p-value
+      z      -- continuity-corrected standard normal statistic
+      s      -- Mann-Kendall S statistic (sign-sum of all pairs)
+      slope  -- Theil-Sen slope of log1p(y) per step (robust, scale-free magnitude)
+      n      -- number of points used
+    """
+    y = np.asarray(y, dtype=float)
+    n = y.size
+    if n < 4:  # too few points for the normal approximation to mean anything
+        return {"trend": "no trend", "p": 1.0, "z": 0.0, "s": 0.0,
+                "slope": 0.0, "n": int(n)}
+
+    idx = np.arange(n, dtype=float)
+
+    # --- S statistic: sum of sign(y_j - y_i) over all i < j ---
+    s = 0.0
+    for k in range(n - 1):
+        s += float(np.sum(np.sign(y[k + 1:] - y[k])))
+
+    # --- tie-corrected Var(S) ---
+    _, counts = np.unique(y, return_counts=True)
+    tie = float(np.sum(counts * (counts - 1) * (2 * counts + 5)))
+    var_s = (n * (n - 1) * (2 * n + 5) - tie) / 18.0
+
+    # --- Hamed-Rao correction: inflate Var(S) by significant rank-autocorr ---
+    ts_slope = float(theilslopes(y, idx)[0])
+    ranks = rankdata(y - ts_slope * idx)
+    acf = _autocorr(ranks, nlags=n - 1)[1:]            # drop lag 0
+    bound = norm.ppf(1 - alpha / 2.0) / np.sqrt(n)
+    sig = np.where(np.abs(acf) > bound, acf, 0.0)
+    cnt = 0.0
+    for i in range(1, n):
+        cnt += (n - i) * (n - i - 1) * (n - i - 2) * sig[i - 1]
+    correction = 1.0 + (2.0 / (n * (n - 1) * (n - 2))) * cnt
+    var_s *= correction
+
+    # --- continuity-corrected standard normal statistic ---
+    if var_s <= 0.0:  # degenerate (e.g. strong negative autocorr) -> conservative
+        z = 0.0
+    elif s > 0:
+        z = (s - 1.0) / np.sqrt(var_s)
+    elif s < 0:
+        z = (s + 1.0) / np.sqrt(var_s)
+    else:
+        z = 0.0
+
+    p = 2.0 * (1.0 - norm.cdf(abs(z)))
+    slope = float(theilslopes(np.log1p(np.maximum(y, 0.0)), idx)[0])
+
+    if p < alpha and z > 0:
+        trend = "increasing"
+    elif p < alpha and z < 0:
+        trend = "decreasing"
+    else:
+        trend = "no trend"
+
+    return {"trend": trend, "p": float(p), "z": float(z), "s": float(s),
+            "slope": slope, "n": int(n)}
