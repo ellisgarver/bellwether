@@ -129,9 +129,9 @@ dynamics:
   # selection, not a tuned hyperparameter (ADR-040 holds — fixed a priori, never
   # adjusted to improve anchor recovery).
   min_articles_to_fit: 42
-  # Four lenses shown side by side, NOT selected by AICc (ADR-039). shape-facts
-  # is model-free (no entry here -- always computed). Staging keys off SIR R_0,
-  # logistic as fallback (ADR-002).
+  # Four lenses shown side by side, not selected by AICc. shape-facts is
+  # model-free (no entry here -- always computed). The fits are display lenses
+  # only; stage classification is model-free and does not key off any fit.
   models_to_fit:
     - "sir"                        # Kermack & McKendrick 1927 — "contagious? burn out?"
     - "logistic"                   # Verhulst 1838 — "how fast / where level off?"
@@ -183,16 +183,22 @@ detection:
     query_top_terms: 6
 
 # -----------------------------------------------------------------------------
-# Stage classification (ADR-019)
+# Stage classification — model-free attention-trajectory test
 # -----------------------------------------------------------------------------
-# Three stages keyed to R_0 direction. Classical SIR threshold R_0=1 from
-# Kermack & McKendrick 1927. No arbitrary peak window or % decay thresholds.
-# Pre-emergence stage dropped entirely: every cluster gets R_0 + credible
-# interval; the CI width is the honest signal of fit reliability. "Newly
-# emerging" is a 4-week recency filter on the dashboard, not a stage.
+# Stage is read off the recent shape of each narrative's own volume curve, not a
+# fitted model. Two non-parametric rank tests over the recent window W decide it:
+#   growth  -- significant upward trend   (modified Mann-Kendall, Hamed & Rao 1998)
+#   decay   -- significant downward trend
+#   stable  -- no trend, but recent level sits significantly above the narrative's
+#              own quiet floor (one-sided Mann-Whitney U): a high plateau
+#   dormant -- no trend and at floor: faded out / unresolved
+# W reuses the emerging window, so no separate horizon is tuned; alpha is the
+# single significance convention. The tests gate on significance, not on any
+# tuned magnitude. SIR R_0 is a display-only headline for the SIR lens, not a gate.
 stages:
-  growth_min_r0: 1.0               # Classical SIR threshold (Kermack & McKendrick 1927)
-  newly_emerging_recency_weeks: 4  # Dashboard filter; anchored to sharp-anchor windows + Brown & Warner 1985
+  trend_alpha: 0.05                # significance level for both rank tests
+  growth_min_r0: 1.0               # SIR-lens display headline only; no longer a stage gate
+  newly_emerging_recency_weeks: 4  # recent window W and emerging flag; sharp-anchor windows + Brown & Warner 1985
 
 # -----------------------------------------------------------------------------
 # Filtering & deduplication (ADR-020)

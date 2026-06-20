@@ -5,11 +5,13 @@ import numpy as np
 import pytest
 
 from mnd.dynamics.models import (
+    _autocorr,
     aicc,
     bass,
     bass_peak_time,
     logistic,
     logistic_r0,
+    mann_kendall,
     shape_facts,
     sir_peak_time,
     sir_prevalence,
@@ -179,3 +181,65 @@ class TestAICc:
 
     def test_finite_for_reasonable_inputs(self):
         assert np.isfinite(aicc(-100.0, k=3, n=60))
+
+
+class TestAutocorr:
+    def test_lag_zero_is_unity(self):
+        x = np.array([3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0])
+        assert _autocorr(x, nlags=3)[0] == pytest.approx(1.0)
+
+    def test_constant_series_has_no_structure(self):
+        out = _autocorr(np.ones(8), nlags=3)
+        assert out[0] == 1.0
+        assert (out[1:] == 0.0).all()
+
+    def test_length_matches_nlags(self):
+        assert _autocorr(np.arange(10.0), nlags=4).size == 5
+
+
+class TestMannKendall:
+    def test_increasing_trend_detected(self):
+        rng = np.random.default_rng(42)
+        y = np.arange(40.0) + rng.normal(0, 1.0, 40)
+        out = mann_kendall(y)
+        assert out["trend"] == "increasing"
+        assert out["z"] > 0
+        assert out["slope"] > 0
+
+    def test_decreasing_trend_detected(self):
+        rng = np.random.default_rng(42)
+        y = (40.0 - np.arange(40.0)) + rng.normal(0, 1.0, 40)
+        out = mann_kendall(y)
+        assert out["trend"] == "decreasing"
+        assert out["z"] < 0
+        assert out["slope"] < 0
+
+    def test_constant_series_has_no_trend(self):
+        out = mann_kendall(np.ones(40))
+        assert out["trend"] == "no trend"
+        assert out["s"] == 0.0
+        assert out["slope"] == pytest.approx(0.0)
+
+    def test_risen_then_fell_is_not_a_monotonic_trend(self):
+        # a symmetric rise-and-fall must read as "no trend" -- this is exactly the
+        # shape the prior R_0-keyed scheme mislabeled as growth.
+        up = np.arange(0.0, 30.0)
+        down = np.arange(30.0, 0.0, -1.0)
+        out = mann_kendall(np.concatenate([up, down]))
+        assert out["trend"] == "no trend"
+
+    def test_oscillation_is_not_a_trend(self):
+        # a strongly autocorrelated but trendless sine exercises the Hamed-Rao
+        # correction path and must not yield a false trend.
+        t = np.linspace(0.0, 6.0 * np.pi, 60)
+        out = mann_kendall(np.sin(t) + 5.0)
+        assert out["trend"] == "no trend"
+
+    def test_short_series_returns_no_trend(self):
+        out = mann_kendall(np.array([1.0, 5.0, 3.0]))
+        assert out["trend"] == "no trend"
+        assert out["n"] == 3
+
+    def test_return_keys(self):
+        out = mann_kendall(np.arange(10.0))
+        assert set(out) == {"trend", "p", "z", "s", "slope", "n"}
