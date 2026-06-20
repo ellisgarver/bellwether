@@ -158,12 +158,26 @@ const example =
       compared with AICc, a small-sample penalised likelihood, as a diagnostic of
       which lens fits best; all four fits remain available for every narrative.
     </p>
-    <p>the number borrowed from epidemiology is R₀, the reproduction number, and it does the staging:</p>
+    <p>
+      the lenses describe shape; they do not assign the stage. the stage is read
+      directly from the recent curve with a model-free trend test — a modified
+      Mann–Kendall test <span class="cite">(Mann, 1945; Kendall, 1948)</span> over
+      the most recent four weeks, its variance corrected for the autocorrelation
+      that smoothing introduces <span class="cite">(Hamed &amp; Rao, 1998)</span>.
+      four states result:
+    </p>
     <ul class="r0">
-      <li class="g"><span class="k">R₀ &gt; 1</span><span>each wave seeds more than one successor; growth</span></li>
-      <li class="d"><span class="k">R₀ &lt; 1</span><span>each wave seeds less than one successor; decay</span></li>
-      <li class="z"><span class="k">no fit</span><span>no stable parameters recover; dormant</span></li>
+      <li class="g"><span class="k">growth</span><span>attention is rising — a significant upward trend</span></li>
+      <li class="s"><span class="k">stable</span><span>no trend, but recent volume sits well above the narrative's own quiet floor</span></li>
+      <li class="d"><span class="k">decay</span><span>attention is falling — a significant downward trend</span></li>
+      <li class="z"><span class="k">dormant</span><span>no trend and back at the floor — faded out or unresolved</span></li>
     </ul>
+    <p>
+      R₀ from the SIR lens is still reported on each narrative as a
+      &ldquo;was it contagious?&rdquo; reading — whether a wave seeded more than
+      one successor — but it does not set the stage. a story that spread sharply
+      and has since faded reads as decay today, whatever its peak R₀.
+    </p>
   </section>
 
   <section class="section reveal">
@@ -273,7 +287,7 @@ const example =
   .lens-card .cite { color: var(--faint); font-size: var(--fs-meta); font-weight: 400; }
   .lens-card p { margin: 0.3rem 0 0; color: var(--muted); font-size: var(--fs-ui); }
 
-  /* R₀ states as stage-colored rows: a fixed key column + description, uniform
+  /* stage states as stage-colored rows: a fixed key column + description, uniform
      rounded full-width bars so the block reads as a finished table. */
   .r0 { list-style: none; padding: 0; margin: 1.2rem 0; width: fit-content; max-width: var(--measure); display: flex; flex-direction: column; gap: 0.5rem; }
   .r0 li {
@@ -287,6 +301,8 @@ const example =
   }
   .r0 .g { border-left-color: var(--growth); }
   .r0 .g .k { color: var(--growth); background: color-mix(in srgb, var(--growth) 14%, var(--paper)); }
+  .r0 .s { border-left-color: var(--stable); }
+  .r0 .s .k { color: var(--stable); background: color-mix(in srgb, var(--stable) 14%, var(--paper)); }
   .r0 .d { border-left-color: var(--decay); }
   .r0 .d .k { color: var(--decay); background: color-mix(in srgb, var(--decay) 14%, var(--paper)); }
   .r0 .z { border-left-color: var(--dormant); }

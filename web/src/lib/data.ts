@@ -11,7 +11,7 @@ const DATA_DIR =
 
 // ---- contract types (mirror artifacts.py; keep in sync via SCHEMA_VERSION) ----
 
-export type Stage = "growth" | "decay" | "dormant";
+export type Stage = "growth" | "stable" | "decay" | "dormant";
 
 export interface Series {
   dates: string[];
@@ -155,13 +155,15 @@ export function labelMap(index: DashboardIndex): Record<number, string> {
 
 export const STAGE_COLOR: Record<Stage, string> = {
   growth: "#2e7d32",
+  stable: "#1565c0",
   decay: "#c62828",
   dormant: "#78909c",
 };
 
 export const STAGE_LABEL: Record<Stage, string> = {
-  growth: "Growth (R₀ ≥ 1)",
-  decay: "Decay (R₀ < 1)",
+  growth: "Growth (attention rising)",
+  stable: "Stable (sustained plateau)",
+  decay: "Decay (attention falling)",
   dormant: "Dormant / unresolved",
 };
 

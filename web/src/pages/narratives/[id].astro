@@ -20,14 +20,13 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 const fmt = (x: number | null, d = 2) =>
   x === null || x === undefined ? "—" : x.toFixed(d);
 const sd = n.stage_detail || {};
-// the threshold row mirrors the stage that was actually assigned: growth meets
-// R₀ ≥ threshold, decay falls below it, dormant has no stable fit to compare.
-const stageThreshold =
-  n.stage === "decay"
-    ? `R₀ < ${fmt(sd.threshold, 1)}`
-    : n.stage === "dormant"
-      ? "no stable fit"
-      : `R₀ ≥ ${fmt(sd.threshold, 1)}`;
+// plain-language gloss of the model-free trend test that decides the stage.
+const trendWord =
+  sd.trend === "increasing"
+    ? "rising"
+    : sd.trend === "decreasing"
+      ? "falling"
+      : "no monotonic trend";
 const facts = n.shape_facts || {};
 const factOrder: [string, string][] = [
   ["total_volume", "total volume"],
@@ -107,11 +106,19 @@ const direction = (d: any) =>
         <p class="eyebrow">where it sits now</p>
         <h2>{n.stage} characterization</h2>
         <table class="facts">
-          <tr><td>staging lens</td><td>{n.staging_model}</td></tr>
-          <tr><td>R₀ (mean / median)</td><td>{fmt(sd.r0_mean)} / {fmt(sd.r0_median)}</td></tr>
-          <tr><td>R₀ 94% interval</td><td>{sd.r0_ci_low != null ? `${fmt(sd.r0_ci_low)} – ${fmt(sd.r0_ci_high)}` : "—"}</td></tr>
-          <tr><td>{n.stage} threshold</td><td>{stageThreshold}</td></tr>
+          <tr><td>trajectory test</td><td>modified Mann–Kendall</td></tr>
+          <tr><td>recent trend</td><td>{trendWord}</td></tr>
+          <tr><td>significance</td><td>{sd.trend_p != null ? `p = ${fmt(sd.trend_p, 3)} (α = ${fmt(sd.alpha, 2)})` : "—"}</td></tr>
+          <tr><td>recent log-slope</td><td>{sd.trend_slope != null ? `${fmt(sd.trend_slope, 3)} / day` : "—"}</td></tr>
+          <tr><td>above own floor</td><td>{sd.recent_elevated == null ? "—" : sd.recent_elevated ? `yes (p = ${fmt(sd.level_p, 3)})` : "no"}</td></tr>
         </table>
+        <p class="caption">
+          {sd.r0_mean != null ? (
+            <>SIR lens (display only): R₀ {fmt(sd.r0_mean)}{sd.r0_ci_low != null && <> [{fmt(sd.r0_ci_low)}–{fmt(sd.r0_ci_high)}]</>}. R₀ gauges how contagious the wave was, not where it sits now.</>
+          ) : (
+            <>SIR lens did not converge here; the stage is read from the trend test above.</>
+          )}
+        </p>
       </div>
       <div>
         <p class="eyebrow">shape facts</p>

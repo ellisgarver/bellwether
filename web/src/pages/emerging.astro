@@ -18,16 +18,15 @@ function spark(values: number[], n = 44): number[] {
   return out;
 }
 
-// load each emerging narrative once (also used for sparks) so we can order by
-// how fast it's changing: the staging-model fit's R₀ distance from 1 (the
-// stationary point — R₀=1 is steady, far in either direction is fast growth or
-// fast decay). missing R₀ sorts last.
+// load each emerging narrative once (also used for sparks) so they can be
+// ordered by how fast attention is climbing: the recent-trend slope from the
+// model-free classifier (Theil-Sen slope of log volume). missing slope sorts last.
 const narrs = index.narratives
   .filter((e) => e.is_emerging)
   .map((e) => loadNarrative(e.cluster_id));
 const speed = (n: ReturnType<typeof loadNarrative>): number => {
-  const f = n.fits.find((x) => x.model === n.staging_model) ?? n.fits[0];
-  return f?.r0_mean == null ? -Infinity : Math.abs(f.r0_mean - 1);
+  const s = n.stage_detail?.trend_slope;
+  return typeof s === "number" ? s : -Infinity;
 };
 const emerging = index.narratives
   .filter((e) => e.is_emerging)
@@ -45,25 +44,20 @@ const sparks: Record<number, number[]> = Object.fromEntries(
   <p class="eyebrow reveal">the frontier</p>
   <h1 class="reveal">emerging narratives</h1>
   <p class="lede reveal">
-    narratives whose onset falls within four weeks of the corpus frontier.
-    emerging marks recency: a narrative here may already be growing or fading.
-    ordered fastest first.
+    narratives that first appeared within four weeks of the corpus frontier and
+    whose attention is still climbing. ordered by how fast they are rising.
   </p>
 
   {emerging.length > 0 ? (
     <>
       <div class="toolbar reveal">
         <input id="search" type="search" placeholder="filter by name or term…" />
-        <label class="toggle"><input type="checkbox" id="f-growth" checked /> growth</label>
-        <label class="toggle"><input type="checkbox" id="f-decay" checked /> decay</label>
-        <label class="toggle"><input type="checkbox" id="f-dormant" checked /> dormant</label>
       </div>
 
       <div class="grid reveal" id="gallery">
         {emerging.map((e) => (
           <div class="card-wrap" data-label={e.label.toLowerCase()}
-            data-terms={e.top_terms.join(" ").toLowerCase()}
-            data-stage={e.stage}>
+            data-terms={e.top_terms.join(" ").toLowerCase()}>
             <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
           </div>
         ))}
@@ -77,31 +71,19 @@ const sparks: Record<number, number[]> = Object.fromEntries(
   <script>
     const search = document.getElementById("search");
     if (search) {
-      const flags = {
-        growth: document.getElementById("f-growth"),
-        decay: document.getElementById("f-decay"),
-        dormant: document.getElementById("f-dormant"),
-      };
       const cards = [...document.querySelectorAll(".card-wrap")];
       const empty = document.getElementById("empty");
       function applyFilter() {
         const q = (search.value || "").trim().toLowerCase();
-        // each stage checkbox is an independent facet, unioned together. with
-        // nothing checked we treat it as no filter rather than hiding all.
-        const anyChecked = Object.values(flags).some((f) => f.checked);
         let shown = 0;
         for (const c of cards) {
-          const okText = !q || c.dataset.label.includes(q) || c.dataset.terms.includes(q);
-          const okCat = !anyChecked || flags[c.dataset.stage]?.checked;
-          const vis = okText && okCat;
+          const vis = !q || c.dataset.label.includes(q) || c.dataset.terms.includes(q);
           c.classList.toggle("hidden", !vis);
           if (vis) shown++;
         }
         empty.classList.toggle("hidden", shown !== 0);
       }
-      [search, ...Object.values(flags)].forEach((el) =>
-        el.addEventListener("input", applyFilter),
-      );
+      search.addEventListener("input", applyFilter);
     }
   </script>
 </Base>

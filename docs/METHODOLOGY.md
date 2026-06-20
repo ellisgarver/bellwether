@@ -8,7 +8,7 @@ How the system measures the lifecycle of macro-financial narratives, stage by st
 
 The system measures how macro-financial narratives — "the Fed is engineering a soft landing", "inflation is transitory", "regional banks are at risk" — form, spread, peak, and fade in U.S. policy discourse from 2010 to the present. Its output is a descriptive, historical account of each narrative's lifecycle: emergence, growth rate, peak, and decay, together with the past narratives a current one most resembles.
 
-The frame is Robert Shiller's *Narrative Economics* (2017, 2019), which holds that economic narratives spread through a population in patterns resembling epidemics and leaves the formal measurement of that claim open. The system operationalizes the lifecycle half of that framework — emergence, growth, peak, decay — by fitting SIR and logistic models to the volume of BERTopic clusters. Population-level virality and causal effects on macro outcomes belong to structural work in the Flynn & Sastry (2024) tradition.
+The frame is Robert Shiller's *Narrative Economics* (2017, 2019), which holds that economic narratives spread through a population in patterns resembling epidemics and leaves the formal measurement of that claim open. The system operationalizes the lifecycle half of that framework — emergence, growth, peak, decay — by tracking the volume of BERTopic clusters over time and reading each narrative's trajectory directly, with SIR, logistic, and Bass models fit alongside as interpretive lenses. Population-level virality and causal effects on macro outcomes belong to structural work in the Flynn & Sastry (2024) tradition.
 
 The discourse measured here — institutional, policy, and academic writing — is the upstream supply side of the narratives households later adopt, a layer that Andre, Haaland, Roth, Wiederholt & Wohlfart (forthcoming, *Review of Economic Studies*) show to differ qualitatively from household-elicited narratives.
 
@@ -122,13 +122,16 @@ The parametric fits use Bayesian inference (PyMC) with weakly-informative priors
 
 ### Stage 8 — Stage classification
 
-Each fitted narrative receives one of three lifecycle stages from the SIR R₀ posterior:
+Lifecycle stage is read directly from the trajectory of the smoothed volume series, independent of any fitted model. The recent trend is tested with the modified Mann–Kendall test (Mann 1945; Kendall 1948), using the Hamed & Rao (1998) variance correction for the serial correlation that smoothing introduces; magnitude comes from a Theil–Sen slope (Sen 1968) on log-volume. A narrative with no significant trend is split by whether its recent window sits above or at its own historical floor, tested with a one-sided Mann–Whitney *U* comparison (Mann & Whitney 1947) against the quietest equal-width baseline in its history. This yields four mutually exclusive states:
 
-- **Growth** — R₀ ≥ 1; spreading.
-- **Decay** — R₀ < 1; fading.
-- **Dormant** — the fit did not produce a usable R₀ (no convergence, or none returned).
+- **Growth** — a significant rising trend (Mann–Kendall *p* < α, positive slope).
+- **Decay** — a significant falling trend (Mann–Kendall *p* < α, negative slope).
+- **Stable** — no significant trend, with recent volume elevated above the narrative's own floor.
+- **Dormant** — no significant trend, with recent volume at the floor (and any narrative too short to test).
 
-The R₀ = 1 boundary is the classical epidemic threshold (Kermack & McKendrick 1927). "Newly emerging" is a separate dashboard recency filter — narratives active within the trailing four weeks — and does not enter stage classification.
+The threshold is α = 0.05. Reading the stage from the trajectory rather than a fitted R₀ keeps it well-defined for every curve, including the multi-wave and plateau shapes that no single growth model describes. Wallinga & Lipsitch (2007) give the correspondence: the sign of the recent growth rate is the sign of R_t − 1, so a rising series is spreading whether or not a clean SIR fit exists. The SIR R₀ posterior from Stage 7 is retained as a display-only reading of how contagious a wave was, not as the stage.
+
+"Newly emerging" is a separate recency flag layered on top — a growth-stage narrative whose onset falls within the trailing four weeks of the corpus — and is orthogonal to the four states.
 
 ---
 
@@ -167,7 +170,7 @@ The rules below govern every parameter choice.
 7. **Field-standard taxonomies.** The JEL classification anchors topical scope; the BEIR convention anchors chunk size; BERTopic defaults anchor the clustering.
 8. **Abandoned components are deleted.** Retired ingestors, code paths, and configuration are removed from the pipeline, not retained inactive.
 9. **Full corpus, no split, no pre-registration.** No parameter is tuned, and none is tuned toward anchor recovery, so there is no train-fitted quantity for a held-out boundary to test; the pipeline runs over the full 2010-present corpus without a temporal split or a registered analysis plan. Credibility rests on principles 1–8.
-10. **Four dynamics lenses.** Every non-noise cluster is fit by the logistic, SIR, and Bass models alongside model-free shape facts, reported side by side; stage classification keys off the SIR R₀ posterior.
+10. **Four dynamics lenses, model-free staging.** Every non-noise cluster is fit by the logistic, SIR, and Bass models alongside model-free shape facts, reported side by side as interpretive lenses. Lifecycle stage is read directly from the volume trajectory (Stage 8) and does not depend on any fitted model.
 
 ---
 
@@ -182,6 +185,7 @@ The rules below govern every parameter choice.
 - **Epidemic / diffusion models**: Kermack & McKendrick 1927; Verhulst 1838 (logistic); Bass 1969 (diffusion of innovations); Bjørnstad 2018 *Epidemics: Models and Data using R*; Gelman et al. *Bayesian Data Analysis* 3rd ed.
 - **Epidemic models of idea/information spread**: Goffman & Newill 1964 (*Nature*); Daley & Kendall 1965 (*Nature*, rumor model); Rogers 2003 *Diffusion of Innovations* 5th ed.
 - **Lead-lag testing**: Granger 1969 — markets-vs-narrative timing overlay.
+- **Trend & stage classification**: Mann 1945, Kendall 1948 (rank trend test); Hamed & Rao 1998 (autocorrelation variance correction); Sen 1968 (Theil–Sen slope); Mann & Whitney 1947 (rank-sum test); Wallinga & Lipsitch 2007 (growth-rate ↔ R_t correspondence).
 - **Validation & statistics**: Brown & Warner 1985 (event-study windows); Benjamini & Hochberg 1995 (FDR); Efron & Tibshirani 1993 (bootstrap); Strehl & Ghosh 2002 (NMI); Jaccard 1901 (set similarity).
 - **Deduplication**: Broder 1997 (MinHash); Henzinger 2006 (near-duplicate web pages).
 - **Related LLM-based work (positioning)**: Schmidt et al. 2025; Hartley 2025; Gueta et al. 2025.

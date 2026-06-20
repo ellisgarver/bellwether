@@ -16,6 +16,7 @@
   --ember: #c2410c;         /* emerging / highlight */
 
   --growth: #1f9d6b;
+  --stable: #3a5a93;
   --decay: #d1495b;
   --dormant: #9a958a;
 
@@ -151,6 +152,7 @@ a.card:hover { background: var(--paper-2); padding-left: 0.9rem; padding-right: 
 }
 .dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; display: inline-block; }
 .badge.growth { background: color-mix(in srgb, var(--growth) 14%, var(--paper)); color: var(--growth); }
+.badge.stable { background: color-mix(in srgb, var(--stable) 14%, var(--paper)); color: var(--stable); }
 .badge.decay { background: color-mix(in srgb, var(--decay) 14%, var(--paper)); color: var(--decay); }
 .badge.dormant { background: color-mix(in srgb, var(--dormant) 20%, var(--paper)); color: #57534a; }
 .badge.emerging { background: color-mix(in srgb, var(--ember) 14%, var(--paper)); color: var(--ember); }
