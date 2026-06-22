@@ -70,6 +70,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 050 | **Incremental embedding cache — `(chunk_id, text_sha1)` sidecar lets `embed` reuse vectors and re-encode only new/changed chunks; full rebuild still re-embeds all** | Live (relates 036/016/030) |
 | 051 | **Fit/display floor — only clusters with ≥ `min_articles_to_fit` (42) unique articles are fit, staged, and surfaced; all clusters stay in `clusters.parquet`, total reported on the data page. Map edges are focus-lit on hover, not static.** | Live (amends 046; relates 019/040/044) |
 | 052 | **Lifecycle stage is a model-free attention-trajectory classification (Mann–Kendall trend + Mann–Whitney level); growth/stable/decay/dormant + emerging flag; fitted lenses are display-only; reframe — Shiller/SIR is a lens, not the law** | Live (supersedes 002 staging clause + 019 §E; amends 030/039) |
+| 053 | **SIR fit on a weekly integration grid + SIR-only reduced inference budget (draws 500 / tune 500 / 2 chains / `target_accept` 0.9) — makes the `O(T)` SIR scan tractable; `R₀` grid-invariant, curve/peak converted back to days; display-only, no-tuning rule intact** | Live (amends 039; relates 019/051/052) |
 
 ---
 
@@ -3954,6 +3955,96 @@ catalyst and remain a *lens*, not the organizing law.
   `R_0`-threshold staging. The four-lens display (ADR-039), the corpus base-rate
   normalization (ADR-045), and the fit/display floor (ADR-051) are unchanged.
   Amends `src/mnd/stages/classify.py`.
+
+---
+
+## ADR-053: SIR fit on a weekly integration grid + SIR-only reduced inference budget
+
+- **Status**: Accepted
+- **Date**: 2026-06-22
+
+### Context
+
+ADR-052 made the lifecycle stage model-free and demoted SIR `R_0` to a
+display-only lens headline ("was it contagious?") — it no longer gates the stage,
+and it never touched anchor recovery. ADR-052 also fixed the `pt.scan` crash
+(commit `09bda0f`) that had silently turned every SIR fit into a no-op, so the
+next run will *actually* sample SIR for the first time.
+
+That exposed a compute wall. SIR is integrated for NUTS by a `pytensor.scan`
+discrete-time Euler loop with `n_steps = T − 1` (`fitting.py`), so its gradient
+cost is `O(series length)`. Logistic and Bass are vectorized / closed-form and
+cost the same regardless of length — the cost is entirely SIR's.
+
+The Jun-19 `dashboard_full` produced 365 fittable clusters whose series span
+their full active range: median ~5077 days (mean 4693, max 6000). Macro topics
+recur, so a narrative's "own active span" is ≈ the whole 16-year corpus for
+nearly all of them. At the production NUTS budget (draws 2000 + tune 1000, 4
+chains, `target_accept` 0.95) a single ~180-day fit did not finish in 13 min
+locally; a ~5000-day fit is ~28× that scan length → hours per cluster × 365 →
+hundreds–thousands of A100-hours. That exceeds a 12 h SLURM wall, and a single
+fit overrunning the wall cannot be rescued by the per-cluster checkpoint/resume
+(commit `b1bc1b2`), which has no mid-fit checkpoint. The Jun-19 run only
+"completed" because SIR was a no-op.
+
+### Decision
+
+1. **Weekly integration grid for SIR only.** Bin each cluster's
+   already-7-day-smoothed daily series to a weekly grid (mean over
+   `dynamics.sir_fit_grid_days = 7` days) before the SIR scan, cutting `n_steps`
+   ~7×. The displayed volume curve and the model-free stage stay daily — only
+   SIR's internal integration resolution changes.
+
+2. **`R_0` is grid-invariant; time-unit outputs are converted back to days.**
+   The weekly Euler step makes the fitted `beta`, `gamma` per-week rates.
+   `R_0 = beta/gamma` is dimensionless, so it is reported unchanged. For the
+   displayed SIR curve and peak time the fitted rates are divided by the grid
+   (per-week → per-day) and integrated on the daily grid via the existing
+   `sir_prevalence` / `sir_peak_time`, so the curve keeps its ADR-039 daily-grid
+   contract and the peak is in days, consistent with the logistic and Bass lenses.
+
+3. **Population scale is held fixed.** `N_pop` is computed from the daily total
+   as before, not the binned series, so the fit's amplitude and identifiability
+   are identical to the daily version; only the integration resolution changes.
+
+4. **SIR-only reduced inference budget.** SIR samples under a separate
+   `dynamics.sir_inference` block (draws 500, tune 500, chains 2,
+   `target_accept` 0.9); logistic and Bass keep the production
+   `dynamics.inference` budget (2000 / 1000 / 4 / 0.95). This is a ~4–6×
+   multiplier applied only to the expensive, display-only lens.
+
+5. **The no-tuning rule (ADR-040) is untouched.** ADR-040 binds parameters
+   adjusted to improve *anchor recovery*. Anchor recovery is a clustering metric,
+   independent of the display-only SIR fit; neither the grid nor the budget can
+   change it. A sampler budget is a Monte-Carlo-precision setting, not a model
+   parameter or threshold. This is therefore a fit-mechanics decision (like
+   ADR-051), not a methodology lock-in amendment.
+
+### Consequences
+
+- **Tractability.** Each SIR fit becomes short enough to finish well within a
+  12 h wall, so checkpoint/resume completes the whole run across resubmissions
+  regardless of total hours. The absolute per-fit time on A100 is unmeasured; the
+  guarantee is sub-wall-per-fit, not a specific minutes figure.
+- **Cache invalidation is automatic.** The fit-cache key hashes
+  `repr(cfg["dynamics"])` (`run.py` `_fit_signature`); adding both keys under
+  `dynamics:` invalidates every stale Jun-19 SIR entry, so the next run refits
+  SIR rather than reloading the no-op result.
+- **Accuracy caveat (accepted).** Euler-`Δt=1` on a weekly step is a coarser ODE
+  approximation than on a daily step; for a decorative lens whose headline is the
+  dimensionless `R_0`, this is acceptable, and the daily-resolution display curve
+  is re-integrated continuously from the converted per-day rates. Fewer draws plus
+  a lower `target_accept` can push a few borderline fits below the convergence
+  gate (`ess_bulk > 400`, `R-hat < 1.05`) — i.e. more `R_0` "n/a"; the front end
+  already renders a missing lens, and logistic remains the fallback `R_0` headline.
+- **Convergence is now observable.** Because Jun-19 SIR was a no-op, the real SIR
+  convergence rate on this corpus is unknown; the first weekly-grid run is also
+  the first measurement. If SIR converges on almost nothing, dropping it (its own
+  ADR) becomes the obvious follow-up.
+- **Scope.** Amends the SIR fit mechanics of ADR-039 and the SIR portion of the
+  ADR-019 inference settings; relates to ADR-052 (SIR is display-only), ADR-051 (a
+  comparable fit-mechanics decision), and the `b1bc1b2` checkpoint/resume.
+  Amends `src/mnd/dynamics/fitting.py` and `config/config.yaml`.
 
 ---
 
