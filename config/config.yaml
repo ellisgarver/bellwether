@@ -144,6 +144,28 @@ dynamics:
     target_accept: 0.95
     cores: "auto"                  # min(chains, available_cpus)
     random_seed: 42
+  # SIR-only integration grid (ADR-053). SIR is integrated for NUTS by a
+  # pytensor.scan Euler loop with n_steps = T-1, so its gradient cost is O(series
+  # length); logistic and Bass are vectorized and unaffected. Binning the
+  # already-7-day-smoothed daily series to a weekly grid before the SIR scan cuts
+  # the scan ~7x. The displayed curve and the model-free stage stay daily; only
+  # SIR's integration resolution changes. R_0 = beta/gamma is dimensionless so it
+  # is grid-invariant; the per-week fitted rates are converted to per-day for the
+  # displayed curve and peak time (see dynamics/fitting.py).
+  sir_fit_grid_days: 7
+  # SIR-only inference budget (ADR-053). R_0 is display-only post ADR-052, so this
+  # cheaper sampler applies only to the expensive SIR lens; logistic and Bass keep
+  # the production `inference` budget above. It cannot affect anchor recovery (a
+  # clustering metric, independent of any fit), so the no-tuning rule (ADR-040)
+  # holds — this is a Monte-Carlo-precision setting, not a tuned parameter.
+  sir_inference:
+    framework: "pymc"
+    draws: 500
+    tune: 500
+    chains: 2
+    target_accept: 0.9
+    cores: "auto"                  # min(chains, available_cpus)
+    random_seed: 42
   priors:
     # Weakly informative, anchored to Bjornstad 2018 "Epidemics: Models and
     # Data using R" + Gelman et al. BDA3 conventions. Specific values pending

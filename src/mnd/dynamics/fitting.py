@@ -12,7 +12,10 @@ fit -- as the "was it contagious?" SIR-lens value. Bass has no R_0 (its headline
 is the innovation/imitation balance).
 
 SIR model: uses a pytensor.scan discrete-time Euler loop so the ODE is
-differentiable through PyMC's NUTS sampler without an external ODE solver.
+differentiable through PyMC's NUTS sampler without an external ODE solver. The
+scan cost is O(series length), so the SIR fit runs on a weekly grid (ADR-053);
+the fitted per-week rates are converted to per-day for the displayed daily curve
+and peak time, and R_0 = beta/gamma is grid-invariant.
 
 Graceful failure: genuine per-cluster convergence failures (low ESS, high R-hat,
 numerical exceptions) are recorded in FitResult.failure_reason and the pipeline
@@ -268,15 +271,21 @@ class DynamicsFitter:
         import pytensor.tensor as pt
 
         priors = self._cfg["dynamics"]["priors"]["sir"]
-        inf_cfg = self._cfg["dynamics"]["inference"]
+        inf_cfg = self._cfg["dynamics"]["sir_inference"]
+        grid = int(self._cfg["dynamics"]["sir_fit_grid_days"])
+        # N_pop is the daily total, so the population scale is grid-invariant; the
+        # scan runs on the binned (weekly) series to keep its O(T) cost tractable
+        # (ADR-053). Binning averages rather than sums, so y_fit and the priors
+        # keyed to it stay on the daily amplitude.
         N_pop = float(max(y.sum() * 2.0, 100.0))
-        T = len(t)
+        y_fit, eff_grid = _bin_to_grid(y, grid)
+        T = len(y_fit)
 
         with pm.Model():
             beta = pm.HalfNormal("beta", sigma=priors["beta_sd"])
             gamma = pm.HalfNormal("gamma", sigma=priors["gamma_sd"])
-            I0 = pm.HalfNormal("I0", sigma=max(float(y[:5].mean()), 1.0) * 3)
-            sigma = pm.HalfNormal("sigma", sigma=float(y.std() + 1.0))
+            I0 = pm.HalfNormal("I0", sigma=max(float(y_fit[:5].mean()), 1.0) * 3)
+            sigma = pm.HalfNormal("sigma", sigma=float(y_fit.std() + 1.0))
 
             S_init = pt.as_tensor_variable(N_pop) - I0
             R_init = pt.zeros(())
@@ -293,7 +302,7 @@ class DynamicsFitter:
                 n_steps=T - 1,
             )
             I_traj = pt.concatenate([I0[None], I_seq])
-            pm.Normal("obs", mu=I_traj, sigma=sigma, observed=y)
+            pm.Normal("obs", mu=I_traj, sigma=sigma, observed=y_fit)
             trace = self._sample(inf_cfg)
 
         import arviz as az
@@ -313,9 +322,15 @@ class DynamicsFitter:
         beta_draws = np.asarray(trace.posterior["beta"]).reshape(-1)
         gamma_draws = np.clip(np.asarray(trace.posterior["gamma"]).reshape(-1), 1e-6, None)
         r0_median = float(np.median(beta_draws / gamma_draws))
-        y_hat = sir_prevalence(t, N_pop, I0_mean, beta_mean, gamma_mean)
+        # beta/gamma are per-grid-step rates. R_0 = beta/gamma is dimensionless,
+        # so it is reported directly from the posterior (the grid factor cancels).
+        # The displayed curve and peak carry time units, so convert to per-day
+        # before integrating on the daily grid t (ADR-053).
+        beta_day = beta_mean / eff_grid
+        gamma_day = gamma_mean / eff_grid
+        y_hat = sir_prevalence(t, N_pop, I0_mean, beta_day, gamma_day)
         ll = _gaussian_loglik(y, y_hat)
-        peak = sir_peak_time(N_pop, I0_mean, beta_mean, gamma_mean)
+        peak = sir_peak_time(N_pop, I0_mean, beta_day, gamma_day)
 
         return FitResult(
             cluster_id=cluster_id,
@@ -414,6 +429,29 @@ class DynamicsFitter:
 # ------------------------------------------------------------------
 # Module-level helpers
 # ------------------------------------------------------------------
+
+def _bin_to_grid(y: np.ndarray, grid: int) -> tuple[np.ndarray, int]:
+    """Block-average a daily series onto a coarser grid for the SIR fit (ADR-053).
+
+    The SIR scan cost is O(len(y)); binning the already-7-day-smoothed daily
+    series onto a weekly grid shortens the scan ~``grid``-fold. Averaging (not
+    summing) preserves the daily amplitude, so N_pop, the priors, and the fitted
+    I0 stay on daily units and the per-grid-step rates convert back to per-day by
+    dividing by the returned factor. Returns the series and the grid factor
+    actually applied (1 when no binning happened). Series shorter than four
+    grid-steps are already cheap and are returned unchanged on the daily grid.
+    """
+    y = np.asarray(y, dtype=float)
+    grid = max(int(grid), 1)
+    if grid == 1 or len(y) < 4 * grid:
+        return y, 1
+    n_bins = int(np.ceil(len(y) / grid))
+    binned = np.array(
+        [float(y[i * grid : (i + 1) * grid].mean()) for i in range(n_bins)],
+        dtype=float,
+    )
+    return binned, grid
+
 
 def _check_convergence(trace) -> bool:
     """True if all R-hat < 1.05 and all bulk-ESS > 400."""
