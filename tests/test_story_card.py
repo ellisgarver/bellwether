@@ -6,11 +6,13 @@ excerpt slicing, and that noise (topic -1) is skipped.
 """
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from mnd.dashboard.story_card import (
     StoryCard,
+    _representative_docs_from_topic_info,
     build_all_cards,
     build_story_card,
 )
@@ -121,3 +123,47 @@ class TestBuildAllCards:
     def test_n_representative_caps_list(self):
         cards = build_all_cards(_clusters_df(), _topic_info(), n_representative=1)
         assert len(cards[0].representative_articles) == 1
+
+
+class TestRepresentativeDocs:
+    """JEL representation enrichment helper (ADR-055)."""
+
+    @staticmethod
+    def _ti(docs_value) -> pd.DataFrame:
+        return pd.DataFrame(
+            {"Topic": [0], "Count": [3], "Name": ["0_inflation"], "Representative_Docs": [docs_value]}
+        )
+
+    def test_returns_excerpts_from_list(self):
+        out = _representative_docs_from_topic_info(
+            self._ti(["Fed signals a pause in rate hikes.", "Inflation cools to target."]), 0
+        )
+        assert out == ["Fed signals a pause in rate hikes.", "Inflation cools to target."]
+
+    def test_handles_ndarray_roundtrip(self):
+        # Parquet round-trips the list into an object ndarray (the JEL-bug shape).
+        arr = np.array(["A representative macro document about r-star."], dtype=object)
+        out = _representative_docs_from_topic_info(self._ti(arr), 0)
+        assert out == ["A representative macro document about r-star."]
+
+    def test_caps_at_n_docs(self):
+        docs = [f"Distinct representative document number {i}." for i in range(5)]
+        out = _representative_docs_from_topic_info(self._ti(docs), 0, n_docs=2)
+        assert len(out) == 2
+
+    def test_excerpts_long_doc_on_word_boundary(self):
+        out = _representative_docs_from_topic_info(
+            self._ti(["word " * 200]), 0, max_chars=20
+        )
+        assert out[0].endswith("…")
+        assert len(out[0]) <= 21
+
+    def test_missing_column_returns_empty(self):
+        ti = pd.DataFrame({"Topic": [0], "Name": ["0_x"], "Representation": [["x"]]})
+        assert _representative_docs_from_topic_info(ti, 0) == []
+
+    def test_missing_topic_returns_empty(self):
+        assert _representative_docs_from_topic_info(self._ti(["doc"]), 99) == []
+
+    def test_none_topic_info_returns_empty(self):
+        assert _representative_docs_from_topic_info(None, 0) == []

@@ -72,6 +72,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 052 | **Lifecycle stage is a model-free attention-trajectory classification (Mann–Kendall trend + Mann–Whitney level); growth/stable/decay/dormant + emerging flag; fitted lenses are display-only; reframe — Shiller/SIR is a lens, not the law** | Live (supersedes 002 staging clause + 019 §E; amends 030/039) |
 | 053 | **SIR fit on a weekly integration grid + SIR-only reduced inference budget (draws 500 / tune 500 / 2 chains / `target_accept` 0.9) — makes the `O(T)` SIR scan tractable; `R₀` grid-invariant, curve/peak converted back to days; display-only, no-tuning rule intact** | Live (amends 039; relates 019/051/052) |
 | 054 | **Cross-document boilerplate strip — sentence-level recurring-passage removal at the filter stage (normalized sentence in ≥ N distinct documents), after MinHash; drops content-free shells; auditable `boilerplate_report.json`** | Live (extends 019; orthogonal to 020; relates 030/046/051) |
+| 055 | **Richer JEL cluster representation — c-TF-IDF terms + BERTopic representative documents (terms-first, full AEA taxonomy incl. Y); fixes thin-signal misses (r-star, Basel) and Y over-attraction; JEL stays a display flag** | Live (amends 020/046; relates 019/054) |
 
 ---
 
@@ -4146,6 +4147,85 @@ MinHash dedup and before the filtered corpus is persisted
   relates ADR-030 (fail-loud), ADR-046 (JEL representation), ADR-051 (fit floor).
   Adds `src/mnd/filtering/boilerplate.py`, a `filtering.boilerplate` config block,
   and wires one call into `cmd_filter`.
+
+---
+
+## ADR-055: Richer JEL cluster representation — c-TF-IDF terms + BERTopic representative documents
+
+- **Status**: Accepted
+- **Date**: 2026-06-25
+
+### Context
+
+JEL scope (ADR-020/046) is assigned per cluster by nearest-prototype: the
+cluster's representation is embedded and matched to the closest AEA JEL code
+description. The representation was the cluster's c-TF-IDF terms alone — a handful
+of stemmed keywords. Two failure modes followed:
+
+1. **Thin signal misses real macro clusters.** Bare terms under-determine the
+   match. With the terms-only representation the natural-rate / r-star cluster and
+   the Basel cluster both fell to the "Y" (miscellaneous) catch-all instead of E
+   and G — core macro narratives flagged out of scope.
+2. **Catch-all asymmetry.** "Y — Miscellaneous Categories" is a two-word prototype
+   against ~60-word real-code descriptions; an impoverished bare-term
+   representation is drawn to it, so Y over-attracts.
+
+(The earlier all-Y collapse was a separate parquet round-trip bug fixed in
+93ddaa4; this ADR is about representation quality, not that bug.)
+
+JEL is a display flag, not a gate (ADR-046), so the bar is "more accurate flag,"
+not "perfect classifier." But sending r-star and Basel out of scope is a visible
+error worth fixing at the representation level rather than by tuning prototypes
+(which the no-tuning rule discourages).
+
+### Decision
+
+Enrich the cluster representation passed to `classify_clusters` with BERTopic's
+representative documents. For each surfaced cluster the representation becomes the
+c-TF-IDF terms followed by the text of its top
+`clustering.jel.n_representative_docs` (3) `Representative_Docs`, each a bounded
+leading excerpt. Terms are placed first so they always survive the embedder's
+sequence cap; representative-document text fills the remaining budget.
+
+1. **Source: BERTopic's own representative docs.** `Representative_Docs` is
+   BERTopic's canonical per-topic representative selection (already in
+   `topic_info`), so the JEL representation is consistent with the model's notion
+   of what each cluster is about — no ad-hoc re-ranking, no clustering→display
+   dependency.
+2. **Terms-first ordering.** The terms anchor the representation and are never
+   truncated away; the document text is supplementary context.
+3. **Taxonomy unchanged; Y kept.** The full AEA top-level taxonomy including Y is
+   retained. Dropping Y was tested and rejected: without a miscellaneous home,
+   genuinely off-topic clusters (Syria, pollution, drug trafficking) leak into
+   E/F/G/H. The richer representation makes Y stop over-attracting on its own — Y
+   shrinks because real clusters now match their true code, while off-topic
+   clusters still land on Y.
+4. **Config-driven, no tuning.** `clustering.jel.n_representative_docs` is the only
+   new knob; it is a representation-construction choice, not tuned against anchor
+   recovery (ADR-040 holds).
+
+### Consequences
+
+- **Macro recall improves; Y normalizes.** On the Jun-19 narratives (0.6B proxy,
+  representative title+excerpt as a stand-in for `Representative_Docs`), all nine
+  macro probes land in scope (r-star → E and Basel → G both recovered from Y),
+  pollution stops leaking, and Y falls from a 75-cluster bucket to 43 with no
+  taxonomy change. Production uses the larger 8B embedder and the fuller
+  `Representative_Docs` text, expected at least as discriminating.
+- **Residual imperfection is acceptable and non-gating.** One off-topic leak
+  remains in the proxy (drug-trafficking → F, a genuine JEL ambiguity); the other
+  apparent leak is the BIS-disclaimer cluster, which ADR-054 boilerplate removal
+  eliminates upstream. Because JEL is a display flag (ADR-046), a residual
+  mislabel is shown with its code, never dropped.
+- **Recompute required.** The representation is built at analyze time from
+  `topic_info`; it takes effect on the next bake/re-embed, where the
+  representative-doc text is itself already boilerplate-cleaned (ADR-054).
+- **Scope.** Amends the representation step of ADR-020/046; keeps the AEA taxonomy
+  and the {E,F,G,H} scope unchanged; relates ADR-054 (boilerplate) and ADR-019
+  (embedding space). Adds `clustering.jel.n_representative_docs`, a
+  `_representative_docs_from_topic_info` helper, and one changed call in
+  `dashboard/run.py`; corrects the stale `jel_classifier` docstring that still
+  described JEL as a dynamics gate (superseded by ADR-046).
 
 ---
 

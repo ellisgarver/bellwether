@@ -46,7 +46,11 @@ from mnd.dashboard.build_artifacts import (
     build_dashboard_artifacts,
     write_dashboard_artifacts,
 )
-from mnd.dashboard.story_card import NOISE_TOPIC, _terms_from_topic_info
+from mnd.dashboard.story_card import (
+    NOISE_TOPIC,
+    _representative_docs_from_topic_info,
+    _terms_from_topic_info,
+)
 from mnd.dynamics.fitting import ClusterDynamics, DynamicsFitter
 from mnd.dynamics.normalize import adjusted_cluster_volumes, corpus_base_rate
 from mnd.stages.classify import classify_all
@@ -239,7 +243,15 @@ def run_analysis(
     # narratives are shown with their code, not dropped. Computed for surfaced only.
     cluster_terms = {cid: _terms_from_topic_info(topic_info, cid)[1] for cid in fit_ids}
     embedder = embedder if embedder is not None else _default_embedder()
-    jel = classify_clusters(cluster_terms, embedder=embedder)
+    # Richer JEL representation (ADR-055): terms first (always survive the embedder
+    # sequence cap) then BERTopic representative-doc text. Bare terms are too thin a
+    # signal and pushed core macro clusters (r-star, Basel) to the "Y" catch-all.
+    n_jel_docs = int((cfg["clustering"].get("jel") or {}).get("n_representative_docs", 3))
+    jel_representation = {
+        cid: cluster_terms[cid] + _representative_docs_from_topic_info(topic_info, cid, n_jel_docs)
+        for cid in fit_ids
+    }
+    jel = classify_clusters(jel_representation, embedder=embedder)
     in_scope_n = sum(1 for cid in fit_ids if cid in jel and jel[cid].in_scope)
     log.info(
         "JEL scope: %d/%d surfaced narratives in-scope (E/F/G/H); out-of-scope "

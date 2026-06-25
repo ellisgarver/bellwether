@@ -93,6 +93,35 @@ def _terms_from_topic_info(topic_info: pd.DataFrame | None, cluster_id: int) -> 
     return label, terms
 
 
+def _representative_docs_from_topic_info(
+    topic_info: pd.DataFrame | None, cluster_id: int, n_docs: int = 3, *, max_chars: int = 320
+) -> list[str]:
+    """Return up to ``n_docs`` BERTopic representative-document excerpts for a topic.
+
+    Enriches the JEL classifier's cluster representation (ADR-055): c-TF-IDF terms
+    alone are a thin signal, and pairing them with representative-document text
+    sharpens the nearest-prototype assignment. Each document is cut to a leading
+    ``max_chars`` excerpt. As in ``_terms_from_topic_info``, parquet round-trips
+    the ``Representative_Docs`` list into a numpy ndarray, normalized via tolist().
+    """
+    if (
+        topic_info is None
+        or "Topic" not in topic_info.columns
+        or "Representative_Docs" not in topic_info.columns
+    ):
+        return []
+    row = topic_info.loc[topic_info["Topic"] == cluster_id]
+    if row.empty:
+        return []
+    docs = row.iloc[0]["Representative_Docs"]
+    if hasattr(docs, "tolist"):
+        docs = docs.tolist()
+    if not isinstance(docs, (list, tuple)):
+        return []
+    excerpts = [_excerpt(str(d), max_chars) for d in docs[:n_docs]]
+    return [e for e in excerpts if e]
+
+
 def _score_by_terms(text: str, terms: list[str]) -> int:
     """Count total occurrences of the cluster's top terms in an article's text."""
     if not terms:

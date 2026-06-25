@@ -1,11 +1,13 @@
 """Post-clustering JEL classification (ADR-020).
 
 Each BERTopic cluster is assigned a primary JEL (Journal of Economic
-Literature) code by comparing its c-TF-IDF top terms against the official
-AEA-published descriptions of every top-level JEL category. Clusters whose
-primary JEL code is in the macro-finance scope ({E, F, G, H} by config)
-are retained for SIR/logistic dynamics analysis; out-of-scope clusters
-are reported but excluded from dynamics fitting.
+Literature) code by comparing its representation against the official
+AEA-published descriptions of every top-level JEL category. The
+representation is the cluster's c-TF-IDF top terms enriched with its
+BERTopic representative-document text (ADR-055). The macro-finance scope
+({E, F, G, H} by config) is a per-narrative **display flag, not a gate**
+(ADR-046): every non-noise cluster above the fit floor is fit, staged, and
+shown; out-of-scope clusters are flagged with their code, never dropped.
 
 This replaces the pre-clustering JEL keyword filter (deleted by ADR-020).
 The methodological rationale:
@@ -34,8 +36,9 @@ Public surface:
     >>> assignments[1].in_scope
     False
 
-Output schema is stable; downstream dynamics code joins on (cluster_id,
-in_scope) to drop non-macro clusters before SIR fitting.
+Output schema is stable; downstream code reads (cluster_id, primary_code,
+in_scope) as a display flag — out-of-scope narratives are surfaced with
+their code, not filtered out of dynamics (ADR-046).
 """
 from __future__ import annotations
 
