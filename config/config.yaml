@@ -100,6 +100,13 @@ clustering:
   ctfidf:
     reduce_frequent_words: false   # BERTopic ClassTfidfTransformer default (was researcher-chosen true)
     bm25_weighting: false          # BERTopic ClassTfidfTransformer default (was researcher-chosen true)
+  # Post-cluster JEL scope classification (ADR-020/046, display flag not a gate).
+  jel:
+    # Representative documents appended to the c-TF-IDF terms when building each
+    # cluster's JEL representation (ADR-055). Terms alone are too thin a signal —
+    # adding BERTopic representative-doc text recovers core macro clusters (r-star,
+    # Basel) that bare terms sent to the "Y" catch-all, and stops Y over-attracting.
+    n_representative_docs: 3
 
 # -----------------------------------------------------------------------------
 # Dynamics fitting (ADR-019)
