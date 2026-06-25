@@ -435,7 +435,7 @@ def filter_cmd(
     """
     from datetime import date as date_t
 
-    from mnd.filtering import Deduplicator
+    from mnd.filtering import BoilerplateStripper, Deduplicator
 
     cfg = ctx.obj["cfg"]
     root = project_root()
@@ -484,6 +484,23 @@ def filter_cmd(
 
     unique = Deduplicator().deduplicate(in_range)
     log.info("After dedup: %d unique articles", len(unique))
+
+    # Sub-document boilerplate strip (ADR-054) — remove recurring passages that
+    # whole-document dedup cannot catch, before the corpus reaches the embedder.
+    stripper = BoilerplateStripper.from_config(cfg)
+    if stripper.enabled:
+        before = len(unique)
+        unique = stripper.strip(unique)
+        rep = stripper.report
+        log.info(
+            "Boilerplate strip: %d template sentences, %d instances removed; "
+            "%d articles cleaned, %d dropped as content-free (%d → %d)",
+            rep.n_boilerplate_sentences, rep.n_instances_removed,
+            rep.n_articles_modified, rep.n_articles_dropped, before, len(unique),
+        )
+        report_path = out_path.parent / "boilerplate_report.json"
+        report_path.write_text(json.dumps(rep.to_dict(), ensure_ascii=False, indent=2))
+        log.info("Boilerplate report → %s", report_path)
 
     _save_articles_parquet(unique, out_path)
     log.info("Saved filtered articles → %s", out_path)

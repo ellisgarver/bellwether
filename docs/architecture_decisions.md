@@ -71,6 +71,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 051 | **Fit/display floor — only clusters with ≥ `min_articles_to_fit` (42) unique articles are fit, staged, and surfaced; all clusters stay in `clusters.parquet`, total reported on the data page. Map edges are focus-lit on hover, not static.** | Live (amends 046; relates 019/040/044) |
 | 052 | **Lifecycle stage is a model-free attention-trajectory classification (Mann–Kendall trend + Mann–Whitney level); growth/stable/decay/dormant + emerging flag; fitted lenses are display-only; reframe — Shiller/SIR is a lens, not the law** | Live (supersedes 002 staging clause + 019 §E; amends 030/039) |
 | 053 | **SIR fit on a weekly integration grid + SIR-only reduced inference budget (draws 500 / tune 500 / 2 chains / `target_accept` 0.9) — makes the `O(T)` SIR scan tractable; `R₀` grid-invariant, curve/peak converted back to days; display-only, no-tuning rule intact** | Live (amends 039; relates 019/051/052) |
+| 054 | **Cross-document boilerplate strip — sentence-level recurring-passage removal at the filter stage (normalized sentence in ≥ N distinct documents), after MinHash; drops content-free shells; auditable `boilerplate_report.json`** | Live (extends 019; orthogonal to 020; relates 030/046/051) |
 
 ---
 
@@ -4045,6 +4046,106 @@ fit overrunning the wall cannot be rescued by the per-cluster checkpoint/resume
   ADR-019 inference settings; relates to ADR-052 (SIR is display-only), ADR-051 (a
   comparable fit-mechanics decision), and the `b1bc1b2` checkpoint/resume.
   Amends `src/mnd/dynamics/fitting.py` and `config/config.yaml`.
+
+---
+
+## ADR-054: Cross-document boilerplate stripping at the filter stage (sub-document recurring-passage removal)
+
+- **Status**: Accepted
+- **Date**: 2026-06-25
+
+### Context
+
+Whole-document near-duplicate removal (ADR-019, MinHash LSH at Jaccard 0.85)
+catches articles that are duplicates *in their entirety*. It cannot catch a
+disclaimer, donation disclosure, media-contact block, or speech caveat repeated
+verbatim *inside* otherwise-distinct documents. These recurring passages survive
+into the embedded text, and because they are lexically identical across hundreds
+of documents they dominate the c-TF-IDF signal, producing artifact clusters keyed
+on the boilerplate rather than the macro content. Observed in the Jun-19 bake: a
+458-article Brookings cluster whose representative text is the donation-influence
+disclosure ("...the conclusions and recommendations of any Brookings publication
+are solely those of its author(s)..."), and a BIS cluster keyed on the speaker
+disclaimer ("The views expressed are those of the author and do not necessarily
+reflect those of the BIS"). The same passages impoverish the JEL representation
+(ADR-046) and inflate single-source share.
+
+The fix must remove the *repetition*, not the *topic*: ADR-020 forbids any
+pre-cluster topical filter, and that prohibition stands. The only question is
+mechanical — text repeated across many documents carries no per-document signal.
+
+### Decision
+
+Add a sub-document recurring-passage strip at the filter stage, immediately after
+MinHash dedup and before the filtered corpus is persisted
+(`scripts/run_pipeline.py` `cmd_filter`). New module
+`src/mnd/filtering/boilerplate.py`.
+
+1. **Granularity: normalized sentences.** Each article body is split into
+   sentences; each is normalized (lowercase, whitespace-collapsed, surrounding
+   punctuation stripped) to a match key. Only sentences with ≥ `min_sentence_words`
+   (6) tokens are eligible — short phrases collide legitimately and are never
+   stripped.
+
+2. **Criterion: cross-document frequency.** Document frequency of a normalized
+   sentence is the number of *distinct documents* containing it (counted once per
+   document). A sentence with DF ≥ `min_doc_frequency` (25) is template and is
+   removed from every document. This is the template-detection criterion of
+   Bar-Yossef & Rajagopalan 2002 and the boilerplate-removal lineage of
+   Kohlschütter et al. 2010 at corpus scale; it is the sub-document analogue of
+   the Broder 1997 / Henzinger 2006 whole-document dedup locked in by ADR-019, and
+   is consistent with Lee et al. 2022 (removing verbatim spans repeated across a
+   corpus improves downstream models).
+
+3. **Document count, not topical content, is the only input.** The strip never
+   inspects what a sentence is about. A content sentence stays below the threshold
+   because real macro prose carries document-specific numbers, dates, and
+   entities, so its exact normalized form rarely recurs across ≥25 documents; only
+   invariant template text crosses the line. ADR-020's no-topic-filter invariant
+   is intact — ADR-054 extends the ADR-019 dedup family, it does not reintroduce a
+   scope gate.
+
+4. **Pure-boilerplate articles are dropped, but only if actually stripped.** An
+   article whose stripped body falls below `min_content_words` (50) *and* from
+   which at least one sentence was removed is dropped as a content-free shell. A
+   naturally short article from which nothing was stripped is always kept —
+   under-capture is the failure mode that matters (corpus-correctness invariant).
+
+5. **Auditable removal (ADR-030 fail-loud).** The strip logs the count of
+   boilerplate sentence-types, instances removed, articles modified, and articles
+   dropped, and persists `boilerplate_report.json` beside the filtered parquet
+   listing every stripped sentence with its document frequency and every dropped
+   `article_id`, so the removal can be reviewed after a remote RCC run rather than
+   inferred from scrolled logs.
+
+6. **Config-driven, no tuning.** All knobs live under `filtering.boilerplate`
+   (`enabled`, `min_doc_frequency`, `min_sentence_words`, `min_content_words`).
+   These are corpus-hygiene parameters; ADR-040 binds only parameters tuned to
+   improve anchor recovery, and none is set against the anchor metric. Thresholds
+   are absolute document counts: template DF grows with the corpus while
+   coincidental content repetition does not, so the floor stays valid as the
+   corpus grows (Phase 6).
+
+### Consequences
+
+- **Artifact clusters dissolve at the root.** With the recurring passage gone, the
+  Brookings-disclaimer and BIS-disclaimer members re-cluster by their actual
+  content or fall below the ADR-051 fit floor; neither is surfaced as a narrative.
+- **JEL and source-mix improve for free.** The c-TF-IDF terms that feed the JEL
+  representation (ADR-046) and the single-source share stop being dominated by
+  template text.
+- **Recompute required; lands on the next embed.** The strip rewrites article
+  bodies and `word_count`, so it takes effect when the pending catch-up re-ingest
+  + re-embed runs; existing artifacts are unaffected until then.
+- **Bounded false-positive risk, fully logged.** Stripping an invariant template
+  sentence that is technically "content" (e.g. a standing FOMC caveat) is possible
+  but low-cost (such sentences are non-discriminating) and is enumerated in the
+  report for review.
+- **Scope.** Extends ADR-019 (whole-document dedup) to sub-document repetition;
+  orthogonal to and does not weaken ADR-020 (no topical pre-cluster filter);
+  relates ADR-030 (fail-loud), ADR-046 (JEL representation), ADR-051 (fit floor).
+  Adds `src/mnd/filtering/boilerplate.py`, a `filtering.boilerplate` config block,
+  and wires one call into `cmd_filter`.
 
 ---
 

@@ -5,6 +5,7 @@ from datetime import datetime
 
 import pytest
 
+from mnd.filtering.boilerplate import BoilerplateStripper
 from mnd.ingestion.base import Article
 
 
@@ -31,12 +32,95 @@ def test_topic_filter_module_removed():
         from mnd.filtering.topic_filter import TopicFilter  # noqa: F401
 
 
-def test_filtering_init_exports_only_deduplicator():
-    """`from mnd.filtering import *` should yield Deduplicator only (ADR-020)."""
+def test_filtering_init_exports_dedup_and_boilerplate():
+    """Filtering exports the two content/repetition operators, never a topic gate (ADR-020)."""
     import mnd.filtering as f
 
     assert "Deduplicator" in f.__all__
+    assert "BoilerplateStripper" in f.__all__
     assert "TopicFilter" not in f.__all__
+
+
+class TestBoilerplateStripper:
+    """Cross-document recurring-passage removal (ADR-054)."""
+
+    BOILER = "The views expressed are those of the author and do not reflect the institution."
+
+    def test_recurring_sentence_stripped_unique_content_survives(self):
+        articles = [
+            _make_article(f"c{i}", "t", f"Distinct macro analysis paragraph number {i} on inflation. {self.BOILER}")
+            for i in range(4)
+        ]
+        stripper = BoilerplateStripper(min_doc_frequency=3, min_sentence_words=6, min_content_words=2)
+        kept = stripper.strip(articles)
+
+        assert len(kept) == 4
+        for i, a in enumerate(kept):
+            assert "views expressed" not in a.body.lower()
+            assert f"number {i}" in a.body
+        assert stripper.report.n_boilerplate_sentences == 1
+        assert stripper.report.n_instances_removed == 4
+        assert stripper.report.n_articles_modified == 4
+        assert stripper.report.top_boilerplate[0]["doc_frequency"] == 4
+
+    def test_short_repeated_sentence_not_stripped(self):
+        articles = [_make_article(f"s{i}", "t", "Rates rose. Markets fell.") for i in range(5)]
+        stripper = BoilerplateStripper(min_doc_frequency=3, min_sentence_words=6, min_content_words=2)
+        kept = stripper.strip(articles)
+
+        assert len(kept) == 5
+        assert stripper.report.n_boilerplate_sentences == 0
+        assert all("Rates rose" in a.body for a in kept)
+
+    def test_content_free_shell_dropped_short_clean_article_kept(self):
+        content = [
+            _make_article(f"k{i}", "t", f"A genuinely distinct sentence about fiscal policy {i} here. {self.BOILER}")
+            for i in range(3)
+        ]
+        shell = _make_article("shell", "t", self.BOILER)
+        short_clean = _make_article("short", "t", "Tiny note.")
+        stripper = BoilerplateStripper(min_doc_frequency=3, min_sentence_words=6, min_content_words=4)
+        kept = stripper.strip(content + [shell, short_clean])
+
+        kept_ids = {a.article_id for a in kept}
+        assert "shell" not in kept_ids
+        assert "short" in kept_ids
+        assert stripper.report.n_articles_dropped == 1
+        assert stripper.report.dropped_article_ids == ["shell"]
+        assert stripper.report.n_articles_modified == 3
+
+    def test_word_count_recomputed_on_strip(self):
+        a = _make_article("w", "t", f"One distinct macroeconomic observation about output gaps. {self.BOILER}")
+        others = [_make_article(f"o{i}", "t", f"Other distinct line {i} on credit spreads. {self.BOILER}") for i in range(3)]
+        stripper = BoilerplateStripper(min_doc_frequency=3, min_sentence_words=6, min_content_words=2)
+        kept = stripper.strip([a, *others])
+
+        cleaned = next(x for x in kept if x.article_id == "w")
+        assert cleaned.word_count == len(cleaned.body.split())
+        assert cleaned.word_count > 0
+
+    def test_disabled_is_passthrough(self):
+        articles = [_make_article(f"p{i}", "t", f"Repeated. {self.BOILER}") for i in range(5)]
+        stripper = BoilerplateStripper(enabled=False, min_doc_frequency=2)
+        kept = stripper.strip(articles)
+
+        assert len(kept) == 5
+        assert all("views expressed" in a.body.lower() for a in kept)
+        assert stripper.report.n_boilerplate_sentences == 0
+
+    def test_from_config_reads_block(self):
+        cfg = {"filtering": {"boilerplate": {
+            "enabled": True, "min_doc_frequency": 7, "min_sentence_words": 4, "min_content_words": 9,
+        }}}
+        stripper = BoilerplateStripper.from_config(cfg)
+        assert stripper.min_doc_frequency == 7
+        assert stripper.min_sentence_words == 4
+        assert stripper.min_content_words == 9
+
+    def test_from_config_defaults_when_absent(self):
+        stripper = BoilerplateStripper.from_config({})
+        assert stripper.enabled is True
+        assert stripper.min_doc_frequency == 25
 
 
 datasketch = pytest.importorskip("datasketch", reason="datasketch not installed; run pip install -r requirements.txt")
