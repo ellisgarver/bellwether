@@ -237,6 +237,18 @@ filtering:
     num_perm: 128                  # Broder 1997; datasketch library default
     threshold: 0.85                # Henzinger 2006 mid-band for near-duplicate detection
 
+  # Sub-document boilerplate removal (ADR-054). Sentence-level cross-document
+  # repetition strip applied after MinHash dedup, before embedding. Removes
+  # disclaimers, donation disclosures, media-contact blocks, and speech caveats
+  # repeated verbatim across many documents — text with no per-document signal
+  # that otherwise forms artifact clusters. Document count, never topic, is the
+  # only input (ADR-020 intact); thresholds are absolute document counts.
+  boilerplate:
+    enabled: true
+    min_doc_frequency: 25          # normalized sentence in >= this many distinct documents = template (Bar-Yossef & Rajagopalan 2002; Kohlschütter et al. 2010)
+    min_sentence_words: 6          # only sentences this long are eligible to strip (protects common short phrases)
+    min_content_words: 50          # post-strip articles below this, that were actually stripped, are dropped as content-free shells
+
 # -----------------------------------------------------------------------------
 # Validation (ADR-019)
 # -----------------------------------------------------------------------------
