@@ -6,6 +6,13 @@ import { loadIndex, loadNarrative } from "@lib/data";
 const index = loadIndex();
 const entries = index.narratives;
 
+// The educational default foregrounds in-scope macro narratives (JEL E/F/G/H).
+// Out-of-scope clusters are kept and reachable via the "macro scope only" toggle
+// (ADR-046 — shown flagged, never dropped). The toggle defaults on only when the
+// data actually carries a scope distinction, so a run where nothing is flagged
+// in-scope still renders the full catalog instead of an empty page.
+const hasInScope = entries.some((e) => e.in_scope);
+
 // downsample each narrative's volume to a small sparkline at build time
 function spark(values: number[], n = 44): number[] {
   if (values.length <= n) return values;
@@ -28,8 +35,8 @@ const sparks: Record<number, number[]> = Object.fromEntries(
   <p class="eyebrow reveal">the catalog</p>
   <h1 class="reveal">all narratives</h1>
   <p class="lede reveal">
-    every cluster of writing the corpus found, largest and most recent first.
-    filter by name, term, or stage.
+    every cluster of writing the corpus found, in-scope macro narratives first.
+    filter by name, term, stage, or scope.
   </p>
 
   <div class="toolbar reveal">
@@ -38,13 +45,17 @@ const sparks: Record<number, number[]> = Object.fromEntries(
     <label class="toggle"><input type="checkbox" id="f-stable" checked /> stable</label>
     <label class="toggle"><input type="checkbox" id="f-decay" checked /> decay</label>
     <label class="toggle"><input type="checkbox" id="f-dormant" checked /> dormant</label>
+    {hasInScope && (
+      <label class="toggle scope"><input type="checkbox" id="f-scope" checked /> macro scope only</label>
+    )}
   </div>
 
   <div class="grid reveal" id="gallery">
     {entries.map((e) => (
       <div class="card-wrap" data-label={e.label.toLowerCase()}
         data-terms={e.top_terms.join(" ").toLowerCase()}
-        data-stage={e.stage}>
+        data-stage={e.stage}
+        data-scope={e.in_scope ? "in" : "out"}>
         <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
       </div>
     ))}
@@ -59,6 +70,8 @@ const sparks: Record<number, number[]> = Object.fromEntries(
       decay: document.getElementById("f-decay"),
       dormant: document.getElementById("f-dormant"),
     };
+    // scope facet is rendered only when the data carries a scope distinction.
+    const scope = document.getElementById("f-scope");
     const cards = [...document.querySelectorAll(".card-wrap")];
     const empty = document.getElementById("empty");
     function applyFilter() {
@@ -66,19 +79,22 @@ const sparks: Record<number, number[]> = Object.fromEntries(
       // each stage checkbox is an independent facet, unioned together. with
       // nothing checked we treat it as no filter rather than hiding all.
       const anyChecked = Object.values(flags).some((f) => f.checked);
+      const scopeOnly = scope?.checked;
       let shown = 0;
       for (const c of cards) {
         const okText = !q || c.dataset.label.includes(q) || c.dataset.terms.includes(q);
         const okCat = !anyChecked || flags[c.dataset.stage]?.checked;
-        const vis = okText && okCat;
+        const okScope = !scopeOnly || c.dataset.scope === "in";
+        const vis = okText && okCat && okScope;
         c.classList.toggle("hidden", !vis);
         if (vis) shown++;
       }
       empty.classList.toggle("hidden", shown !== 0);
     }
-    [search, ...Object.values(flags)].forEach((el) =>
-      el.addEventListener("input", applyFilter),
+    [search, ...Object.values(flags), scope].forEach((el) =>
+      el?.addEventListener("input", applyFilter),
     );
+    applyFilter();
   </script>
 </Base>
 

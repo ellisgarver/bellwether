@@ -309,8 +309,12 @@ def build_dashboard_artifacts(
             )
         )
 
-    # Gallery order: largest narrative first (matches story-card convention).
-    index_rows.sort(key=lambda e: e.n_articles, reverse=True)
+    # Gallery order: in-scope macro narratives first, then largest within each
+    # scope band. The educational default foregrounds the relevant macro stories
+    # (JEL E/F/G/H); out-of-scope clusters stay in the index and are sorted lower,
+    # not dropped (ADR-046 — JEL is a display flag, not a gate). True > False under
+    # reverse, so in-scope leads; n_articles breaks ties largest-first as before.
+    index_rows.sort(key=lambda e: (e.in_scope, e.n_articles), reverse=True)
 
     index = DashboardIndex(
         generated_at=generated_at or datetime.now(timezone.utc).isoformat(),
