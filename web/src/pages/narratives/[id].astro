@@ -1,7 +1,7 @@
 ---
 import Base from "../../layouts/Base.astro";
 import StageBadge from "@components/StageBadge.astro";
-import { loadIndex, loadNarrative, labelMap, JEL_NAME } from "@lib/data";
+import { loadIndex, loadNarrative, labelMap, displayName, JEL_NAME } from "@lib/data";
 
 export function getStaticPaths() {
   const index = loadIndex();
@@ -57,9 +57,10 @@ const direction = (d: any) =>
     : `${d.significant ? "significant" : "not significant"} (p = ${fmt(d.min_p, 3)}, lag ${d.best_lag})`;
 ---
 
-<Base title={n.label} active="narratives">
+<Base title={displayName(n)} active="narratives">
   <p class="back reveal"><a href={`${base}/narratives`}>← all narratives</a></p>
-  <h1 class="reveal">{n.label}</h1>
+  <h1 class="reveal">{displayName(n)}</h1>
+  {n.description && <p class="reveal" style="margin:0.2rem 0 0.4rem;color:var(--muted)">{n.description}</p>}
   <p class="lede reveal" style="margin-bottom:0.4rem">
     {n.card.n_articles} articles
     {n.card.date_range && <> · {n.card.date_range[0]} → {n.card.date_range[1]}</>}

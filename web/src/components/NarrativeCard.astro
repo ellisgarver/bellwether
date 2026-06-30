@@ -1,6 +1,6 @@
 ---
 import StageBadge from "./StageBadge.astro";
-import { JEL_NAME, STAGE_COLOR, type IndexEntry } from "@lib/data";
+import { JEL_NAME, STAGE_COLOR, displayName, type IndexEntry } from "@lib/data";
 interface Props { entry: IndexEntry; spark?: number[]; }
 const { entry, spark } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -20,7 +20,7 @@ const col = STAGE_COLOR[entry.stage];
 ---
 <a class="card" href={`${base}/narratives/${entry.cluster_id}`}>
   <div class="card-main">
-    <h3>{entry.label}</h3>
+    <h3>{displayName(entry)}</h3>
     <div class="meta">
       {entry.n_articles} articles{span && <> · {span}</>}
       {entry.jel_code && <> · <abbr title={JEL_NAME[entry.jel_code] ?? entry.jel_code}>JEL {entry.jel_code}</abbr></>}

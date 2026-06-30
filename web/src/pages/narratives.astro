@@ -1,7 +1,7 @@
 ---
 import Base from "../layouts/Base.astro";
 import NarrativeCard from "@components/NarrativeCard.astro";
-import { loadIndex, loadNarrative } from "@lib/data";
+import { loadIndex, loadNarrative, displayName } from "@lib/data";
 
 const index = loadIndex();
 const entries = index.narratives;
@@ -52,7 +52,7 @@ const sparks: Record<number, number[]> = Object.fromEntries(
 
   <div class="grid reveal" id="gallery">
     {entries.map((e) => (
-      <div class="card-wrap" data-label={e.label.toLowerCase()}
+      <div class="card-wrap" data-label={(displayName(e) + " " + e.label).toLowerCase()}
         data-terms={e.top_terms.join(" ").toLowerCase()}
         data-stage={e.stage}
         data-scope={e.in_scope ? "in" : "out"}>

@@ -87,6 +87,9 @@ export interface StoryCard {
 export interface Narrative {
   cluster_id: number;
   label: string;
+  // Human-readable display name + one-liner (ADR-056); null → fall back to label.
+  label_human: string | null;
+  description: string | null;
   stage: Stage;
   card: StoryCard;
   volume: Series;
@@ -104,6 +107,8 @@ export interface Narrative {
 export interface IndexEntry {
   cluster_id: number;
   label: string;
+  // Human-readable display name (ADR-056); null → fall back to label.
+  label_human?: string | null;
   stage: Stage;
   n_articles: number;
   top_terms: string[];
@@ -145,10 +150,19 @@ export function loadNarrative(clusterId: number): Narrative {
   return readJson<Narrative>(`narrative_${clusterId}.json`);
 }
 
+// Human-readable display name with graceful fallback (ADR-056): the LLM title
+// when present, else BERTopic's c-TF-IDF label. One place so card / detail / map
+// all render the same name.
+export function displayName(e: { label: string; label_human?: string | null }): string {
+  return e.label_human || e.label;
+}
+
 // Label-by-id lookup so the front end can resolve similar/edge ids → labels
 // without hard-coding anything (data-driven per the project constraint).
 export function labelMap(index: DashboardIndex): Record<number, string> {
-  return Object.fromEntries(index.narratives.map((n) => [n.cluster_id, n.label]));
+  return Object.fromEntries(
+    index.narratives.map((n) => [n.cluster_id, displayName(n)]),
+  );
 }
 
 // ---- shared display helpers ----
