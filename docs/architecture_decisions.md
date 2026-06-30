@@ -4229,6 +4229,104 @@ sequence cap; representative-document text fills the remaining budget.
 
 ---
 
+## ADR-056: Human-readable narrative names — display-layer LLM titling over c-TF-IDF labels
+
+- **Status**: Proposed
+- **Date**: 2026-06-30
+
+### Context
+
+Every surfaced narrative is labelled with BERTopic's default: the cluster id
+joined to its top c-TF-IDF terms, e.g. `23_nps_lands_acres_park` or
+`27_expressed speech_bank speech_speaker necessarily_reflect bis`. For the
+internal pipeline this is fine — the terms *are* the cluster representation. But
+the stated product goal is an educational tool that "identifies macroeconomic
+stories/narratives" for a non-expert reader (project_goal_intent), and a wall of
+underscore-joined stems is not a story name. The front-end clarity principle
+(every element self-explanatory to a non-expert) is violated at the most basic
+level: the title.
+
+Constraints that shape the fix:
+
+1. **No-paid-dependency rule binds data fetching + analysis only** (CLAUDE.md,
+   ADR governance). The display/presentation layer is explicitly exempt — paid-LLM
+   story prose is already sanctioned there. A readable title is display-layer.
+2. **Reproducibility.** The core pipeline (curves, stages, JEL scope, dynamics)
+   must stay free and deterministic. An LLM titling step introduces non-determinism
+   and an external dependency, so it must not sit on the analysis path and the
+   published artifact must be reproducible without re-calling the model.
+3. **No hand-tuning toward anchor recovery (ADR-040).** Titles are cosmetic and do
+   not touch clustering, scope, fits, or recovery — but the naming prompt must not
+   smuggle in anchor names or otherwise become a tuning surface.
+4. **Grounding.** A title must describe the cluster's actual content, not invent a
+   plausible macro story. Hallucinated names would mislabel exactly the out-of-scope
+   clusters the JEL flag is meant to mark honestly (ADR-046).
+5. **Graceful degradation.** Like the markets (ADR-047) and Media Cloud (ADR-048)
+   overlays, the feature must degrade to absent — no key, no titles, fall back to the
+   c-TF-IDF label — never block a bake.
+
+### Decision
+
+Add a display-layer **narrative naming** step that turns each surfaced cluster's
+existing representation into a short human title plus a one-line description, via a
+paid LLM, cached and committed so the published site is reproducible without the
+key.
+
+1. **Model + transport.** Claude Haiku 4.5 (`claude-haiku-4-5`) — the cheapest
+   current tier, ample for short titling — through the **Batches API** (50% off,
+   async; ~one call per surfaced narrative, a few hundred input tokens each). The
+   whole bake is well under a dollar. `temperature=0` and a JSON-schema structured
+   output (`{title, description}`) for stable, parseable results.
+2. **Input is the same representation already built for JEL (ADR-055).** The prompt
+   carries the cluster's c-TF-IDF terms, its top representative-document excerpts,
+   date range, and source mix — nothing else. The system prompt instructs: name the
+   cluster **only** from the supplied material, no outside knowledge, ≤6-word title,
+   one factual sentence; if the material is not about economics, name it plainly
+   anyway (do not force a macro framing). No anchor names appear in the prompt.
+3. **Cache keyed on a representation hash; commit the cache.** Each title is stored
+   under a content hash of its representation (mirroring the embedding cache ADR-050
+   and the per-cluster fit cache). A bake reuses any unchanged cluster's title and
+   calls the model only for new/changed clusters; the cache is committed to the repo
+   so the static site rebuilds deterministically with no key present. Re-titling
+   happens only when a cluster's representation actually changes.
+4. **Additive artifact contract; front-end falls back.** `label_human` and
+   `description` are added to the index/narrative artifacts (schema_version bump).
+   The front end shows `label_human` when present and falls back to the raw
+   c-TF-IDF `label` otherwise, so a key-less build and the current data both render
+   unchanged. The c-TF-IDF `label` and `top_terms` remain in the artifact — the
+   readable name is layered over them, not a replacement, so the provenance of the
+   cluster stays inspectable.
+5. **Display-only, never upstream.** The title never feeds embedding, clustering,
+   JEL scope, fitting, staging, or anchor recovery. It is generated after clusters
+   are fixed, from their frozen representation, exactly like the overlays.
+
+### Consequences
+
+- **The catalog reads as stories, not term-dumps**, satisfying the educational goal
+  and the front-end clarity principle, while the macro-first relevance default
+  (build_artifacts ordering + the scope facet) decides *which* stories lead.
+- **Reproducibility preserved.** The published artifact is deterministic: the
+  committed title cache means a rebuild needs no API key and produces identical
+  output. The free, no-paid-dep core (curves/stages/scope/fits) is untouched; only a
+  cosmetic label is paid, consistent with feedback_paid_dep_scope and the CLAUDE.md
+  display-layer exemption.
+- **Honest about residual error.** A title is grounded in real cluster material but
+  is still model output; a mislabel is a cosmetic display error shown alongside the
+  unchanged terms and JEL code, never a gate (ADR-046 holds). Out-of-scope clusters
+  get a plain descriptive name, not a forced macro one.
+- **New knobs / surfaces.** Adds a `display.naming` config block
+  (`model`, `enabled`, `max_title_words`, cache path), a naming module in the
+  display layer, two artifact fields, and a schema_version bump. No change to any
+  ADR-019/020/039/045/046/051/052 analysis decision.
+- **Cost + dependency.** Introduces `anthropic` as a display-layer dependency and an
+  `ANTHROPIC_API_KEY`, both gated behind `display.naming.enabled` and absent-tolerant.
+  Per-bake cost is negligible (Haiku via Batches, cache-incremental).
+- **Scope.** Display-layer only; relates ADR-055 (shares the representation),
+  ADR-046 (flag-not-gate), ADR-043 (static-site contract), ADR-050 (cache pattern),
+  and the no-paid-dep governance in CLAUDE.md. Supersedes nothing.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```
