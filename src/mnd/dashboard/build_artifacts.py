@@ -209,6 +209,7 @@ def build_dashboard_artifacts(
     umap_xyz: dict[int, tuple[float, float, float]] | None = None,
     markets: dict[int, MarketsArtifact] | None = None,
     mediacloud: dict[int, MediaCloudArtifact] | None = None,
+    names: dict[int, "NarrativeName"] | None = None,
     cfg: dict[str, Any] | None = None,
     top_k_edges: int = 3,
     generated_at: str | None = None,
@@ -228,6 +229,7 @@ def build_dashboard_artifacts(
     umap_xyz = umap_xyz or {}
     markets = markets or {}
     mediacloud = mediacloud or {}
+    names = names or {}
     recency_weeks = int(cfg["stages"]["newly_emerging_recency_weeks"])
 
     cluster_ids = sorted(c for c in dynamics if int(c) != NOISE_TOPIC)
@@ -260,6 +262,7 @@ def build_dashboard_artifacts(
         stage = stage_obj.stage if stage_obj else "dormant"
         stage_detail = stage_obj.detail if stage_obj else {}
         jel_obj = jel.get(cid)
+        nm = names.get(cid)
 
         observed = cd.raw_series if cd.raw_series is not None else cd.time_series
         volume = (
@@ -272,6 +275,8 @@ def build_dashboard_artifacts(
             NarrativeArtifact(
                 cluster_id=int(cid),
                 label=card.label,
+                label_human=nm.title if nm else None,
+                description=nm.description if nm else None,
                 stage=stage,
                 card=card.to_dict(),
                 volume=volume,
@@ -290,6 +295,7 @@ def build_dashboard_artifacts(
             IndexEntry(
                 cluster_id=int(cid),
                 label=card.label,
+                label_human=nm.title if nm else None,
                 stage=stage,
                 n_articles=card.n_articles,
                 top_terms=card.top_terms,

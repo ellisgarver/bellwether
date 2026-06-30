@@ -73,6 +73,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 053 | **SIR fit on a weekly integration grid + SIR-only reduced inference budget (draws 500 / tune 500 / 2 chains / `target_accept` 0.9) — makes the `O(T)` SIR scan tractable; `R₀` grid-invariant, curve/peak converted back to days; display-only, no-tuning rule intact** | Live (amends 039; relates 019/051/052) |
 | 054 | **Cross-document boilerplate strip — sentence-level recurring-passage removal at the filter stage (normalized sentence in ≥ N distinct documents), after MinHash; drops content-free shells; auditable `boilerplate_report.json`** | Live (extends 019; orthogonal to 020; relates 030/046/051) |
 | 055 | **Richer JEL cluster representation — c-TF-IDF terms + BERTopic representative documents (terms-first, full AEA taxonomy incl. Y); fixes thin-signal misses (r-star, Basel) and Y over-attraction; JEL stays a display flag** | Live (amends 020/046; relates 019/054) |
+| 056 | **Human-readable narrative names — display-layer Claude Haiku titling over c-TF-IDF labels, grounded only in the ADR-055 representation; titles cached under a representation hash and committed for key-free deterministic rebuilds; display-only, degrades to the label** | Live (display-layer; relates 043/046/050/055) |
 
 ---
 
@@ -4231,7 +4232,7 @@ sequence cap; representative-document text fills the remaining budget.
 
 ## ADR-056: Human-readable narrative names — display-layer LLM titling over c-TF-IDF labels
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-06-30
 
 ### Context
@@ -4273,10 +4274,15 @@ paid LLM, cached and committed so the published site is reproducible without the
 key.
 
 1. **Model + transport.** Claude Haiku 4.5 (`claude-haiku-4-5`) — the cheapest
-   current tier, ample for short titling — through the **Batches API** (50% off,
-   async; ~one call per surfaced narrative, a few hundred input tokens each). The
-   whole bake is well under a dollar. `temperature=0` and a JSON-schema structured
-   output (`{title, description}`) for stable, parseable results.
+   current tier, ample for short titling. One **synchronous** Messages call per
+   cache miss, `temperature=0` with a JSON-schema structured output
+   (`{title, description}`) for stable, parseable results. The committed cache
+   (point 3) makes each bake incremental, so the Batches API's throughput buys
+   nothing here while its polling lifecycle adds complexity; at Haiku rates the
+   50% batch discount is a fraction of a cent. Batches remains a drop-in option
+   if a cold full-corpus naming pass ever needs it. A first-call failure (missing
+   key, SDK, rate ceiling) aborts the pass rather than firing ~N failing calls;
+   later one-off failures are skipped per cluster.
 2. **Input is the same representation already built for JEL (ADR-055).** The prompt
    carries the cluster's c-TF-IDF terms, its top representative-document excerpts,
    date range, and source mix — nothing else. The system prompt instructs: name the

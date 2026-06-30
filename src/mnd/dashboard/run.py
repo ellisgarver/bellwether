@@ -46,6 +46,7 @@ from mnd.dashboard.build_artifacts import (
     build_dashboard_artifacts,
     write_dashboard_artifacts,
 )
+from mnd.dashboard.naming import NamingInput, generate_names
 from mnd.dashboard.story_card import (
     NOISE_TOPIC,
     _representative_docs_from_topic_info,
@@ -174,6 +175,7 @@ def run_analysis(
     cfg: dict[str, Any] | None = None,
     embedder: Any | None = None,
     fitter: DynamicsFitter | None = None,
+    namer: Any | None = None,
 ) -> Path:
     """Recompute the analysis layer from persisted clustering and write artifacts.
 
@@ -259,6 +261,14 @@ def run_analysis(
         in_scope_n, len(fit_ids),
     )
 
+    # 2b. Human-readable display names (ADR-056): a short LLM title + one-liner
+    # built from the same representation as JEL (terms + representative docs) plus
+    # each cluster's date span and source mix. Display-only — never feeds the fit
+    # or scope — cached/committed for deterministic, key-free rebuilds, and absent
+    # (front end falls back to the c-TF-IDF label) when disabled or unkeyed.
+    naming_inputs = _naming_inputs(fit_ids, cluster_terms, topic_info, clusters_df, n_jel_docs)
+    names = generate_names(naming_inputs, cfg, client=namer)
+
     # 3. Four-lens fit + stage on the adjusted series (ADR-039 / ADR-019). Fits
     # are checkpointed per cluster under out_dir so a re-run resumes mid-corpus
     # rather than refitting from scratch after a wall-clock timeout.
@@ -300,10 +310,49 @@ def run_analysis(
         umap_xyz=umap_xyz,
         markets=markets,
         mediacloud=mediacloud,
+        names=names,
         n_clusters_total=len(all_ids),
         cfg=cfg,
     )
     return write_dashboard_artifacts(index, narratives, out_dir)
+
+
+def _naming_inputs(
+    fit_ids: list[int],
+    cluster_terms: dict[int, list[str]],
+    topic_info: pd.DataFrame | None,
+    clusters_df: pd.DataFrame,
+    n_excerpts: int,
+) -> list[NamingInput]:
+    """Build the per-cluster representation the namer titles from (ADR-056).
+
+    Terms and representative-doc excerpts mirror the JEL representation (ADR-055);
+    the date span and top sources are computed from the cluster's chunks for light
+    grounding context. No model call here — this only assembles the prompt inputs.
+    """
+    inputs: list[NamingInput] = []
+    for cid in fit_ids:
+        sub = clusters_df[clusters_df["topic"] == cid]
+        date_range: tuple[str, str] | None = None
+        if "published_at" in sub.columns:
+            dts = pd.to_datetime(sub["published_at"], errors="coerce").dropna()
+            if len(dts):
+                date_range = (dts.min().date().isoformat(), dts.max().date().isoformat())
+        sources = (
+            [str(s) for s in sub["source_id"].value_counts().index[:4]]
+            if "source_id" in sub.columns
+            else []
+        )
+        inputs.append(
+            NamingInput(
+                cluster_id=int(cid),
+                terms=cluster_terms[cid],
+                excerpts=_representative_docs_from_topic_info(topic_info, cid, n_excerpts),
+                date_range=date_range,
+                sources=sources,
+            )
+        )
+    return inputs
 
 
 def _markets_overlays(

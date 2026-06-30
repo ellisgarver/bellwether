@@ -42,9 +42,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
-Stage = Literal["growth", "decay", "dormant"]
+Stage = Literal["growth", "stable", "decay", "dormant"]
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +138,11 @@ class MarketsArtifact:
 @dataclass
 class NarrativeArtifact:
     cluster_id: int
-    label: str
+    label: str                                   # BERTopic c-TF-IDF label (fallback)
+    # Human-readable display name + one-liner (ADR-056); None when naming is
+    # disabled or no key — the front end falls back to ``label``.
+    label_human: str | None
+    description: str | None
     stage: Stage
     card: dict[str, Any]                         # StoryCard.to_dict()
     volume: SeriesArtifact
@@ -172,6 +176,8 @@ class IndexEntry:
     label: str
     stage: Stage
     n_articles: int
+    # Human-readable display name (ADR-056); None → front end falls back to ``label``.
+    label_human: str | None = None
     top_terms: list[str] = field(default_factory=list)
     peak_date: str | None = None
     date_range: tuple[str, str] | None = None

@@ -295,6 +295,25 @@ compute:
   cache_dir: ".cache"
 
 # -----------------------------------------------------------------------------
+# Display / presentation layer (ADR-056)
+# -----------------------------------------------------------------------------
+# Display-only settings. Exempt from the no-paid-dependency rule that binds data
+# fetching + analysis (CLAUDE.md); a paid LLM may be used here. Nothing under
+# `display` ever feeds embedding, clustering, JEL scope, fitting, or staging.
+display:
+  naming:
+    # Human-readable narrative titles + one-liners over BERTopic's c-TF-IDF
+    # labels (ADR-056). Generated at bake time from each cluster's existing
+    # representation (terms + representative docs), cached under a representation
+    # hash, and committed so the static site rebuilds with no API key. Disabled or
+    # unkeyed → the front end falls back to the c-TF-IDF label.
+    enabled: true
+    model: "claude-haiku-4-5"   # cheapest current tier; ample for short titling
+    max_title_words: 6
+    prompt_version: 1           # bump to invalidate the cache when the prompt changes
+    cache_dir: "data/naming_cache"   # tracked path (data/ is not gitignored)
+
+# -----------------------------------------------------------------------------
 # Storage paths
 # -----------------------------------------------------------------------------
 paths:
