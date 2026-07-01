@@ -16,13 +16,11 @@ Roos & Reccius (2024, *Journal of Economic Surveys*), the most recent survey of 
 
 ---
 
-## 2. The epidemic analogy
+## 2. The lifecycle and its lenses
 
-A narrative spreads from writer to writer as a contagion spreads through a population: a writer encounters a framing (susceptible), begins using it (infected), and later drops it (recovered). Aggregated over many writers, the weekly volume of articles carrying a framing traces a curve with the shape of an epidemic — ignition, exponential growth, peak, decay.
+The reading is lifecycle-first and model-free. Each narrative's stage — emerging, growing, holding, or fading — is read directly from the recent shape of its own weekly attention curve (Stage 8), so the reading is well-defined for every trajectory, including the multi-wave and plateau shapes no single growth model describes, and never depends on any one model being correct.
 
-The SIR model (Kermack & McKendrick 1927) — Susceptible, Infected, and Recovered populations governed by a transmission rate β and a recovery rate γ — fits these volume curves with the machinery it applies to disease incidence. The basic reproduction number R₀ = β/γ carries the same meaning: above 1 the narrative spreads, below 1 it fades.
-
-Epidemic models of idea diffusion have an established lineage. Goffman & Newill (1964) modeled the transmission of scientific ideas as an epidemic; Daley & Kendall (1965) built the canonical rumor model on SIR mechanics; and a later literature fits SIR-type dynamics to news propagation, citation cascades, and online topic diffusion. The substrate here is multi-source institutional macro discourse, reported through a public tool.
+Three classical growth curves are fit alongside as interpretive lenses (Stage 7), not as the operating mechanism. The epidemic lens follows Shiller's analogy: a narrative spreads from writer to writer as a contagion spreads through a population — a writer encounters a framing (susceptible), begins using it (infected), and later drops it (recovered) — so the weekly volume of articles carrying a framing can trace the ignition–growth–peak–decay shape of an outbreak. The SIR model (Kermack & McKendrick 1927), with transmission rate β and recovery rate γ, gives the basic reproduction number R₀ = β/γ (above 1 spreading, below 1 fading); it is reported as a display-only reading of how contagious a wave was, not as the stage rule. Epidemic models of idea diffusion have an established lineage — Goffman & Newill (1964) on the transmission of scientific ideas, Daley & Kendall (1965) on the canonical rumor model, and a later literature fitting SIR-type dynamics to news propagation, citation cascades, and online topic diffusion. The other two lenses are the logistic curve (Verhulst 1838) and the Bass adoption model; all four readings — SIR, logistic, Bass, and model-free shape facts — are shown side by side, none selected as a winner.
 
 ---
 

@@ -1,14 +1,15 @@
 # Macro Narrative Dynamics
 
-A quantitative measurement framework for tracking how macro-financial
-narratives form, propagate, peak, and decay in U.S. financial discourse from
-2010 to the present. The system embeds institutional and academic documents
-with a transformer encoder, clusters them into coherent narratives with
-BERTopic, fits epidemiological growth models to each narrative's life-cycle,
-classifies the life-cycle stage, and surfaces the analysis through a public web
-dashboard.
+An educational tool for tracking how macro-financial narratives form, propagate,
+peak, and decay in U.S. institutional and academic discourse from 2010 to the
+present. The system embeds documents with a transformer encoder, clusters them
+into coherent narratives with BERTopic, reads each narrative's life-cycle stage
+directly from its attention trajectory (a model-free trend test), and surfaces
+the analysis through a public web dashboard. Epidemic (SIR), logistic, and
+adoption (Bass) curves are fit alongside as interpretive lenses — shown together,
+never used to pick a winner or to set the stage.
 
-A descriptive measurement and educational tool. Every parameter is a published
+A descriptive, historical measurement tool. Every parameter is a published
 library default or a value drawn from primary literature.
 
 **For methodology, read [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) first** — a

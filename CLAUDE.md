@@ -2,9 +2,11 @@
 
 ## What this is
 
-Quantitative study of narrative lifecycle dynamics in U.S. macro-financial
-discourse. Pipeline: embed articles → cluster with BERTopic → fit SIR/logistic
-ODEs to per-cluster volume curves → classify lifecycle stage.
+Educational tool tracking narrative lifecycle dynamics in U.S. macro-financial
+discourse. Pipeline: embed articles → cluster with BERTopic → read each cluster's
+lifecycle stage model-free from its volume trajectory (ADR-052) → fit
+SIR/logistic/Bass curves alongside as display-only lenses (ADR-039), never as the
+stage rule.
 
 - **`docs/METHODOLOGY.md`** is the canonical, plain-English methodology with the
   field-accepted citation behind each choice. **Read it first.**
