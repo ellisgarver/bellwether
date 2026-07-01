@@ -4333,6 +4333,100 @@ key.
 
 ---
 
+## ADR-057: Phase-6 live emerging — press-heating detection + weekly institutional refresh (design)
+
+- **Status**: Proposed
+- **Date**: 2026-06-30
+
+### Context
+
+The pivoted mission includes surfacing narratives "for current news," but the
+tool's live surface is thin. The Emerging view ranks narratives by
+`is_emerging` — a within-corpus recency flag (growth stage + last-active within
+the four-week window of the corpus frontier). It has two limits:
+
+1. **Corpus staleness.** The frontier is the last ingest date, so "emerging"
+   only means "recent *as of the last build*," not "emerging now." Between builds
+   the feed goes stale.
+2. **No press-led signal.** Institutional writing is the formation layer, but it
+   lags the press for already-forming stories. The tool has a per-narrative Media
+   Cloud press overlay (ADR-042) and a bidirectional lead-lag readout (ADR-048),
+   yet nothing flags a tracked narrative that is *spiking in the press right now*.
+
+Detection scaffolding already exists but is unwired into the feed:
+`MediaCloudDetector.fetch_story_counts` (story counts + attention-share ratio over
+time) and `detect_anomalies` (z-score: count above baseline mean + k·σ) in
+`src/mnd/detection/mediacloud.py`.
+
+Hard constraints from prior decisions:
+- **Press is a signal, not substrate (ADR-010).** Press *text* is never embedded
+  or clustered; ingesting it would bias the corpus toward post-formation stories.
+- **Display/validation only, never a gate (ADR-020/042/046).** No emerging signal
+  may feed embedding, clustering, or JEL scope — that would reintroduce the
+  pre-cluster topic gate ADR-020 removed.
+- **Under-capture is the failure mode that matters.** A weekly refresh must not
+  leave per-source gaps (weekly-reingest note: staggered per-source end dates).
+
+### Decision (design; no pipeline code in this ADR)
+
+Treat "emerging" as **two distinct display-only signals**, and scope out a third.
+
+1. **Institutional onset (existing `is_emerging`), kept — refreshed by a weekly
+   pipeline run (§2).** Unchanged in meaning; it just needs a current frontier.
+
+2. **Press heating (new, near-term, low-risk).** For each *already-tracked*
+   narrative, run `detect_anomalies` on the trailing Media Cloud window using the
+   same ADR-042 per-narrative query, on the **attention-share ratio** (not raw
+   counts, so it is robust to overall press-volume drift). Flag a narrative as
+   "heating in the press" when its most-recent window sits ≥ k·σ above its own
+   press baseline. Surface it in the Emerging view as a **separate signal beside**
+   the institutional recency flag — never merged, so the reader can tell "our
+   sources just started on this" from "the press is spiking on a story we already
+   track." Recomputes entirely from the press series at bake time: **no re-embed,
+   no re-cluster, and it never touches embedding/clustering/scope** (ADR-020/046
+   invariant intact), exactly like the ADR-042/048 overlays. `k` is a fixed
+   config value, not tuned against anchor recovery (ADR-040).
+
+3. **Weekly institutional refresh (infrastructure for §1).** Per-source
+   **over-fetch** delta (start each source's window before its own
+   `max(published_at)` in the corpus, dedup absorbs the overlap) → incremental
+   embed (ADR-050 cache re-encodes only new chunks) → cluster → analyze. The open
+   problem is **narrative-identity stability across re-clusters**: BERTopic renumbers
+   topics on each fit, but a *tracking* tool must keep a narrative's identity (and
+   its URL, its human name) stable week to week. Proposed approach: carry a stable
+   narrative id by matching each new cluster to the prior build's clusters by
+   centroid cosine (greedy/Hungarian assignment above a similarity floor), minting
+   a new id only for genuinely new clusters. This is the primary engineering risk
+   and likely warrants its own ADR once §2 has shipped.
+
+4. **Scoped out: novel press-only narratives.** Detecting narratives that exist
+   *only* in the press and not yet in the institutional corpus would require
+   clustering press text — which ADR-010/020 forbid. Press stays a volume signal
+   over the institutional narrative set; the tool does not claim to discover
+   stories the institutions have not written about.
+
+### Consequences
+
+- **Sequence.** §2 (press heating) is the near-term win: display-only, buildable
+  now from the persisted clusters + live Media Cloud, no re-embed, gated by a new
+  config flag and degrading to absent when unkeyed (like every Media Cloud
+  coupling). §3 (weekly refresh) is deferred until the identity-stability approach
+  is validated — until then the feed is refreshed by manual re-runs, and "emerging"
+  is honestly captioned as "as of the last build."
+- **Honesty.** Keeping the two signals separate avoids implying the institutions
+  are writing about something when only the press is; the caption states which
+  signal fired. Press coverage thins before ~2017 (ADR-042 `reliable_since_year`),
+  so heating is only computed on the reliable window.
+- **Invariants preserved.** Nothing here feeds embedding, clustering, or scope
+  (ADR-020/046); press text is never embedded (ADR-010); values are fixed a priori
+  (ADR-040). Relates ADR-016 (Media Cloud Premium live), ADR-042/048 (press
+  overlays), ADR-050 (incremental embed), and the corpus-correctness invariant.
+- **Open decisions for a follow-up ADR.** The heating window length and `k`; the
+  centroid-match similarity floor and assignment method for identity stability;
+  and whether the weekly run is a cron on RCC or a manual cadence.
+
+---
+
 ## ADR template (copy for new entries)
 
 ```
