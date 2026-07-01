@@ -8,7 +8,7 @@ const entries = index.narratives;
 const hasMap = entries.some((e) => e.umap_xyz || e.umap_xy);
 const stageCount = (s: string) => entries.filter((e) => e.stage === s).length;
 
-// epidemic-style curves for the hero backdrop (decorative, on-theme).
+// rise-and-fall life-cycle curves for the hero backdrop (decorative, on-theme).
 // rise is a Gaussian up to the peak; the fall decays toward `floor` — 0 returns
 // the line all the way to the x-axis, a positive floor levels it off at a
 // plateau. wide widths + per-pixel sampling keep the curves smooth, not jagged.
@@ -36,14 +36,14 @@ const curves = [
   <!-- slide 1 — title, author, thesis -->
   <section class="hero">
     <p class="eyebrow reveal">ellis garver · macro narrative dynamics</p>
-    <h1 class="hero-title reveal">stories spread like epidemics.</h1>
+    <h1 class="hero-title reveal">how macro narratives rise and fade.</h1>
     <p class="hero-thesis reveal">
       U.S. macro-finance discourse develops recurring theme-stories, and those
       stories rise and fade in quantifiable waves. this project reads the
       institutional and academic record — the Fed, IMF, BIS, NBER and their peers —
       clusters it into narratives, and tracks the arc of each: where its attention
-      is heading now, read straight from the curve, with epidemic, growth, and
-      adoption models offered as interpretive lenses.
+      is heading now, read straight from the curve. epidemic, growth, and
+      adoption models are fit alongside as interpretive lenses, not the verdict.
     </p>
     <div class="hero-stats reveal">
       <div><span class="num">{index.n_narratives}</span><span class="lbl">narratives</span></div>
