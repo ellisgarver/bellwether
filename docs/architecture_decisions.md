@@ -74,6 +74,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 054 | **Cross-document boilerplate strip — sentence-level recurring-passage removal at the filter stage (normalized sentence in ≥ N distinct documents), after MinHash; drops content-free shells; auditable `boilerplate_report.json`** | Live (extends 019; orthogonal to 020; relates 030/046/051) |
 | 055 | **Richer JEL cluster representation — c-TF-IDF terms + BERTopic representative documents (terms-first, full AEA taxonomy incl. Y); fixes thin-signal misses (r-star, Basel) and Y over-attraction; JEL stays a display flag** | Live (amends 020/046; relates 019/054) |
 | 056 | **Human-readable narrative names — display-layer Claude Haiku titling over c-TF-IDF labels, grounded only in the ADR-055 representation; titles cached under a representation hash and committed for key-free deterministic rebuilds; display-only, degrades to the label** | Live (display-layer; relates 043/046/050/055) |
+| 057 | **Phase-6 live emerging (design) — two display-only signals: institutional onset (existing) + press heating (4wk vs 52wk baseline, k=2, on Media Cloud attention-share); weekly refresh builds onto the model via BERTopic `merge_models` (ids/URLs/names preserved, new topics appended above τ); manual now → cron later; novel press-only clustering scoped out (ADR-010)** | Live design; press-heating + weekly-refresh implementations each need a follow-up ADR (relates 010/016/020/042/046/048/050/056) |
 
 ---
 
@@ -4335,8 +4336,8 @@ key.
 
 ## ADR-057: Phase-6 live emerging — press-heating detection + weekly institutional refresh (design)
 
-- **Status**: Proposed
-- **Date**: 2026-06-30
+- **Status**: Accepted
+- **Date**: 2026-06-30 (parameters + `merge_models` mechanism settled 2026-07-01)
 
 ### Context
 
@@ -4378,26 +4379,42 @@ Treat "emerging" as **two distinct display-only signals**, and scope out a third
    narrative, run `detect_anomalies` on the trailing Media Cloud window using the
    same ADR-042 per-narrative query, on the **attention-share ratio** (not raw
    counts, so it is robust to overall press-volume drift). Flag a narrative as
-   "heating in the press" when its most-recent window sits ≥ k·σ above its own
-   press baseline. Surface it in the Emerging view as a **separate signal beside**
-   the institutional recency flag — never merged, so the reader can tell "our
-   sources just started on this" from "the press is spiking on a story we already
-   track." Recomputes entirely from the press series at bake time: **no re-embed,
-   no re-cluster, and it never touches embedding/clustering/scope** (ADR-020/046
-   invariant intact), exactly like the ADR-042/048 overlays. `k` is a fixed
-   config value, not tuned against anchor recovery (ADR-040).
+   "heating in the press" when its most-recent **4-week window** (matching the
+   institutional emerging horizon) sits ≥ **k·σ, k = 2**, above its own **trailing
+   52-week baseline** (a year, so the baseline carries seasonality). Surface it in
+   the Emerging view as a **separate signal beside** the institutional recency flag
+   — never merged, so the reader can tell "our sources just started on this" from
+   "the press is spiking on a story we already track." Recomputes entirely from the
+   press series at bake time: **no re-embed, no re-cluster, and it never touches
+   embedding/clustering/scope** (ADR-020/046 invariant intact), exactly like the
+   ADR-042/048 overlays. The window, baseline, and k are fixed config values, not
+   tuned against anchor recovery (ADR-040); k = 2 is the deliberately sensitive
+   starting point (≈ upper 2.3% tail) — captioned literally as "press attention
+   more than 2σ above its yearly baseline" so the reader knows the bar.
 
-3. **Weekly institutional refresh (infrastructure for §1).** Per-source
-   **over-fetch** delta (start each source's window before its own
-   `max(published_at)` in the corpus, dedup absorbs the overlap) → incremental
-   embed (ADR-050 cache re-encodes only new chunks) → cluster → analyze. The open
-   problem is **narrative-identity stability across re-clusters**: BERTopic renumbers
-   topics on each fit, but a *tracking* tool must keep a narrative's identity (and
-   its URL, its human name) stable week to week. Proposed approach: carry a stable
-   narrative id by matching each new cluster to the prior build's clusters by
-   centroid cosine (greedy/Hungarian assignment above a similarity floor), minting
-   a new id only for genuinely new clusters. This is the primary engineering risk
-   and likely warrants its own ADR once §2 has shipped.
+3. **Weekly institutional refresh — build onto the existing model, don't
+   re-cluster from scratch.** Per-source **over-fetch** delta (start each source's
+   window before its own `max(published_at)` in the corpus; dedup absorbs the
+   overlap) → incremental embed of only the new chunks (ADR-050). The new week is
+   folded into the existing narrative set with BERTopic's own incremental primitive
+   rather than a fresh fit that would renumber every topic: fit a model on the
+   new-week docs and `merge_models([base, new], min_similarity=τ)`. `merge_models`
+   **keeps every existing topic's id** — so its narrative-page URL and its ADR-056
+   human name are stable *by construction* — and **appends only genuinely-new
+   topics**, those whose similarity to every existing topic is below τ, as new ids.
+   `analyze` then re-runs on the merged clusters: existing narratives' volume curves
+   simply extend with the new articles, new narratives are fit and staged, and the
+   ADR-056 name cache reuses every unchanged representation's title while paying the
+   model only for the new clusters. Existing articles keep their assignments; a new
+   article either extends an existing narrative or seeds a new one. **The tracking
+   invariant holds: ids, URLs, names, and histories persist, and new narratives can
+   still form.** A full from-scratch re-fit — reconciled back to the prior id set by
+   Hungarian centroid-matching above a cosine floor — is kept only as an occasional
+   rebuild path (when drift warrants a clean slate), never the weekly mechanism.
+   This still warrants its own implementation ADR (choosing τ; handling a topic that
+   splits or merges across a weekly `merge_models`; validating that the anchors keep
+   their ids across a merge), but the math stays inside BERTopic's built-in merge
+   rather than a bespoke assignment layer.
 
 4. **Scoped out: novel press-only narratives.** Detecting narratives that exist
    *only* in the press and not yet in the institutional corpus would require
@@ -4421,9 +4438,15 @@ Treat "emerging" as **two distinct display-only signals**, and scope out a third
   (ADR-020/046); press text is never embedded (ADR-010); values are fixed a priori
   (ADR-040). Relates ADR-016 (Media Cloud Premium live), ADR-042/048 (press
   overlays), ADR-050 (incremental embed), and the corpus-correctness invariant.
-- **Open decisions for a follow-up ADR.** The heating window length and `k`; the
-  centroid-match similarity floor and assignment method for identity stability;
-  and whether the weekly run is a cron on RCC or a manual cadence.
+- **Settled here.** Press-heating recent window = 4 weeks, baseline = 52 weeks,
+  k = 2 (sensitive start); narrative identity via BERTopic `merge_models` (existing
+  ids/URLs/names preserved, new topics appended above τ), Hungarian centroid-match
+  kept only for an occasional full rebuild; cadence starts **manual** and moves to a
+  **cron on RCC** once identity stability is validated.
+- **Deferred to the weekly-refresh implementation ADR.** The `merge_models`
+  similarity floor τ; how to handle a topic that splits or merges across a weekly
+  merge; and the cron schedule itself. Press heating (§2) needs no such follow-up —
+  it is buildable now as its own small implementation ADR.
 
 ---
 
