@@ -180,8 +180,9 @@ def _compute_emerging(
 
     Reference point is the corpus frontier (the latest last-active date across all
     narratives), not wall-clock now, so a corpus built weeks ago still flags its own
-    freshest narratives correctly. The caller combines this with stage == "growth"
-    so a just-arrived but already-flat cluster is not flagged emerging.
+    freshest narratives correctly. This is the whole emerging flag (ADR-059): a
+    narrative is emerging iff its onset falls within the recency window, regardless
+    of its trajectory stage.
     """
     if not date_range or not frontier:
         return False
@@ -303,12 +304,11 @@ def build_dashboard_artifacts(
                 date_range=card.date_range,
                 in_scope=jel_obj.in_scope if jel_obj else True,
                 jel_code=jel_obj.primary_code if jel_obj else None,
-                # Emerging = rising and just-arrived: the growth gate keeps a
-                # freshly-onset but already-flat or fading cluster off the feed.
-                is_emerging=(
-                    stage == "growth"
-                    and _compute_emerging(card.date_range, frontier, recency_weeks)
-                ),
+                # Emerging = just-arrived: onset within the recency window of the
+                # corpus frontier, independent of stage (ADR-059). A narrative that
+                # first appears in the trailing weeks is surfaced as emerging whether
+                # or not its short history already registers a significant trend.
+                is_emerging=_compute_emerging(card.date_range, frontier, recency_weeks),
                 umap_xy=umap_xy.get(cid),
                 umap_xyz=umap_xyz.get(cid),
                 similar_edges=edges.get(cid, []),

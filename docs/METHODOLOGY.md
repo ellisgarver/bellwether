@@ -120,16 +120,16 @@ The parametric fits use Bayesian inference (PyMC) with weakly-informative priors
 
 ### Stage 8 — Stage classification
 
-Lifecycle stage is read directly from the trajectory of the smoothed volume series, independent of any fitted model. The recent trend is tested with the modified Mann–Kendall test (Mann 1945; Kendall 1948), using the Hamed & Rao (1998) variance correction for the serial correlation that smoothing introduces; magnitude comes from a Theil–Sen slope (Sen 1968) on log-volume. A narrative with no significant trend is split by whether its recent window sits above or at its own historical floor, tested with a one-sided Mann–Whitney *U* comparison (Mann & Whitney 1947) against the quietest equal-width baseline in its history. This yields four mutually exclusive states:
+Lifecycle stage is read directly from the trajectory of the smoothed volume series, independent of any fitted model. The recent trend is tested with the modified Mann–Kendall test (Mann 1945; Kendall 1948), using the Hamed & Rao (1998) variance correction for the serial correlation that smoothing introduces; magnitude comes from a Theil–Sen slope (Sen 1968) on log-volume. A narrative with no significant trend is split by where its recent window sits relative to its own historical **peak** — the highest-volume equal-width window in its history — not its floor (ADR-058). This yields four mutually exclusive states:
 
 - **Growth** — a significant rising trend (Mann–Kendall *p* < α, positive slope).
 - **Decay** — a significant falling trend (Mann–Kendall *p* < α, negative slope).
-- **Stable** — no significant trend, with recent volume elevated above the narrative's own floor.
-- **Dormant** — no significant trend, with recent volume at the floor (and any narrative too short to test).
+- **Stable** — no significant trend, with recent volume still near the narrative's own peak (at or above a quarter of the peak-window level): a high plateau.
+- **Dormant** — no significant trend, with recent volume fallen well below the narrative's own peak (under a quarter of the peak-window level): faded. Any narrative too short to resolve a separate peak window is treated as not-faded.
 
-The threshold is α = 0.05. Reading the stage from the trajectory rather than a fitted R₀ keeps it well-defined for every curve, including the multi-wave and plateau shapes that no single growth model describes. Wallinga & Lipsitch (2007) give the correspondence: the sign of the recent growth rate is the sign of R_t − 1, so a rising series is spreading whether or not a clean SIR fit exists. The SIR R₀ posterior from Stage 7 is retained as a display-only reading of how contagious a wave was, not as the stage.
+The trend threshold is α = 0.05 and the dormancy line is a quarter of the narrative's own peak; both are fixed values, not swept. The peak reference replaces an earlier floor reference (a Mann–Whitney comparison to the quietest window), which on this corpus was trivially cleared by the low but persistent institutional tail every narrative carries and so collapsed nearly every no-trend narrative to *stable*; comparing to the peak instead, by level rather than an under-powered rank test on the zero-heavy daily series, restores the faded/plateau distinction (ADR-058). Reading the stage from the trajectory rather than a fitted R₀ keeps it well-defined for every curve, including the multi-wave and plateau shapes that no single growth model describes. Wallinga & Lipsitch (2007) give the correspondence: the sign of the recent growth rate is the sign of R_t − 1, so a rising series is spreading whether or not a clean SIR fit exists. The SIR R₀ posterior from Stage 7 is retained as a display-only reading of how contagious a wave was, not as the stage.
 
-"Newly emerging" is a separate recency flag layered on top — a growth-stage narrative whose onset falls within the trailing four weeks of the corpus — and is orthogonal to the four states.
+"Newly emerging" is a separate recency flag, orthogonal to the four states: a narrative whose onset falls within the trailing four weeks of the corpus is flagged emerging regardless of its stage (ADR-059). A narrative that first appears at the corpus frontier is surfaced as newly arrived whether or not its short history has yet registered a significant trend.
 
 ---
 

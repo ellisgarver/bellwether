@@ -74,6 +74,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 054 | **Cross-document boilerplate strip — sentence-level recurring-passage removal at the filter stage (normalized sentence in ≥ N distinct documents), after MinHash; drops content-free shells; auditable `boilerplate_report.json`** | Live (extends 019; orthogonal to 020; relates 030/046/051) |
 | 055 | **Richer JEL cluster representation — c-TF-IDF terms + BERTopic representative documents (terms-first, full AEA taxonomy incl. Y); fixes thin-signal misses (r-star, Basel) and Y over-attraction; JEL stays a display flag** | Live (amends 020/046; relates 019/054) |
 | 056 | **Human-readable narrative names — display-layer Claude Haiku titling over c-TF-IDF labels, grounded only in the ADR-055 representation; titles cached under a representation hash and committed for key-free deterministic rebuilds; display-only, degrades to the label** | Live (display-layer; relates 043/046/050/055) |
+| 059 | **Emerging flag is recency-only — a narrative is emerging iff its onset falls within the 4-week recency window of the corpus frontier, regardless of stage; drops the earlier `stage == growth` gate so a just-arrived narrative whose short history hasn't yet registered a significant trend is still surfaced as newly arrived** | Live (amends 052 emerging clause; relates 016/057) |
 | 058 | **Peak-relative plateau test — `stable` vs `dormant` keyed to the narrative's own high-water window, not its quiet floor; fixes the all-`stable` collapse (342/365) where institutional tails made "above the floor" trivially true. MWU on the zero-heavy daily series was under-powered, so the split is by level: recent-window mean below `dormant_peak_fraction`=0.25 of the peak-window mean → dormant (a definition, not tuned to recovery)** | Live (amends 052 §2/§3 Level test; relates 040) |
 | 057 | **Phase-6 live emerging (design) — two display-only signals: institutional onset (existing) + press heating (4wk vs 52wk baseline, k=2, on Media Cloud attention-share); weekly refresh builds onto the model via BERTopic `merge_models` (ids/URLs/names preserved, new topics appended above τ); manual now → cron later; novel press-only clustering scoped out (ADR-010)** | Live design; press-heating + weekly-refresh implementations each need a follow-up ADR (relates 010/016/020/042/046/048/050/056) |
 
@@ -4550,6 +4551,56 @@ unchanged; only the no-trend split is corrected.
   fitting, or anchor recovery. Amends `src/mnd/stages/classify.py` and the two
   front-end copy sites. Supersedes ADR-052 §2/§3's floor-relative `Level` clause;
   the rest of ADR-052 stands.
+
+---
+
+## ADR-059: Emerging flag is recency-only (drop the growth gate)
+
+- **Status**: Accepted
+- **Date**: 2026-07-02
+
+### Context
+
+ADR-052 defined "newly emerging" as an orthogonal recency flag layered on the
+stage: a narrative was emerging iff `stage == "growth"` **and** its onset fell
+within the 4-week recency window of the corpus frontier. The growth gate was
+meant to keep a "just-arrived but already-flat" cluster off the emerging feed.
+
+In practice the gate suppresses exactly the narratives the feed exists to surface.
+A narrative that first appears in the trailing four weeks has, by construction, at
+most four weeks of history — too short for the modified Mann–Kendall trend test to
+reach significance in most cases, so it reads `stable`/`dormant` rather than
+`growth` and is dropped from the emerging feed despite being the freshest thing in
+the corpus. The recency signal (onset at the frontier) is the point; the trend
+signal is redundant with it for a brand-new series and actively filters out true
+new arrivals.
+
+### Decision
+
+The emerging flag is **recency-only**: a narrative is emerging iff its onset date
+falls within `stages.newly_emerging_recency_weeks` (4) of the corpus frontier
+(the latest last-active date across surfaced narratives), independent of its
+lifecycle stage. Drop the `stage == "growth"` conjunct in
+`build_artifacts.py`. Stage and emerging become fully orthogonal: a fresh
+narrative can be emerging **and** any of growth/stable/dormant.
+
+### Consequences
+
+- **The emerging feed surfaces genuine new arrivals**, including those whose
+  four-week history is too short to register a significant trend — the common case
+  for a just-onset narrative.
+- **No new parameter**; reuses the existing recency window. Frontier reference is
+  unchanged (corpus frontier, not wall-clock), so a corpus built weeks ago still
+  flags its own freshest narratives.
+- **Orthogonality restored** as ADR-052 originally framed it ("a separate recency
+  flag ... orthogonal to the four states") — the growth conjunct had quietly made
+  it non-orthogonal.
+- **Phase-6 relevance.** The live press-heating and institutional-onset signals
+  (ADR-057) layer on top of this recency flag; keeping emerging stage-independent
+  keeps those signals from inheriting the trend-significance filter.
+- Amends ADR-052's emerging clause. Analysis/display-layer only; no re-embed, no
+  re-cluster, no change to the four-state staging. Amends
+  `src/mnd/dashboard/build_artifacts.py` and METHODOLOGY §8.
 
 ---
 
