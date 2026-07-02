@@ -225,9 +225,12 @@ detection:
 # single significance convention. The tests gate on significance, not on any
 # tuned magnitude. SIR R_0 is a display-only headline for the SIR lens, not a gate.
 stages:
-  trend_alpha: 0.05                # significance level for both rank tests
+  trend_alpha: 0.05                # significance level for the Mann-Kendall trend test
   growth_min_r0: 1.0               # SIR-lens display headline only; no longer a stage gate
   newly_emerging_recency_weeks: 4  # recent window W and emerging flag; sharp-anchor windows + Brown & Warner 1985
+  dormant_peak_fraction: 0.25      # a no-trend narrative is dormant when its recent-window level falls below this
+                                   # fraction of its own peak-window level; otherwise stable (ADR-058). A definition,
+                                   # not tuned to anchor recovery (ADR-040).
 
 # -----------------------------------------------------------------------------
 # Filtering & deduplication (ADR-020)

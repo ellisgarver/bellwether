@@ -5,8 +5,8 @@ not off any fitted model. Four mutually-exclusive trajectory states:
 
   growth  -- significant upward trend in the recent window
   decay   -- significant downward trend in the recent window
-  stable  -- no trend, but recent activity sits above the narrative's own floor
-  dormant -- no trend and at floor
+  stable  -- no trend, and recent activity is still near the narrative's own peak
+  dormant -- no trend, and recent activity has fallen well below that peak (ADR-058)
 
 The fitted SIR R_0 is carried through for display only and must not influence
 the stage; the regression guard below pins that down.
@@ -21,8 +21,14 @@ import pandas as pd
 from mnd.stages.classify import classify_stage
 
 # Explicit config so the tests do not depend on config.yaml defaults: a four-week
-# recent window (28 days) and the single alpha convention.
-CFG = {"stages": {"trend_alpha": 0.05, "newly_emerging_recency_weeks": 4}}
+# recent window (28 days), the trend alpha, and the dormancy fraction of peak.
+CFG = {
+    "stages": {
+        "trend_alpha": 0.05,
+        "newly_emerging_recency_weeks": 4,
+        "dormant_peak_fraction": 0.25,
+    }
+}
 
 
 # Minimal FitResult stand-in so tests don't import pymc
@@ -67,35 +73,40 @@ class TestDecay:
 
 
 class TestStable:
-    def test_high_plateau_above_floor_yields_stable(self):
-        # quiet floor early, sustained high plateau through the recent window
+    def test_high_plateau_near_peak_yields_stable(self):
+        # quiet early, sustained high plateau through the recent window: recent is
+        # not below the narrative's own high-water window
         counts = _series([1.0] * 40 + [50.0] * 40)
         result = classify_stage(0, _FitResult(), counts, cfg=CFG)
         assert result.stage == "stable"
         assert result.detail["trend"] == "no trend"
-        assert result.detail["recent_elevated"] is True
+        assert result.detail["recent_near_peak"] is True
+
+    def test_flat_constant_series_yields_stable(self):
+        # constant volume: no trend, recent equals its own peak window — never
+        # rose, never faded, so it is a (low) plateau, not dormant (ADR-058)
+        counts = _series([1.0] * 60)
+        result = classify_stage(0, _FitResult(), counts, cfg=CFG)
+        assert result.stage == "stable"
+        assert result.detail["trend"] == "no trend"
+        assert result.detail["recent_near_peak"] is True
+
+    def test_too_short_series_is_not_dormant(self):
+        # fewer than four points: no resolvable trend and no separable peak window
+        # to have fallen from, so the narrative has not faded
+        counts = _series([1.0, 5.0, 3.0])
+        result = classify_stage(0, _FitResult(), counts, cfg=CFG)
+        assert result.stage != "dormant"
 
 
 class TestDormant:
-    def test_flat_low_series_yields_dormant(self):
-        counts = _series([1.0] * 60)
-        result = classify_stage(0, _FitResult(), counts, cfg=CFG)
-        assert result.stage == "dormant"
-        assert result.detail["trend"] == "no trend"
-        assert result.detail["recent_elevated"] is False
-
-    def test_risen_then_faded_to_floor_yields_dormant(self):
-        # spiked early, recent window sits back at the quiet floor
+    def test_risen_then_faded_below_peak_yields_dormant(self):
+        # spiked early, recent window sits well below the narrative's own peak
         counts = _series([50.0] * 40 + [1.0] * 40)
         result = classify_stage(0, _FitResult(), counts, cfg=CFG)
         assert result.stage == "dormant"
-        assert result.detail["recent_elevated"] is False
-
-    def test_too_short_series_yields_dormant(self):
-        # fewer than four points: no resolvable trend, no resolvable floor
-        counts = _series([1.0, 5.0, 3.0])
-        result = classify_stage(0, _FitResult(), counts, cfg=CFG)
-        assert result.stage == "dormant"
+        assert result.detail["trend"] == "no trend"
+        assert result.detail["recent_near_peak"] is False
 
 
 class TestRZeroIsDisplayOnly:

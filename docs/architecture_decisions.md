@@ -69,11 +69,12 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 049 | **Dashboard artifact contract align-up: producers emit `r0_median` + R₀ interval + threshold in `stage_detail`; `shape_facts` keys renamed to the front-end's; undefined R₀ peak/min row dropped** | Live (relates 039/043/047) |
 | 050 | **Incremental embedding cache — `(chunk_id, text_sha1)` sidecar lets `embed` reuse vectors and re-encode only new/changed chunks; full rebuild still re-embeds all** | Live (relates 036/016/030) |
 | 051 | **Fit/display floor — only clusters with ≥ `min_articles_to_fit` (42) unique articles are fit, staged, and surfaced; all clusters stay in `clusters.parquet`, total reported on the data page. Map edges are focus-lit on hover, not static.** | Live (amends 046; relates 019/040/044) |
-| 052 | **Lifecycle stage is a model-free attention-trajectory classification (Mann–Kendall trend + Mann–Whitney level); growth/stable/decay/dormant + emerging flag; fitted lenses are display-only; reframe — Shiller/SIR is a lens, not the law** | Live (supersedes 002 staging clause + 019 §E; amends 030/039) |
+| 052 | **Lifecycle stage is a model-free attention-trajectory classification (Mann–Kendall trend + Mann–Whitney level); growth/stable/decay/dormant + emerging flag; fitted lenses are display-only; reframe — Shiller/SIR is a lens, not the law** | Live (supersedes 002 staging clause + 019 §E; amends 030/039; Level test amended by 058) |
 | 053 | **SIR fit on a weekly integration grid + SIR-only reduced inference budget (draws 500 / tune 500 / 2 chains / `target_accept` 0.9) — makes the `O(T)` SIR scan tractable; `R₀` grid-invariant, curve/peak converted back to days; display-only, no-tuning rule intact** | Live (amends 039; relates 019/051/052) |
 | 054 | **Cross-document boilerplate strip — sentence-level recurring-passage removal at the filter stage (normalized sentence in ≥ N distinct documents), after MinHash; drops content-free shells; auditable `boilerplate_report.json`** | Live (extends 019; orthogonal to 020; relates 030/046/051) |
 | 055 | **Richer JEL cluster representation — c-TF-IDF terms + BERTopic representative documents (terms-first, full AEA taxonomy incl. Y); fixes thin-signal misses (r-star, Basel) and Y over-attraction; JEL stays a display flag** | Live (amends 020/046; relates 019/054) |
 | 056 | **Human-readable narrative names — display-layer Claude Haiku titling over c-TF-IDF labels, grounded only in the ADR-055 representation; titles cached under a representation hash and committed for key-free deterministic rebuilds; display-only, degrades to the label** | Live (display-layer; relates 043/046/050/055) |
+| 058 | **Peak-relative plateau test — `stable` vs `dormant` keyed to the narrative's own high-water window, not its quiet floor; fixes the all-`stable` collapse (342/365) where institutional tails made "above the floor" trivially true. MWU on the zero-heavy daily series was under-powered, so the split is by level: recent-window mean below `dormant_peak_fraction`=0.25 of the peak-window mean → dormant (a definition, not tuned to recovery)** | Live (amends 052 §2/§3 Level test; relates 040) |
 | 057 | **Phase-6 live emerging (design) — two display-only signals: institutional onset (existing) + press heating (4wk vs 52wk baseline, k=2, on Media Cloud attention-share); weekly refresh builds onto the model via BERTopic `merge_models` (ids/URLs/names preserved, new topics appended above τ); manual now → cron later; novel press-only clustering scoped out (ADR-010)** | Live design; press-heating + weekly-refresh implementations each need a follow-up ADR (relates 010/016/020/042/046/048/050/056) |
 
 ---
@@ -4447,6 +4448,108 @@ Treat "emerging" as **two distinct display-only signals**, and scope out a third
   similarity floor τ; how to handle a topic that splits or merges across a weekly
   merge; and the cron schedule itself. Press heating (§2) needs no such follow-up —
   it is buildable now as its own small implementation ADR.
+
+---
+
+## ADR-058: Peak-relative plateau test — `stable` vs `dormant` keyed to the narrative's own high-water level
+
+- **Status**: Accepted
+- **Date**: 2026-07-02
+
+### Context
+
+The first clean `analyze` run under ADR-052 (job 51323109, 365 narratives, all
+ADR-052/053/054/055 fixes in place, JEL scope validated — 185 in-scope, no all-Y
+collapse) staged **342 stable / 23 growth / 0 decay / 0 dormant**. Zero dormant
+and zero decay across a 2010–2026 corpus of overwhelmingly transient event
+narratives is not a finding — it is the ADR-052 `Level` test failing on real data.
+
+**Empirical diagnosis.** Of the 342 `stable` narratives, **100% sit below 20% of
+their own peak volume**; the median recent-window activity is **1.7% of peak**
+(p25 = 1.3%). Concretely: a cluster peaking Sept-2010 at 406 articles, now at 0.3%
+of that, is labelled `stable`; a cluster peaking 2015, ten-plus years past, at 0.5%
+of peak, is `stable`. These are dead narratives called stable.
+
+**Root cause — a spec/implementation divergence inside ADR-052.** ADR-052 §2/§3
+defines the `Level` test as Mann–Whitney U comparing the recent window to the
+narrative's **lowest**-activity baseline window ("is current attention elevated
+above this narrative's *floor*?"), and describes `stable` as a "high plateau." On
+this corpus the two are incompatible: institutional sources (Fed, BIS, NBER, IMF)
+never fully drop a topic, so every narrative keeps a low nonzero tail to the corpus
+edge. That tail is trivially "above the quiet floor," so the floor test returns
+*elevated* for essentially every no-trend narrative → `stable`. The test never
+checks that the plateau is actually **high**, which was the stated intent.
+`dormant` (recent *at* the floor) is therefore nearly unreachable, and `decay`
+(a significant *downward* Mann–Kendall trend over the 4-week window) does not fire
+either because a long-faded narrative is already low-*flat* there, not falling.
+ADR-052's own prediction ("decay becomes expressible and abundant; dormant means
+the series is quiet") was falsified by the data it had not yet seen.
+
+### Decision
+
+Amend ADR-052 §2 (`Level` test) and §3 (`stable`/`dormant` definitions). The
+trend test (Mann–Kendall → `growth`/`decay`) and the four-state vocabulary are
+unchanged; only the no-trend split is corrected.
+
+1. **The reference flips from the quietest window to the narrative's own
+   high-water window.** Mirroring the existing baseline construction (the
+   minimum-sum width-`W` window), take the **maximum-sum** width-`W` window as the
+   peak reference. Both are the narrative judged against its own dynamic range — no
+   absolute magnitude threshold, no new tuned constant.
+
+2. **`stable` vs `dormant` becomes a peak-relative *level* comparison, not a rank
+   test.** A Mann–Whitney U comparing the recent 4-week window to the peak 4-week
+   window was implemented first and **empirically rejected**: the smoothed daily
+   series is zero-heavy, so two 28-point windows both dominated by ties give no
+   power — narratives sitting at a *tenth* of their peak returned `p ≈ 0.15–0.72`
+   and stayed `stable` (265/365 on the first pass, all still well below peak). The
+   split is therefore by level:
+   - **stable** — no significant trend **and** the recent-window mean is **≥
+     `dormant_peak_fraction` × the peak-window mean**: still near its own high-water
+     mark (perennial topics at sustained volume).
+   - **dormant** — no significant trend **and** the recent-window mean is **below
+     `dormant_peak_fraction` × the peak-window mean**: fallen well off its own
+     peak — faded.
+
+3. **`growth` / `decay` / `emerging` unchanged.** Still the modified Mann–Kendall
+   trend over `W`; `emerging` stays the orthogonal recency flag layered on growth.
+
+4. **One new parameter: `stages.dormant_peak_fraction = 0.25`.** The recent window
+   must fall below a quarter of the narrative's own peak level to read `dormant`.
+   This is a **definition** (where "faded" begins on the narrative's own scale),
+   **not** a hyperparameter tuned to improve anchor recovery — ADR-040's no-hand-
+   tuning basis binds tuning-for-recovery, and this line is never touched by the
+   anchor/fizzled set. The dormant share moves smoothly with it (≈8% at 0.10, ≈45%
+   at 0.25, ≈85% at 0.50), so it is stated transparently and surfaced in the UI
+   ("N% of its own peak") rather than hidden behind a p-value. The 4-week window
+   `W` is still reused, and the `max`-sum peak-window selection mirrors the prior
+   `min`-sum floor construction (whole-life-inside-`W` and `W < n < 2W` prefix
+   guards carry over).
+
+### Consequences
+
+- **Dormant becomes the honest majority.** Most narratives peaked and faded, so
+  most classify `dormant` — the correct lifecycle picture. `stable` is reserved
+  for narratives genuinely holding near their own peak. `growth` (23) is
+  unaffected. `decay` stays rare by construction — "currently mid-decline over a
+  4-week window" is a narrow transient state; a fully-faded narrative is `dormant`,
+  not `decay`. This is expected, not a defect; if a future run shows *exactly* zero
+  decay it is worth revisiting the trend-window length, tracked separately.
+- **Matches ADR-052's stated "high plateau" intent** — this is a correction to
+  make the code do what ADR-052 already claimed, not a new methodology.
+- **Front-end copy.** The stage glossary (`web/src/pages/guide.astro`) and the
+  per-narrative stage-detail row (`web/src/pages/narratives/[id].astro`, the
+  "above own floor" line) are reworded from *floor*-relative to *peak*-relative and
+  now show "N% of peak level". `stage_detail` keys change: `recent_elevated` →
+  `recent_near_peak`, `level_p` → `recent_peak_ratio`, `baseline_level` →
+  `peak_level`, and a new `dormant_peak_fraction` records the line used.
+- **Left-censoring caveat (from ADR-052) is unchanged and slightly relaxed:** a
+  narrative already high before 2010 that stays high now reads `stable` (recent not
+  below its in-window peak), which is more correct than the prior `dormant` misread.
+- **Scope.** Analysis-layer only. No re-embed, no re-cluster, no change to JEL,
+  fitting, or anchor recovery. Amends `src/mnd/stages/classify.py` and the two
+  front-end copy sites. Supersedes ADR-052 §2/§3's floor-relative `Level` clause;
+  the rest of ADR-052 stands.
 
 ---
 
