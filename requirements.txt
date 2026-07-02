@@ -63,6 +63,9 @@ mediacloud==5.1.0         # Press-volume overlay (ADR-042); Online News Archive 
 # Dashboard -----------------------------------------------------------------
 streamlit==1.39.0
 plotly==5.24.1
+anthropic>=0.69.0         # Display-layer narrative naming (ADR-056); Claude Haiku via Messages API
+                          # with output_config structured outputs. Paid/display-only — exempt from the
+                          # core free/reproducible rule; degrades to the c-TF-IDF label when absent/unkeyed.
 
 # Validation / stats --------------------------------------------------------
 statsmodels==0.14.4
