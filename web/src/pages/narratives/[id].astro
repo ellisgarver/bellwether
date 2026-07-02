@@ -111,7 +111,7 @@ const direction = (d: any) =>
           <tr><td>recent trend</td><td>{trendWord}</td></tr>
           <tr><td>significance</td><td>{sd.trend_p != null ? `p = ${fmt(sd.trend_p, 3)} (α = ${fmt(sd.alpha, 2)})` : "—"}</td></tr>
           <tr><td>recent log-slope</td><td>{sd.trend_slope != null ? `${fmt(sd.trend_slope, 3)} / day` : "—"}</td></tr>
-          <tr><td>above own floor</td><td>{sd.recent_elevated == null ? "—" : sd.recent_elevated ? `yes (p = ${fmt(sd.level_p, 3)})` : "no"}</td></tr>
+          <tr><td>vs own peak</td><td>{sd.recent_peak_ratio == null ? "—" : `${Math.round(sd.recent_peak_ratio * 100)}% of peak level${sd.recent_near_peak ? "" : " — faded"}`}</td></tr>
         </table>
         <p class="caption">
           {sd.r0_mean != null ? (
