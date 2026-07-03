@@ -4,9 +4,10 @@ Four lenses, shown side by side -- each answers a different question about the
 same volume curve:
   1. Logistic  f(t) = L / (1 + exp(-k * (t - t0)))  -- Verhulst 1838 / 3 params
                  "how fast did it take off, and where did it level off?"
-  2. SIR       dS/dt = -beta*S*I/N, dI/dt = beta*S*I/N - gamma*I
-                                          -- Kermack & McKendrick 1927 / 3 params
-                 "was it contagious, and did it burn out?"  (R_0, peak)
+  2. SIR       closed-form prevalence I(tau) -- Schlickeiser & Kröger 2020/2026
+                 analytic solution of Kermack & McKendrick 1927 / shape + scale
+                 "how explosively did it spread, and how fast did it fade?"
+                 (rise rate, decay rate, asymmetry, peak -- not R_0; see ADR-062)
   3. Bass      n(t) = m * f(t)            -- Bass 1969 / 3 params
                  "external shock (p) vs. word-of-mouth (q)?"
   4. shape-facts -- model-free descriptive statistics off the smoothed curve
@@ -27,7 +28,6 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from scipy.integrate import odeint
 from scipy.signal import find_peaks
 from scipy.stats import norm, rankdata, theilslopes
 
@@ -45,49 +45,99 @@ def logistic(t: np.ndarray, L: float, k: float, t0: float) -> np.ndarray:
     return L / (1.0 + np.exp(-k * (t - t0)))
 
 
-def logistic_r0(k: float, gamma: float) -> float:
-    """R_0 implied by logistic growth rate k under SIR assumptions."""
-    return 1.0 + k / gamma
+def logistic_doubling_time(k: float) -> float:
+    """Doubling time (same units as 1/k) of the logistic growth phase: ln2 / k.
 
-
-# ---------------------------------------------------------------------------
-# SIR (Kermack & McKendrick 1927)
-# ---------------------------------------------------------------------------
-
-def _sir_rhs(y: list[float], _t: float, beta: float, gamma: float) -> list[float]:
-    S, I, R = y
-    N = S + I + R
-    dI = beta * S * I / N - gamma * I
-    return [-beta * S * I / N, dI, gamma * I]
-
-
-def sir_prevalence(
-    t: np.ndarray,
-    N: float,
-    I0: float,
-    beta: float,
-    gamma: float,
-) -> np.ndarray:
-    """Solve SIR ODE; return I(t) -- the infectious compartment.
-
-    I(t) is interpreted as daily article volume from media nodes actively
-    discussing the narrative.
+    Replaces the former ``logistic_r0``: R_0 = 1 + k/gamma borrowed the SIR
+    disease gamma and reported a non-identifiable reproduction number (ADR-062).
+    The growth rate k is directly identifiable from the S-curve; its doubling time
+    is a self-standing quantity in the series' own time units (days).
     """
-    I0 = max(I0, 1e-6)
-    y0 = [N - I0, I0, 0.0]
-    sol = odeint(_sir_rhs, y0, t, args=(beta, gamma), full_output=False)
-    return np.maximum(sol[:, 1], 0.0)
+    k = float(k)
+    if k <= 0.0:
+        return float("inf")
+    return float(np.log(2.0) / k)
 
 
-def sir_r0(beta: float, gamma: float) -> float:
-    return beta / gamma
+# ---------------------------------------------------------------------------
+# SIR — Schlickeiser & Kröger closed-form prevalence (ADR-062)
+# ---------------------------------------------------------------------------
+#
+# The SIR ODE has no elementary closed form, so it was previously integrated
+# numerically (an Euler ``pytensor.scan`` inside NUTS) -- the analysis layer's
+# entire compute pole. Schlickeiser & Kröger (Appl. Math. Stat. 2026, "near-exact
+# solution"; J. Phys. A 53 505601, 2020) give an accurate analytic prevalence
+# I(tau) for a constant reproduction factor, elementary on both branches. In
+# reduced time tau = gamma*t with k0 = 1/R0 and a small fixed seed fraction eta:
+#   rise  (tau <= tauU):  I / Imax = exp((tau - tauU) * Umax/tauU)     (their eq 88)
+#   decay (tau >= tauU):  I / Imax = (cosh(Phi) / cosh(zeta))^2        (their eq 76)
+# The branches meet continuously at the peak (tau = tauU). R0 = 1/k0 is NOT
+# identifiable from a single attention curve (ADR-062), so the shape scalar k0 is
+# fit but never reported; what the lens reports are the rise and decay rates read
+# off the fitted limbs, both in per-day units (no population N, no disease priors).
+
+_SIR_ETA = 1e-4  # fixed initial infected fraction (seed); definitional, not tuned (ADR-040/062)
 
 
-def sir_peak_time(N: float, I0: float, beta: float, gamma: float) -> float:
-    """Numerically locate the peak of I(t) on a dense 365-day grid."""
-    t_dense = np.linspace(0, 365, 3650)
-    I = sir_prevalence(t_dense, N, I0, beta, gamma)
-    return float(t_dense[int(np.argmax(I))])
+def _kssir_constants(k0: float, eta: float = _SIR_ETA):
+    """Elementary scalar constants of the closed-form prevalence, for k0 in (0,1).
+
+    Returns (Imax, Umax, kappa, Phi, tauU) from Schlickeiser & Kröger eqs 51, 37,
+    62, 66 and the small-eta peak time. Peak prevalence fraction Imax and the
+    reduced peak time tauU depend only on k0 (eta -> 0 limit for the shape).
+    """
+    Imax = 1.0 - k0 - k0 * np.log((1.0 - eta) / k0)          # eq 51
+    Umax = np.log(Imax / eta)                                # eq 37
+    O = Imax / k0                                            # eq 59
+    kappa = 1.0 / np.expm1(O)                                # eq 62
+    Phi = float(np.arctanh(np.sqrt(max(1.0 - kappa * O, 0.0))))  # eq 66
+    tauU = Umax * k0 / (1.0 - k0)                            # small-eta reduced peak time
+    return Imax, Umax, kappa, Phi, tauU
+
+
+def sir_kssir_curve(
+    t: np.ndarray,
+    peak_height: float,
+    peak_time: float,
+    k0: float,
+    timescale: float,
+    eta: float = _SIR_ETA,
+) -> np.ndarray:
+    """Closed-form SIR prevalence in article-volume units (ADR-062).
+
+    Anchored so the curve peaks at ``peak_height`` at ``peak_time``. ``k0 = 1/R0``
+    is the shape scalar (rise/decay asymmetry); ``timescale`` is days per unit
+    reduced time. Rise is exponential, decay a shifted sech²; they meet at the
+    peak. ``t`` is days since first article.
+    """
+    k0 = float(np.clip(k0, 1e-3, 1.0 - 1e-3))
+    timescale = max(float(timescale), 1e-6)
+    _, Umax, kappa, Phi, tauU = _kssir_constants(k0, eta)
+    tau = tauU + (np.asarray(t, dtype=float) - peak_time) / timescale
+    out = np.empty_like(tau)
+    rise = tau < tauU
+    out[rise] = peak_height * np.exp((tau[rise] - tauU) * (Umax / tauU))       # eq 88
+    zeta = k0 * (tau[~rise] - tauU) / (2.0 * np.sqrt(1.0 + kappa)) + Phi
+    out[~rise] = peak_height * (np.cosh(Phi) / np.cosh(zeta)) ** 2             # eq 76
+    return np.maximum(out, 0.0)
+
+
+def sir_rise_rate(k0: float, timescale: float) -> float:
+    """Early exponential growth rate (per day) of the rising limb.
+
+    Umax/tauU = (1 - k0)/k0 exactly, so the rise rate is ((1-k0)/k0)/timescale.
+    This product is data-constrained even where k0 and timescale individually are
+    not (ADR-062): it is the observed log-slope of the rising limb.
+    """
+    k0 = float(np.clip(k0, 1e-3, 1.0 - 1e-3))
+    return ((1.0 - k0) / k0) / max(float(timescale), 1e-6)
+
+
+def sir_decay_rate(k0: float, timescale: float, eta: float = _SIR_ETA) -> float:
+    """Asymptotic exponential decay rate (per day) of the falling limb."""
+    k0 = float(np.clip(k0, 1e-3, 1.0 - 1e-3))
+    _, _, kappa, _, _ = _kssir_constants(k0, eta)
+    return k0 / (np.sqrt(1.0 + kappa) * max(float(timescale), 1e-6))
 
 
 # ---------------------------------------------------------------------------

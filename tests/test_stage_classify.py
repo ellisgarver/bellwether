@@ -38,10 +38,6 @@ class _FitResult:
     model_name: str = "logistic"
     converged: bool = True
     aicc: float = 0.0
-    r0_mean: float | None = 1.5
-    r0_median: float | None = 1.5
-    r0_ci_low: float | None = None
-    r0_ci_high: float | None = None
     peak_time_mean: float | None = 30.0
     peak_time_ci_low: float | None = None
     peak_time_ci_high: float | None = None
@@ -109,21 +105,19 @@ class TestDormant:
         assert result.detail["recent_near_peak"] is False
 
 
-class TestRZeroIsDisplayOnly:
-    """R_0 is a display lens after the model-free redesign; it must not move
-    the stage. A falling trajectory with a high fitted R_0 is still decay."""
+class TestFitIsDisplayOnly:
+    """The fitted lens is display-only after the model-free redesign; it must not
+    move the stage. A falling trajectory is decay regardless of the fit."""
 
-    def test_high_r0_does_not_override_falling_trajectory(self):
+    def test_converged_fit_does_not_override_falling_trajectory(self):
         counts = _series([float(60 - i) for i in range(60)])
-        fit = _FitResult(r0_mean=2.5, converged=True)
+        fit = _FitResult(model_name="sir", converged=True)
         result = classify_stage(0, fit, counts, cfg=CFG)
         assert result.stage == "decay"
-        # the fitted value is still surfaced for display
-        assert result.detail["r0_mean"] == 2.5
 
     def test_unconverged_fit_still_classifies_from_trajectory(self):
         counts = _series([float(i + 1) for i in range(60)])
-        fit = _FitResult(r0_mean=None, converged=False)
+        fit = _FitResult(converged=False)
         result = classify_stage(0, fit, counts, cfg=CFG)
         assert result.stage == "growth"
 
@@ -131,7 +125,7 @@ class TestRZeroIsDisplayOnly:
         counts = _series([float(i + 1) for i in range(60)])
         result = classify_stage(0, None, counts, cfg=CFG)
         assert result.stage == "growth"
-        assert result.detail["r0_mean"] is None
+        assert result.detail["converged"] is None
 
 
 class TestStageLabels:

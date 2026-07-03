@@ -25,7 +25,7 @@ from mnd.stages.classify import StageClassification
 
 
 CFG = {
-    "stages": {"newly_emerging_recency_weeks": 4, "growth_min_r0": 1.0},
+    "stages": {"newly_emerging_recency_weeks": 4},
     "reproducibility": {"global_random_seed": 42},
 }
 
@@ -64,12 +64,12 @@ def _dynamics() -> dict[int, ClusterDynamics]:
     s1 = pd.Series([1.0], index=["2022-06-01"])
     log0 = FitResult(
         cluster_id=0, model_name="logistic", converged=True, aicc=12.3,
-        r0_mean=1.8, r0_ci_low=1.2, r0_ci_high=2.4, peak_time_mean=1.0,
+        peak_time_mean=1.0, param_summary={"doubling_time": 3.5, "plateau": 2.0},
         curve=[1.5, 1.0],
     )
     sir0 = FitResult(
         cluster_id=0, model_name="sir", converged=True, aicc=11.0,
-        r0_mean=2.0, r0_ci_low=1.5, r0_ci_high=2.6, peak_time_mean=1.0,
+        peak_time_mean=1.0, param_summary={"rise_rate": 0.3, "decay_rate": 0.05, "asymmetry": 6.0},
         curve=[1.4, 1.1],
     )
     # cluster 1: a failed fit — aicc stays inf, no curve, no R0.
@@ -93,8 +93,8 @@ def _dynamics() -> dict[int, ClusterDynamics]:
 
 def _stages() -> dict[int, StageClassification]:
     return {
-        0: StageClassification(0, "growth", 2.0, 1.5, 2.6, 1.0, 2, {"converged": True}),
-        1: StageClassification(1, "dormant", None, None, None, None, 1, {"converged": False}),
+        0: StageClassification(0, "growth", 1.0, 2, {"converged": True}),
+        1: StageClassification(1, "dormant", None, 1, {"converged": False}),
     }
 
 
@@ -156,7 +156,7 @@ class TestBuild:
         n0 = next(n for n in narratives if n.cluster_id == 0)
         sir = next(f for f in n0.fits if f.model == "sir")
         assert sir.curve == [1.4, 1.1]
-        assert sir.r0_ci == (1.5, 2.6)
+        assert sir.params["asymmetry"] == 6.0
         assert n0.staging_model == "sir"
 
     def test_failed_fit_has_null_aicc_and_no_curve(self):
@@ -166,7 +166,6 @@ class TestBuild:
         assert fit.aicc is None          # inf scrubbed
         assert fit.curve is None
         assert fit.failure_reason == "low ESS"
-        assert fit.r0_ci is None
 
     def test_semantic_edges_with_cosine_weight(self):
         index, _ = _build()
@@ -231,7 +230,6 @@ class TestBuild:
     def test_index_run_metadata(self):
         index, _ = _build()
         assert index.global_random_seed == 42
-        assert index.stage_min_r0 == 1.0
         assert index.schema_version == SCHEMA_VERSION
         assert index.generated_at == "2023-03-11T00:00:00+00:00"
 

@@ -68,10 +68,11 @@ class FitArtifact:
     model: str                                  # "logistic" | "sir" | "bass"
     converged: bool
     aicc: float | None = None
-    r0_mean: float | None = None                # None for Bass (no R0)
-    r0_ci: tuple[float, float] | None = None
     peak_time_mean: float | None = None
     peak_time_ci: tuple[float, float] | None = None
+    # Self-standing lens numbers live in ``params`` (ADR-062): logistic
+    # doubling_time/inflection_day/plateau; sir rise_rate/decay_rate/asymmetry/
+    # peak_height; bass total_reach/p_innovation/q_imitation. No R_0 / J_inf.
     params: dict[str, Any] = field(default_factory=dict)   # model-specific, opaque
     curve: list[float] | None = None            # evaluated on the volume time grid
     failure_reason: str | None = None
@@ -194,7 +195,6 @@ class IndexEntry:
 class DashboardIndex:
     generated_at: str                            # ISO 8601 UTC
     global_random_seed: int
-    stage_min_r0: float
     n_narratives: int
     narratives: list[IndexEntry] = field(default_factory=list)
     # Median words per clustered article — a corpus-shape stat for the data page

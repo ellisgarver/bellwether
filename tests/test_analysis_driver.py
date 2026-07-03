@@ -22,7 +22,7 @@ import mnd.dashboard.run as driver
 
 CFG = {
     "dynamics": {"smoothing_window_days": 7, "min_articles_to_fit": 5},
-    "stages": {"newly_emerging_recency_weeks": 4, "trend_alpha": 0.05, "growth_min_r0": 1.0},
+    "stages": {"newly_emerging_recency_weeks": 4, "trend_alpha": 0.05},
     "reproducibility": {"global_random_seed": 42},
     "clustering": {"umap": {"n_neighbors": 15, "min_dist": 0.0, "metric": "cosine"}},
 }
@@ -74,7 +74,8 @@ class _FakeFitter:
     def fit_cluster(self, cluster_id, daily_counts):
         fit = FitResult(
             cluster_id=cluster_id, model_name="sir", converged=True, aicc=10.0,
-            r0_mean=1.6, r0_ci_low=1.1, r0_ci_high=2.2, peak_time_mean=5.0,
+            peak_time_mean=5.0,
+            param_summary={"rise_rate": 0.2, "decay_rate": 0.05, "asymmetry": 4.0},
             curve=[float(v) for v in daily_counts.to_numpy()],
         )
         return ClusterDynamics(

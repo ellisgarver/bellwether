@@ -159,27 +159,11 @@ dynamics:
     target_accept: 0.95
     cores: "auto"                  # min(chains, available_cpus)
     random_seed: 42
-  # SIR-only integration grid (ADR-053). SIR is integrated for NUTS by a
-  # pytensor.scan Euler loop with n_steps = T-1, so its gradient cost is O(series
-  # length); logistic and Bass are vectorized and unaffected. Binning the
-  # already-7-day-smoothed daily series to a weekly grid before the SIR scan cuts
-  # the scan ~7x. The displayed curve and the model-free stage stay daily; only
-  # SIR's integration resolution changes. R_0 = beta/gamma is dimensionless so it
-  # is grid-invariant; the per-week fitted rates are converted to per-day for the
-  # displayed curve and peak time (see dynamics/fitting.py).
-  sir_fit_grid_days: 7             # base (finest) SIR integration grid; weekly
-  sir_max_grid_steps: 200          # ADR-060: cap the Euler scan at this many steps.
-                                   # grid = max(sir_fit_grid_days, ceil(window_days /
-                                   # sir_max_grid_steps)), so the ODE-solver cost is
-                                   # bounded regardless of window length. A numerical
-                                   # step-count bound, not a methodology gate.
-  # SIR-only inference budget. R_0 is display-only post ADR-052; this sampler applies
-  # only to the expensive SIR lens (logistic/Bass keep the production `inference`
-  # budget above). ADR-060 restored a fuller budget (the fit window + adaptive grid
-  # made each SIR fit cheap) and added a max_treedepth cap so a cluster SIR cannot
-  # fit fails fast (non-converged) instead of grinding at max leapfrog depth. It
-  # cannot affect anchor recovery (a clustering metric), so ADR-040 holds — a
-  # Monte-Carlo-precision + sampler-cost setting, not a tuned parameter.
+  # SIR-only inference budget. Post ADR-062 the SIR mean function is the
+  # Schlickeiser–Kröger closed form (no Euler scan / ODE), so the fit is cheap like
+  # logistic/Bass; this budget and the max_treedepth fail-fast carry over from
+  # ADR-060 but now bound an elementary model. Not a tuned parameter (ADR-040).
+  # (The former sir_fit_grid_days / sir_max_grid_steps scan caps are retired.)
   sir_inference:
     framework: "pymc"
     draws: 1000
@@ -190,23 +174,23 @@ dynamics:
     cores: "auto"                  # min(chains, available_cpus)
     random_seed: 42
   priors:
-    # Weakly informative, anchored to Bjornstad 2018 "Epidemics: Models and
-    # Data using R" + Gelman et al. BDA3 conventions. Specific values pending
-    # implementation commit (sub-ADR-020 if non-trivial).
+    # Weakly informative. Bass is field-anchored to a real meta-analysis (below);
+    # SIR and logistic priors are data-scaled in code (peak, span) — no borrowed
+    # epidemiological constants (ADR-062 retired the Bjornstad beta/gamma priors,
+    # which pinned a non-identifiable R_0).
     sir:
-      # LogNormal on beta, gamma (ADR-060), centered on these field-anchored means
-      # (Bjornstad 2018). LogNormal keeps both rates strictly positive — the earlier
-      # HalfNormal put mass at gamma->0, which blew up R_0 = beta/gamma and the Euler
-      # scan (0/365 convergence). Mirrors the Bass lens, which already uses LogNormal.
-      beta_mean: 0.3
-      beta_log_sd: 0.6
-      gamma_mean: 0.1
-      gamma_log_sd: 0.6
+      # Closed-form SIR (ADR-062). The fit parameters are peak_height, peak_time,
+      # the shape scalar k0 = 1/R0, and a timescale; peak_height/peak_time/timescale
+      # priors are data-scaled in code. k0 gets a gentle Beta shape prior (a=b=2 ->
+      # centred on k0=0.5, R0=2), not tuned to any anchor. R0 itself is not reported.
+      k0_beta_a: 2.0
+      k0_beta_b: 2.0
+      peak_height_log_sd: 0.5       # LogNormal sd around the observed peak
+      timescale_log_sd: 0.7         # LogNormal sd around span/6 days per reduced unit
     logistic:
       L_log_mean: 5.0              # log(carrying capacity) prior mean
       L_log_sd: 2.0
-      k_mean: 0.2
-      k_sd: 0.1
+      k_sd: 0.1                    # HalfNormal growth-rate scale
     bass:
       # Anchored to Sultan, Farley & Lehmann 1990 meta-analysis of 213 Bass
       # applications: mean p (innovation) ~= 0.03, mean q (imitation) ~= 0.38.
@@ -246,7 +230,6 @@ detection:
 # tuned magnitude. SIR R_0 is a display-only headline for the SIR lens, not a gate.
 stages:
   trend_alpha: 0.05                # significance level for the Mann-Kendall trend test
-  growth_min_r0: 1.0               # SIR-lens display headline only; no longer a stage gate
   newly_emerging_recency_weeks: 4  # recent window W and emerging flag; sharp-anchor windows + Brown & Warner 1985
   dormant_peak_fraction: 0.25      # a no-trend narrative is dormant when its recent-window level falls below this
                                    # fraction of its own peak-window level; otherwise stable (ADR-058). A definition,

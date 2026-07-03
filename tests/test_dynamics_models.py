@@ -10,12 +10,12 @@ from mnd.dynamics.models import (
     bass,
     bass_peak_time,
     logistic,
-    logistic_r0,
+    logistic_doubling_time,
     mann_kendall,
     shape_facts,
-    sir_peak_time,
-    sir_prevalence,
-    sir_r0,
+    sir_decay_rate,
+    sir_kssir_curve,
+    sir_rise_rate,
 )
 
 
@@ -37,39 +37,39 @@ class TestLogistic:
         y = logistic(T, L=100.0, k=0.3, t0=30.0)
         assert (np.diff(y) > 0).all()
 
-    def test_r0_above_one_when_positive_k(self):
-        r0 = logistic_r0(k=0.2, gamma=0.1)
-        assert r0 > 1.0
+    def test_doubling_time(self):
+        # doubling time = ln2 / k
+        assert logistic_doubling_time(0.1) == pytest.approx(np.log(2.0) / 0.1)
 
-    def test_r0_equals_one_at_zero_k(self):
-        assert logistic_r0(k=0.0, gamma=0.1) == pytest.approx(1.0)
+    def test_doubling_time_infinite_at_zero_k(self):
+        assert logistic_doubling_time(0.0) == float("inf")
 
 
 class TestSIR:
+    """Closed-form SIR prevalence lens (Schlickeiser & Kröger; ADR-062)."""
+
     def test_shape(self):
-        I = sir_prevalence(T, N=10000, I0=10, beta=0.3, gamma=0.1)
+        I = sir_kssir_curve(T, peak_height=100.0, peak_time=30.0, k0=0.4, timescale=5.0)
         assert I.shape == T.shape
 
     def test_non_negative(self):
-        I = sir_prevalence(T, N=10000, I0=10, beta=0.3, gamma=0.1)
+        I = sir_kssir_curve(T, peak_height=100.0, peak_time=30.0, k0=0.4, timescale=5.0)
         assert (I >= 0).all()
 
-    def test_r0_formula(self):
-        assert sir_r0(beta=0.3, gamma=0.1) == pytest.approx(3.0)
+    def test_peaks_at_peak_time_and_height(self):
+        I = sir_kssir_curve(T, peak_height=100.0, peak_time=30.0, k0=0.4, timescale=5.0)
+        assert T[int(np.argmax(I))] == pytest.approx(30.0, abs=1.0)
+        assert I.max() == pytest.approx(100.0, rel=1e-3)
 
-    def test_r0_below_one_no_epidemic(self):
-        # R0 < 1 → I should decline monotonically
-        I = sir_prevalence(T, N=10000, I0=100, beta=0.05, gamma=0.2)
-        assert I[-1] < I[0]
+    def test_asymmetry_increases_with_R0(self):
+        # smaller k0 = larger R0 = more explosive rise relative to decay
+        a_lo = sir_rise_rate(0.8, 5.0) / sir_decay_rate(0.8, 5.0)   # R0=1.25
+        a_hi = sir_rise_rate(0.2, 5.0) / sir_decay_rate(0.2, 5.0)   # R0=5
+        assert a_hi > a_lo > 1.0
 
-    def test_r0_above_one_epidemic(self):
-        # R0 > 1 → I should peak above initial value
-        I = sir_prevalence(T, N=10000, I0=10, beta=0.5, gamma=0.1)
-        assert I.max() > I[0]
-
-    def test_peak_time_positive(self):
-        pt = sir_peak_time(N=10000, I0=10, beta=0.3, gamma=0.1)
-        assert pt > 0
+    def test_rates_scale_inversely_with_timescale(self):
+        assert sir_rise_rate(0.4, 10.0) == pytest.approx(0.5 * sir_rise_rate(0.4, 5.0))
+        assert sir_decay_rate(0.4, 10.0) == pytest.approx(0.5 * sir_decay_rate(0.4, 5.0))
 
 
 class TestBass:
