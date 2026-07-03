@@ -74,6 +74,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 054 | **Cross-document boilerplate strip — sentence-level recurring-passage removal at the filter stage (normalized sentence in ≥ N distinct documents), after MinHash; drops content-free shells; auditable `boilerplate_report.json`** | Live (extends 019; orthogonal to 020; relates 030/046/051) |
 | 055 | **Richer JEL cluster representation — c-TF-IDF terms + BERTopic representative documents (terms-first, full AEA taxonomy incl. Y); fixes thin-signal misses (r-star, Basel) and Y over-attraction; JEL stays a display flag** | Live (amends 020/046; relates 019/054) |
 | 056 | **Human-readable narrative names — display-layer Claude Haiku titling over c-TF-IDF labels, grounded only in the ADR-055 representation; titles cached under a representation hash and committed for key-free deterministic rebuilds; display-only, degrades to the label** | Live (display-layer; relates 043/046/050/055) |
+| 061 | **Three representative-article panels — the narrative's core (most term-aligned + substantial), earliest, and newest, de-duplicated, `n_per_bucket`=3 each; the central panel also grounds the ADR-056 naming layer (replacing the BERTopic rep-doc excerpts). JEL scope keeps its ADR-055 representation unchanged.** | Live (extends 055/056; display + naming layer) |
 | 060 | **Fit lenses on the central-mass window + SIR robustness overhaul — nearly every fit-series spans ~14yr from sparse straggler tails, which broke SIR (0/365, γ→0 `HalfNormal` ridge + 855-step Euler scan). Fix: fit all three lenses on the central 95% of cumulative attention mass (α=0.05, keeps multi-wave, no new param; staging/display stay full-span); SIR gets LogNormal β/γ priors, an adaptive grid bounding the scan ≤200 steps, and a `max_treedepth` fail-fast cap so unfittable clusters go non-converged in seconds instead of grinding. Same convergence gate for all three, no outbreak-eligibility filter.** | Live (supersedes 053; amends 039/052; relates 040/058) |
 | 059 | **Emerging flag is recency-only — a narrative is emerging iff its onset falls within the 4-week recency window of the corpus frontier, regardless of stage; drops the earlier `stage == growth` gate so a just-arrived narrative whose short history hasn't yet registered a significant trend is still surfaced as newly arrived** | Live (amends 052 emerging clause; relates 016/057) |
 | 058 | **Peak-relative plateau test — `stable` vs `dormant` keyed to the narrative's own high-water window, not its quiet floor; fixes the all-`stable` collapse (342/365) where institutional tails made "above the floor" trivially true. MWU on the zero-heavy daily series was under-powered, so the split is by level: recent-window mean below `dormant_peak_fraction`=0.25 of the peak-window mean → dormant (a definition, not tuned to recovery)** | Live (amends 052 §2/§3 Level test; relates 040) |
@@ -4706,6 +4707,50 @@ and confined to numerics.
   Amends ADR-039 (the lenses are now windowed) and ADR-052/058 (staging unchanged,
   but the shared sparse-tail root cause is now noted). Amends `config/config.yaml`,
   `src/mnd/dynamics/fitting.py`, and METHODOLOGY §7.
+
+---
+
+## ADR-061: Three representative-article panels; central panel grounds naming
+
+- **Status**: Accepted
+- **Date**: 2026-07-02
+
+### Context
+
+The story card surfaced a single "representative articles" list (top-5 by c-TF-IDF
+term overlap) for display, and the naming layer (ADR-056) grounded titles on
+BERTopic's `Representative_Docs` excerpts. Neither conveys a narrative's *arc*, and
+the two used different document sets.
+
+### Decision
+
+`build_story_card` surfaces **three de-duplicated panels**, `n_per_bucket = 3` each:
+
+- **central** — most aligned with the narrative's own c-TF-IDF terms (term-overlap),
+  then most substantial (text length), then newest. The narrative's core.
+- **earliest** / **newest** — by publication day; how the narrative entered and
+  where it stands now.
+
+De-duplication is central-first: a document in the central panel is excluded from
+earliest/newest, which backfill to the next candidate, so no article appears twice.
+
+The **central panel grounds the naming layer** (ADR-056) — titles are generated
+from the most-aligned, most-substantial pieces (extractive article text), replacing
+the BERTopic rep-doc excerpts. **JEL scope is unchanged** — it keeps its ADR-055
+representation (terms + BERTopic rep docs), so scope assignments are untouched and
+this needs no re-embed.
+
+### Consequences
+
+- The narrative page can tell the story (entry → core → present). `StoryCard` gains
+  `earliest_articles` / `newest_articles` / `central_articles`;
+  `representative_articles` aliases `central_articles` for back-compat.
+- Naming and display now draw from the same central set — titles reflect what the
+  reader sees. The naming-cache signature already keys on the excerpts, so the new
+  grounding text invalidates stale titles automatically (ADR-056).
+- Display/naming-layer only: no re-embed, no re-cluster, no change to JEL, fits, or
+  staging. Ships in the cheap follow-up naming/rebuild pass, not the dynamics
+  re-fit. Amends `story_card.py`; front-end + naming-input wiring follow.
 
 ---
 

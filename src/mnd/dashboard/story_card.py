@@ -47,6 +47,13 @@ class StoryCard:
     date_range: tuple[str, str] | None = None
     peak_date: str | None = None
     source_mix: list[tuple[str, int]] = field(default_factory=list)
+    # Three complementary representative-article panels (ADR-061): the narrative's
+    # own story — how it entered, where it stands now, and its most central pieces.
+    # ``central_articles`` (most aligned + substantial) also grounds the naming
+    # layer. ``representative_articles`` aliases ``central_articles`` for back-compat.
+    earliest_articles: list[dict[str, Any]] = field(default_factory=list)
+    newest_articles: list[dict[str, Any]] = field(default_factory=list)
+    central_articles: list[dict[str, Any]] = field(default_factory=list)
     representative_articles: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -145,7 +152,7 @@ def build_story_card(
     topic_info: pd.DataFrame | None = None,
     *,
     n_terms: int = 10,
-    n_representative: int = 5,
+    n_per_bucket: int = 3,
     n_sources: int = 8,
     excerpt_chars: int = 320,
 ) -> StoryCard:
@@ -153,8 +160,10 @@ def build_story_card(
 
     Chunk rows are folded back to articles on ``article_id`` (chunks of a long
     document share one id); each article's full text is the concatenation of its
-    chunk bodies, with metadata taken from its first chunk. Representative
-    articles are the top ``n_representative`` by c-TF-IDF-term overlap.
+    chunk bodies, with metadata taken from its first chunk. Three de-duplicated
+    representative-article panels are surfaced (ADR-061), ``n_per_bucket`` each:
+    the most *central* (aligned with the narrative's terms + most substantial —
+    these also ground naming), the *earliest*, and the *newest*.
     """
     rows = clusters_df[clusters_df["topic"] == cluster_id]
     label, all_terms = _terms_from_topic_info(topic_info, cluster_id)
@@ -198,16 +207,15 @@ def build_story_card(
         card.date_range = (days[0], days[-1])
         card.peak_date = Counter(days).most_common(1)[0][0]
 
-    # Representative articles: rank by term overlap, then by text length as a
-    # tie-break (longer = more substantive), then newest.
+    # Three complementary panels (ADR-061), de-duplicated so a document never
+    # appears twice. Central articles (most term-aligned, then most substantial by
+    # length, then newest) are the narrative's core and ground the naming layer;
+    # earliest and newest bracket its lifecycle.
     for a in articles:
         a["_score"] = _score_by_terms(a["title"] + " " + a["_full_text"], top_terms)
-    articles.sort(
-        key=lambda a: (a["_score"], len(a["_full_text"]), a["published_day"] or ""),
-        reverse=True,
-    )
-    card.representative_articles = [
-        {
+
+    def _view(a: dict[str, Any]) -> dict[str, Any]:
+        return {
             "title": a["title"],
             "source_id": a["source_id"],
             "url": a["url"],
@@ -215,8 +223,24 @@ def build_story_card(
             "excerpt": _excerpt(a["_full_text"], excerpt_chars),
             "term_overlap": a["_score"],
         }
-        for a in articles[:n_representative]
-    ]
+
+    central = sorted(
+        articles,
+        key=lambda a: (a["_score"], len(a["_full_text"]), a["published_day"] or ""),
+        reverse=True,
+    )[:n_per_bucket]
+    seen = {a["article_id"] for a in central}
+    card.central_articles = [_view(a) for a in central]
+
+    dated = [a for a in articles if a["published_day"]]
+    earliest = [a for a in sorted(dated, key=lambda a: a["published_day"]) if a["article_id"] not in seen][:n_per_bucket]
+    seen |= {a["article_id"] for a in earliest}
+    card.earliest_articles = [_view(a) for a in earliest]
+
+    newest = [a for a in sorted(dated, key=lambda a: a["published_day"], reverse=True) if a["article_id"] not in seen][:n_per_bucket]
+    card.newest_articles = [_view(a) for a in newest]
+
+    card.representative_articles = card.central_articles  # back-compat alias
     return card
 
 
