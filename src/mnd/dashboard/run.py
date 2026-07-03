@@ -51,6 +51,7 @@ from mnd.dashboard.story_card import (
     NOISE_TOPIC,
     _representative_docs_from_topic_info,
     _terms_from_topic_info,
+    build_story_card,
 )
 from mnd.dynamics.fitting import ClusterDynamics, DynamicsFitter
 from mnd.dynamics.normalize import adjusted_cluster_volumes, corpus_base_rate
@@ -261,12 +262,17 @@ def run_analysis(
         in_scope_n, len(fit_ids),
     )
 
-    # 2b. Human-readable display names (ADR-056): a short LLM title + one-liner
-    # built from the same representation as JEL (terms + representative docs) plus
-    # each cluster's date span and source mix. Display-only — never feeds the fit
-    # or scope — cached/committed for deterministic, key-free rebuilds, and absent
-    # (front end falls back to the c-TF-IDF label) when disabled or unkeyed.
-    naming_inputs = _naming_inputs(fit_ids, cluster_terms, topic_info, clusters_df, n_jel_docs)
+    # Story cards (extractive) built once here and shared with naming + artifacts,
+    # so the panels the reader sees and the excerpts the namer titles from are the
+    # same central articles (ADR-061).
+    cards = {cid: build_story_card(cid, clusters_df, topic_info) for cid in fit_ids}
+
+    # 2b. Human-readable display names (ADR-056): a short LLM title + description
+    # grounded on the cluster's central representative articles (ADR-061) plus its
+    # date span and source mix. Display-only — never feeds the fit or scope —
+    # cached/committed for deterministic, key-free rebuilds, and absent (front end
+    # falls back to the c-TF-IDF label) when disabled or unkeyed.
+    naming_inputs = _naming_inputs(fit_ids, cluster_terms, cards, clusters_df)
     names = generate_names(naming_inputs, cfg, client=namer)
 
     # 3. Four-lens fit + stage on the adjusted series (ADR-039 / ADR-019). Fits
@@ -313,6 +319,7 @@ def run_analysis(
         names=names,
         n_clusters_total=len(all_ids),
         cfg=cfg,
+        cards=cards,
     )
     return write_dashboard_artifacts(index, narratives, out_dir)
 
@@ -320,34 +327,27 @@ def run_analysis(
 def _naming_inputs(
     fit_ids: list[int],
     cluster_terms: dict[int, list[str]],
-    topic_info: pd.DataFrame | None,
+    cards: dict[int, Any],
     clusters_df: pd.DataFrame,
-    n_excerpts: int,
 ) -> list[NamingInput]:
-    """Build the per-cluster representation the namer titles from (ADR-056).
+    """Build the per-cluster representation the namer titles from (ADR-056/061).
 
-    Terms and representative-doc excerpts mirror the JEL representation (ADR-055);
-    the date span and top sources are computed from the cluster's chunks for light
-    grounding context. No model call here — this only assembles the prompt inputs.
+    The excerpts are the cluster's *central* representative articles — the same
+    most-aligned, most-substantial pieces surfaced on the narrative page (ADR-061) —
+    so titles reflect what the reader sees. Terms, date span, and top sources add
+    light grounding context. No model call here; this only assembles the inputs.
     """
     inputs: list[NamingInput] = []
     for cid in fit_ids:
-        sub = clusters_df[clusters_df["topic"] == cid]
-        date_range: tuple[str, str] | None = None
-        if "published_at" in sub.columns:
-            dts = pd.to_datetime(sub["published_at"], errors="coerce").dropna()
-            if len(dts):
-                date_range = (dts.min().date().isoformat(), dts.max().date().isoformat())
-        sources = (
-            [str(s) for s in sub["source_id"].value_counts().index[:4]]
-            if "source_id" in sub.columns
-            else []
-        )
+        card = cards[cid]
+        excerpts = [a["excerpt"] for a in card.central_articles if a.get("excerpt")]
+        date_range = card.date_range
+        sources = [s for s, _ in card.source_mix[:4]]
         inputs.append(
             NamingInput(
                 cluster_id=int(cid),
                 terms=cluster_terms[cid],
-                excerpts=_representative_docs_from_topic_info(topic_info, cid, n_excerpts),
+                excerpts=excerpts,
                 date_range=date_range,
                 sources=sources,
             )

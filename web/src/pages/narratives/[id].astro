@@ -28,6 +28,14 @@ const trendWord =
       ? "falling"
       : "no monotonic trend";
 const facts = n.shape_facts || {};
+// Three representative-article panels (ADR-061): how the narrative entered, its
+// core pieces, and where it stands now. Falls back to the single legacy list for
+// pre-ADR-061 artifacts, and drops any empty panel.
+const repPanels = [
+  { label: "core pieces", items: n.card.central_articles ?? n.card.representative_articles ?? [] },
+  { label: "earliest", items: n.card.earliest_articles ?? [] },
+  { label: "most recent", items: n.card.newest_articles ?? [] },
+].filter((p) => p.items.length > 0);
 const factOrder: [string, string][] = [
   ["total_volume", "total volume"],
   ["peak_volume", "peak volume"],
@@ -176,15 +184,22 @@ const direction = (d: any) =>
   <section class="section reveal">
     <p class="eyebrow">in the corpus</p>
     <h2>representative writing</h2>
-    <ul class="reps">
-      {n.card.representative_articles.map((a) => (
-        <li>
-          <a href={a.url} target="_blank" rel="noopener">{a.title}</a>
-          <div class="meta">{a.source} · {a.published_at}</div>
-          {a.excerpt && <p class="excerpt">{a.excerpt}</p>}
-        </li>
+    <div class="rep-panels">
+      {repPanels.map((p) => (
+        <div class="rep-panel">
+          <h3 class="rep-panel-title">{p.label}</h3>
+          <ul class="reps">
+            {p.items.map((a) => (
+              <li>
+                <a href={a.url} target="_blank" rel="noopener">{a.title}</a>
+                <div class="meta">{a.source_id} · {a.published_at}</div>
+                {a.excerpt && <p class="excerpt">{a.excerpt}</p>}
+              </li>
+            ))}
+          </ul>
+        </div>
       ))}
-    </ul>
+    </div>
     {n.card.source_mix?.length > 0 && (
       <p class="caption">sources: {n.card.source_mix.slice(0, 6).map(([s, c]) => `${s} (${c})`).join(", ")}</p>
     )}
@@ -477,6 +492,20 @@ const direction = (d: any) =>
   .chart :global(.drag) { cursor: default !important; }
   .chart.dragging :global(.nsewdrag),
   .chart.dragging :global(.drag) { cursor: grabbing !important; }
+  .rep-panels {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 1.5rem 2.5rem;
+  }
+  .rep-panel-title {
+    font-size: var(--fs-meta);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 0 0 0.35rem;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid var(--line-soft);
+  }
   .reps { list-style: none; margin: 0; padding: 0; }
   .reps li { padding: 0.9rem 0; border-bottom: 1px solid var(--line-soft); }
   .reps a { font-weight: 600; }

@@ -66,7 +66,7 @@ export interface Markets {
 
 export interface RepArticle {
   title: string;
-  source: string;
+  source_id: string;
   url: string;
   published_at: string;
   excerpt: string;
@@ -81,6 +81,11 @@ export interface StoryCard {
   date_range: [string, string] | null;
   peak_date: string | null;
   source_mix: [string, number][];
+  // Three representative-article panels (ADR-061): core (most central), earliest,
+  // newest. Optional so pre-ADR-061 artifacts (only representative_articles) still load.
+  central_articles?: RepArticle[];
+  earliest_articles?: RepArticle[];
+  newest_articles?: RepArticle[];
   representative_articles: RepArticle[];
 }
 
