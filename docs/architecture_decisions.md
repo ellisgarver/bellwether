@@ -76,6 +76,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 056 | **Human-readable narrative names — display-layer Claude Haiku titling over c-TF-IDF labels, grounded only in the ADR-055 representation; titles cached under a representation hash and committed for key-free deterministic rebuilds; display-only, degrades to the label** | Live (display-layer; relates 043/046/050/055) |
 | 061 | **Three representative-article panels — the narrative's core (most term-aligned + substantial), earliest, and newest, de-duplicated, `n_per_bucket`=3 each; the central panel also grounds the ADR-056 naming layer (replacing the BERTopic rep-doc excerpts). JEL scope keeps its ADR-055 representation unchanged.** | Live (extends 055/056; display + naming layer) |
 | 060 | **Fit lenses on the central-mass window + SIR robustness overhaul — nearly every fit-series spans ~14yr from sparse straggler tails, which broke SIR (0/365, γ→0 `HalfNormal` ridge + 855-step Euler scan). Fix: fit all three lenses on the central 95% of cumulative attention mass (α=0.05, keeps multi-wave, no new param; staging/display stay full-span); SIR gets LogNormal β/γ priors, an adaptive grid bounding the scan ≤200 steps, and a `max_treedepth` fail-fast cap so unfittable clusters go non-converged in seconds instead of grinding. Same convergence gate for all three, no outbreak-eligibility filter.** | Live (supersedes 053; amends 039/052; relates 040/058) |
+| 062 | **SIR lens via the Schlickeiser–Kröger closed-form solution — retire the `pytensor.scan` Euler ODE (the sole compute pole: ~23 min × 365 clusters ≈ 140 CPU-h) for the near-exact analytic prevalence I(τ), elementary on both branches (rise `η·e^{g−1}`, decay `(k₀/κ)·cosh⁻²ζ`), `k₀=1/R₀`; asymmetric so it stays distinct from logistic; Lambert-W only in the post-fit final-size display `J∞`. Fit collapses to logistic/Bass cost; display-only + convergence gate + no-tuning intact. Prototype: R₀ to ~1% in 1–3 ms/cluster.** | Live (supersedes SIR numerics of 053/060; amends 039; relates 040/052) |
 | 059 | **Emerging flag is recency-only — a narrative is emerging iff its onset falls within the 4-week recency window of the corpus frontier, regardless of stage; drops the earlier `stage == growth` gate so a just-arrived narrative whose short history hasn't yet registered a significant trend is still surfaced as newly arrived** | Live (amends 052 emerging clause; relates 016/057) |
 | 058 | **Peak-relative plateau test — `stable` vs `dormant` keyed to the narrative's own high-water window, not its quiet floor; fixes the all-`stable` collapse (342/365) where institutional tails made "above the floor" trivially true. MWU on the zero-heavy daily series was under-powered, so the split is by level: recent-window mean below `dormant_peak_fraction`=0.25 of the peak-window mean → dormant (a definition, not tuned to recovery)** | Live (amends 052 §2/§3 Level test; relates 040) |
 | 057 | **Phase-6 live emerging (design) — two display-only signals: institutional onset (existing) + press heating (4wk vs 52wk baseline, k=2, on Media Cloud attention-share); weekly refresh builds onto the model via BERTopic `merge_models` (ids/URLs/names preserved, new topics appended above τ); manual now → cron later; novel press-only clustering scoped out (ADR-010)** | Live design; press-heating + weekly-refresh implementations each need a follow-up ADR (relates 010/016/020/042/046/048/050/056) |
@@ -4763,6 +4764,122 @@ wins, replication stays free and key-free.
 - Display/naming-layer only: no re-embed, no re-cluster, no change to JEL, fits, or
   staging. Ships in the cheap follow-up naming/rebuild pass, not the dynamics
   re-fit. Amends `story_card.py`; front-end + naming-input wiring follow.
+
+---
+
+## ADR-062: SIR lens via the Schlickeiser–Kröger closed-form solution (retire the ODE scan)
+
+- **Status**: Accepted
+- **Date**: 2026-07-03
+
+### Context
+
+SIR is the entire compute pole of the analysis layer. ADR-060 tamed its
+numerics (LogNormal β/γ priors, an adaptive grid capping the Euler scan at ≤200
+steps, a `max_treedepth` fail-fast) but left the fundamental cost in place: the
+SIR mean function is a `pytensor.scan` Euler integration of the ODE, re-run on
+**every leapfrog step of every NUTS draw**. Measured on the live re-analysis
+(job 51390331): **~23 min per cluster × 365 fit-eligible clusters ≈ 140 CPU-h**,
+which overruns the 18 h caslake wall (≈13% done at timeout) and recurs on every
+Phase-6 weekly re-fit. Logistic (Verhulst 1838) and Bass (1969) are closed-form
+— a direct formula for any `t` — and cost seconds; the difference is entirely
+SIR's step-by-step integration. There is no elementary closed form for the SIR
+ODE, which is why it was integrated numerically.
+
+Recent applied-mathematics work has closed that gap. Schlickeiser & Kröger
+(*J. Phys. A* **53** 505601, 2020; *Appl. Math. Stat.* 2026, "near-exact
+solution") derive an accurate analytic solution of the constant-reproduction-factor
+SIR model. In their reduced time τ = γt with `k₀ = 1/R₀` and η the initial
+infected fraction, the **prevalence** I(τ) — the quantity our `_fit_sir`
+already fits to the smoothed daily counts — is *elementary on both branches*:
+
+- rise (τ ≤ τ_U):  `I = η·exp(g(τ)−1)`                    (their eq 88)
+- decay (τ ≥ τ_U): `I = (k₀/κ)·cosh⁻²(ζ(τ))`             (their eq 76)
+
+where κ, ζ, Φ, U_max and the peak time τ_U are elementary functions of the two
+scalars (k₀, η). The curve is **asymmetric** (different rise/decay widths), so
+it stays visually distinct from the logistic — unlike the symmetric
+Kermack–McKendrick 1927 `sech²` approximation, whose shape collapses onto the
+logistic's own derivative. Lambert's W enters **only** the final-size display
+number `J∞ = 1 + k₀·W₀(α)` (eq 55b), a scalar evaluated once post-fit via
+`scipy.special.lambertw` — never in the likelihood.
+
+A local de-risk prototype (no PyMC; `scipy` only) validated the form against a
+numerically integrated SIR across R₀ ∈ {1.25, 1.67, 2.5, 5}: peak height within
+0.6%, final size exact, curve nRMSE 8–13%, and a least-squares fit **recovers R₀
+to ~1% in 1–3 ms/cluster** — versus ~23 min for the Euler-scan NUTS fit. The one
+weak spot is peak *time*: the small-η closed form `τ_U = U_max·k₀/(1−k₀)` runs
+~20% early (it ignores susceptible depletion during the rise); the exact value is
+the eq-90 integral (an integrable √-type endpoint singularity requiring careful
+quadrature). In a fit with a free time offset the bias is absorbed into R₀
+recovery, but the *displayed* peak time needs the exact τ_U.
+
+### Decision
+
+Replace the numerically integrated SIR prevalence with the Schlickeiser–Kröger
+closed-form prevalence I(τ), keeping SIR a **display-only lens** (ADR-039/052)
+fit under the **same convergence gate** as logistic/Bass and the same
+no-tuning rule (ADR-040).
+
+1. **`_fit_sir` fits the analytic I(τ)** — elementary rise/decay branches above —
+   instead of the `pytensor.scan` Euler loop. No ODE, no scan, no custom
+   PyTensor Op; the log-likelihood is elementary and differentiable, so NUTS runs
+   at logistic/Bass cost. Fitted scalars: the shape parameter `k₀` (with
+   `R₀ = 1/k₀`), an amplitude, a time offset, and a time scale; η is fixed small
+   *a priori* (not tuned), consistent with the current fixed-`I0` treatment.
+2. **Peak time uses the exact eq-90 integral** (robust quadrature over the
+   √-singularity), not the small-η approximation, so the displayed peak time is
+   faithful. This is the one numerically delicate piece and is validated against
+   the real cached-cluster fits on RCC before cutover.
+3. **New display quantity: final attention size `J∞`** (eq 55b, Lambert-W on a
+   scalar, post-fit). R₀ = 1/k₀ remains the "was it contagious / did it burn
+   out?" headline; peak time and J∞ are honest closed-form companions.
+4. **Retire the scan-era numerics** — `dynamics.sir_fit_grid_days` and
+   `sir_max_grid_steps` (grid/step caps for the Euler scan) no longer apply and
+   are removed; the `sir_inference` budget and `max_treedepth` fail-fast carry
+   over unchanged but now bound a cheap elementary model. A cluster whose curve is
+   monotone / not epidemic-shaped (no interior peak, effectively R₀ ≤ 1) fails the
+   convergence gate and goes non-converged in seconds — the same fail-fast
+   behaviour ADR-060 introduced, now the norm rather than the exception.
+
+**Rejected alternatives.** (a) The symmetric Kermack–McKendrick 1927 `sech²`
+closed form — simpler, but its shape is indistinguishable from the logistic's
+derivative, erasing the SIR lens's distinctiveness. (b) Keeping the Euler scan —
+that is the pole. (c) Cheaper sampling / a higher `min_articles_to_fit` floor —
+changes the fitted curves and which narratives surface (a methodology shift), and
+does not address the per-cluster cost. (d) Cluster-level parallelism of the fit
+loop — worthwhile and orthogonal (an infra change, no ADR), but it multiplies
+throughput rather than removing the cost, and is pursued separately.
+
+### Consequences
+
+- **Compute.** The 140 CPU-h SIR pole collapses to the logistic/Bass scale
+  (seconds/cluster); the whole `analyze` step fits comfortably inside one caslake
+  job, and every Phase-6 weekly re-fit is cheap. The `.fit_cache` signature keys
+  on `cfg["dynamics"]`, so this change invalidates all existing SIR `.pkl`s and
+  forces a clean re-fit — expected and now affordable.
+- **Fidelity.** SIR remains a display lens; its curve tracks the data at nRMSE
+  comparable to the previous fit while the R₀ headline is *more* stable (no
+  γ→0 ridge, no scan overflow). Faithfulness of the displayed **peak time**
+  depends on getting the eq-90 integral right — the explicit validation gate
+  before cutover.
+- **Validity domain.** The solution assumes a single epidemic-shaped hump with
+  constant reproduction factor; multi-wave or monotone series are handled exactly
+  as today — the central-mass window (ADR-060) isolates the main hump, and
+  non-epidemic shapes fail the convergence gate rather than being force-fit.
+- **Citations.** The lens is now backed by a named field-standard analytic result
+  (Schlickeiser–Kröger) rather than a bespoke Euler discretization, which
+  strengthens the "field-accepted citation behind each choice" posture.
+- **Supersession.** Supersedes the SIR *numerical-integration mechanics* of
+  ADR-053 and ADR-060 (weekly/adaptive grid, scan-step caps); the LogNormal-prior
+  and fail-fast/uniform-convergence-gate philosophy of ADR-060 carries over.
+  Amends ADR-039 (the SIR lens curve is now analytic). Staging (ADR-052/058),
+  the displayed volume series, JEL scope, logistic, and Bass are all unchanged.
+- **Future (not in scope).** For the Bass lens's "external shock vs word-of-mouth"
+  question, the modern field standard for news/attention is the Hawkes
+  self-exciting point process (Crane & Sornette 2008, endogenous/exogenous
+  classes), which uses the article timestamps directly. Noted as a candidate for
+  a later ADR; Bass stays as-is for now.
 
 ---
 
