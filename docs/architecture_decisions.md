@@ -76,7 +76,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 056 | **Human-readable narrative names — display-layer Claude Haiku titling over c-TF-IDF labels, grounded only in the ADR-055 representation; titles cached under a representation hash and committed for key-free deterministic rebuilds; display-only, degrades to the label** | Live (display-layer; relates 043/046/050/055) |
 | 061 | **Three representative-article panels — the narrative's core (most term-aligned + substantial), earliest, and newest, de-duplicated, `n_per_bucket`=3 each; the central panel also grounds the ADR-056 naming layer (replacing the BERTopic rep-doc excerpts). JEL scope keeps its ADR-055 representation unchanged.** | Live (extends 055/056; display + naming layer) |
 | 060 | **Fit lenses on the central-mass window + SIR robustness overhaul — nearly every fit-series spans ~14yr from sparse straggler tails, which broke SIR (0/365, γ→0 `HalfNormal` ridge + 855-step Euler scan). Fix: fit all three lenses on the central 95% of cumulative attention mass (α=0.05, keeps multi-wave, no new param; staging/display stay full-span); SIR gets LogNormal β/γ priors, an adaptive grid bounding the scan ≤200 steps, and a `max_treedepth` fail-fast cap so unfittable clusters go non-converged in seconds instead of grinding. Same convergence gate for all three, no outbreak-eligibility filter.** | Live (supersedes 053; amends 039/052; relates 040/058) |
-| 062 | **SIR lens via the Schlickeiser–Kröger closed-form solution — retire the `pytensor.scan` Euler ODE (the sole compute pole: ~23 min × 365 clusters ≈ 140 CPU-h) for the near-exact analytic prevalence I(τ), elementary on both branches (rise `η·e^{g−1}`, decay `(k₀/κ)·cosh⁻²ζ`), `k₀=1/R₀`; asymmetric so it stays distinct from logistic; Lambert-W only in the post-fit final-size display `J∞`. Fit collapses to logistic/Bass cost; display-only + convergence gate + no-tuning intact. Prototype: R₀ to ~1% in 1–3 ms/cluster.** | Live (supersedes SIR numerics of 053/060; amends 039; relates 040/052) |
+| 062 | **SIR lens via the Schlickeiser–Kröger closed-form solution — retire the `pytensor.scan` Euler ODE (the sole compute pole: ~23 min × 365 clusters ≈ 140 CPU-h) for the near-exact analytic prevalence I(τ), elementary on both branches (rise `η·e^{g−1}`, decay `(k₀/κ)·cosh⁻²ζ`), `k₀=1/R₀`; asymmetric so it stays distinct from logistic; Lambert-W only in the post-fit final-size display `J∞`. Fit collapses to logistic/Bass cost (1–3 ms vs ~23 min). De-risk surfaced that R₀ is NOT identifiable from a single curve (true of the current Euler fit too — R₀ is prior-pinned); R₀-headline treatment reopened. Display-only + convergence gate + no-tuning intact.** | Proposed (supersedes SIR numerics of 053/060; amends 039; relates 040/052) |
 | 059 | **Emerging flag is recency-only — a narrative is emerging iff its onset falls within the 4-week recency window of the corpus frontier, regardless of stage; drops the earlier `stage == growth` gate so a just-arrived narrative whose short history hasn't yet registered a significant trend is still surfaced as newly arrived** | Live (amends 052 emerging clause; relates 016/057) |
 | 058 | **Peak-relative plateau test — `stable` vs `dormant` keyed to the narrative's own high-water window, not its quiet floor; fixes the all-`stable` collapse (342/365) where institutional tails made "above the floor" trivially true. MWU on the zero-heavy daily series was under-powered, so the split is by level: recent-window mean below `dormant_peak_fraction`=0.25 of the peak-window mean → dormant (a definition, not tuned to recovery)** | Live (amends 052 §2/§3 Level test; relates 040) |
 | 057 | **Phase-6 live emerging (design) — two display-only signals: institutional onset (existing) + press heating (4wk vs 52wk baseline, k=2, on Media Cloud attention-share); weekly refresh builds onto the model via BERTopic `merge_models` (ids/URLs/names preserved, new topics appended above τ); manual now → cron later; novel press-only clustering scoped out (ADR-010)** | Live design; press-heating + weekly-refresh implementations each need a follow-up ADR (relates 010/016/020/042/046/048/050/056) |
@@ -4769,8 +4769,21 @@ wins, replication stays free and key-free.
 
 ## ADR-062: SIR lens via the Schlickeiser–Kröger closed-form solution (retire the ODE scan)
 
-- **Status**: Accepted
+- **Status**: Proposed (pending the R₀-headline decision below + RCC validation)
 - **Date**: 2026-07-03
+
+> **Correction (2026-07-03, same day).** An earlier draft of this ADR claimed the
+> closed form "recovers R₀ to ~1%." That number came from a **circular test**
+> (fitting the KSSIR curve to KSSIR-generated data). Fitting the closed form to a
+> *numerically integrated* SIR shows R₀ is **not identifiable** from a single
+> attention bump: with free amplitude the fit drives R₀→1 (monotone profile
+> likelihood, no interior minimum); with amplitude tied to a fixed population the
+> profile is flat above R₀≈2. This is intrinsic — recovering R₀ needs an
+> independent removal rate γ / generation interval, which a single curve's shape
+> does not pin. **The current Euler-scan fit has the same non-identifiability**;
+> its R₀ = β/γ is pinned by the LogNormal priors (mean ≈ 3), not measured from the
+> data. The speed and curve-fidelity findings stand; the R₀-headline treatment is
+> reopened (see Decision).
 
 ### Context
 
@@ -4804,15 +4817,20 @@ logistic's own derivative. Lambert's W enters **only** the final-size display
 number `J∞ = 1 + k₀·W₀(α)` (eq 55b), a scalar evaluated once post-fit via
 `scipy.special.lambertw` — never in the likelihood.
 
-A local de-risk prototype (no PyMC; `scipy` only) validated the form against a
-numerically integrated SIR across R₀ ∈ {1.25, 1.67, 2.5, 5}: peak height within
-0.6%, final size exact, curve nRMSE 8–13%, and a least-squares fit **recovers R₀
-to ~1% in 1–3 ms/cluster** — versus ~23 min for the Euler-scan NUTS fit. The one
-weak spot is peak *time*: the small-η closed form `τ_U = U_max·k₀/(1−k₀)` runs
-~20% early (it ignores susceptible depletion during the rise); the exact value is
-the eq-90 integral (an integrable √-type endpoint singularity requiring careful
-quadrature). In a fit with a free time offset the bias is absorbed into R₀
-recovery, but the *displayed* peak time needs the exact τ_U.
+A local de-risk prototype (no PyMC; `scipy` only) fit the closed form to a
+numerically integrated SIR across R₀ ∈ {1.25 … 5}. Findings:
+
+- **Speed: decisive.** A least-squares fit costs **1–3 ms/cluster** vs ~23 min for
+  the Euler-scan NUTS fit — the 140 CPU-h pole disappears.
+- **Curve fidelity: good for real epidemics.** For R₀ ≳ 2 the closed form tracks
+  the numerical SIR prevalence at **1–4% nRMSE**; it degrades for weak epidemics
+  (R₀ < 1.5), which the central-mass window + convergence gate already handle.
+- **R₀: not identifiable (see Correction).** The profile likelihood in R₀ has no
+  interior minimum — the shape is consistent with a wide R₀ range once timescale
+  and amplitude absorb the difference.
+- **Final size J∞** (eq 55b, Lambert-W on a scalar, post-fit) *is* data-driven —
+  it is essentially the cumulative asymptote — and is a faithful new display
+  quantity. Peak time is read off the fitted curve's argmax (no τ_U integral).
 
 ### Decision
 
@@ -4832,9 +4850,18 @@ no-tuning rule (ADR-040).
    faithful. This is the one numerically delicate piece and is validated against
    the real cached-cluster fits on RCC before cutover.
 3. **New display quantity: final attention size `J∞`** (eq 55b, Lambert-W on a
-   scalar, post-fit). R₀ = 1/k₀ remains the "was it contagious / did it burn
-   out?" headline; peak time and J∞ are honest closed-form companions.
-4. **Retire the scan-era numerics** — `dynamics.sir_fit_grid_days` and
+   scalar, post-fit) — data-driven and faithful. Peak time is read off the fitted
+   curve's argmax.
+4. **R₀-headline treatment — REOPENED (decision pending).** Since R₀ is not
+   identifiable from a single curve (Correction above), one of: **(a)** keep R₀ as
+   a display readout, presented honestly as a prior-regularized lens parameter
+   (a field-standard prior, not a measurement) — status quo behaviour, just fast;
+   **(b)** drop the R₀ number and let the SIR lens show the fitted contagion-shaped
+   curve plus the identifiable **J∞** and the rise-vs-decay **asymmetry** as its
+   "did it linger or burn out?" readout; **(c)** fix γ from a definitional
+   news-generation-interval constant so R₀ = β/γ is identified up to that stated
+   assumption. This choice sets what the Decision below finalizes.
+5. **Retire the scan-era numerics** — `dynamics.sir_fit_grid_days` and
    `sir_max_grid_steps` (grid/step caps for the Euler scan) no longer apply and
    are removed; the `sir_inference` budget and `max_treedepth` fail-fast carry
    over unchanged but now bound a cheap elementary model. A cluster whose curve is
