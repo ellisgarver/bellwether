@@ -325,15 +325,17 @@ compute:
 # `display` ever feeds embedding, clustering, JEL scope, fitting, or staging.
 display:
   naming:
-    # Human-readable narrative titles + one-liners over BERTopic's c-TF-IDF
-    # labels (ADR-056). Generated at bake time from each cluster's existing
-    # representation (terms + representative docs), cached under a representation
-    # hash, and committed so the static site rebuilds with no API key. Disabled or
-    # unkeyed → the front end falls back to the c-TF-IDF label.
+    # Human-readable narrative titles + a 3-4 sentence description over BERTopic's
+    # c-TF-IDF labels (ADR-056), grounded on each cluster's central representative
+    # articles (ADR-061). Generated at temperature 0 at bake time, cached under a
+    # representation hash, and committed so the static site rebuilds with no key.
+    # Disabled or unkeyed → the front end falls back to the c-TF-IDF label.
     enabled: true
-    model: "claude-haiku-4-5"   # cheapest current tier; ample for short titling
-    max_title_words: 6
-    prompt_version: 1           # bump to invalidate the cache when the prompt changes
+    backend: "anthropic"        # "anthropic" (paid Claude Haiku) | "local" (open HF model)
+    model: "claude-haiku-4-5"   # backend=anthropic: cheapest tier, ample for this task
+    local_model: "Qwen/Qwen2.5-7B-Instruct"   # backend=local: open, Apache-2.0, no key
+    max_title_words: 7          # soft target for the title (not a hard cap)
+    prompt_version: 2           # bump to invalidate the cache when the prompt changes
     cache_dir: "data/naming_cache"   # tracked path (data/ is not gitignored)
 
 # -----------------------------------------------------------------------------

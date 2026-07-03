@@ -4740,6 +4740,18 @@ the BERTopic rep-doc excerpts. **JEL scope is unchanged** — it keeps its ADR-0
 representation (terms + BERTopic rep docs), so scope assignments are untouched and
 this needs no re-embed.
 
+The naming **output and backend** are refined at the same time (amending ADR-056):
+the title is a short phrase with a soft length target (no hard word cap, never a
+sentence) and the description grows from one sentence to **3–4 plain sentences**,
+both at **temperature 0** (deterministic → the committed cache stays meaningful).
+The prompt is rewritten for strict grounding and an explicit anti-slop rule (no
+"This narrative…"/"Explores…" openers, vary sentence structure). Naming is now
+**backend-selectable** (`display.naming.backend`): the paid `AnthropicNamer`
+(Claude Haiku) **or** an open, key-free `LocalHFNamer` (Qwen2.5-7B-Instruct,
+Apache-2.0, greedy decoding) — both exposed so the open vs paid choice can be A/B'd
+(`scripts/naming_ab.py`) before the final bake. The committed cache means whichever
+wins, replication stays free and key-free.
+
 ### Consequences
 
 - The narrative page can tell the story (entry → core → present). `StoryCard` gains

@@ -55,14 +55,26 @@ class NarrativeName:
 # System prompt is part of the cache key (via prompt_version) — changing it
 # without bumping display.naming.prompt_version would silently reuse stale titles.
 _SYSTEM = (
-    "You name clusters of economic-policy and financial writing for a public, "
-    "educational dashboard. You are given a cluster's keywords and short excerpts "
-    "from its most representative documents. Write a concise, neutral name and a "
-    "one-sentence description of what the cluster is about. Use ONLY the supplied "
-    "material: no outside knowledge, and no events, places, or dates that are not "
-    "present in the text. If the material is not about economics or finance, name "
-    "it plainly for what it actually is rather than forcing an economic framing. "
-    "No sensational or editorial language. Return strictly the requested JSON."
+    "You write titles and descriptions for clusters of U.S. economic-policy and "
+    "financial writing, shown on a public educational dashboard that tracks how such "
+    "narratives rise and fade. You are given a cluster's defining keywords and short "
+    "excerpts from its most central documents.\n\n"
+    "Write two things:\n"
+    "- title: a short, specific noun phrase naming what the cluster is about — a "
+    "headline, not a sentence, and not a bare keyword. Name the period or event when "
+    "the excerpts make it clear.\n"
+    "- description: 3 to 4 plain, concrete sentences explaining what the narrative is "
+    "about and why it mattered, written for an interested non-expert.\n\n"
+    "Rules:\n"
+    "- Use ONLY the supplied keywords and excerpts. Do not add events, places, dates, "
+    "numbers, or claims that are not present in them; when unsure, stay general.\n"
+    "- If the material is not about economics or finance, name it plainly for what it "
+    "actually is rather than forcing an economic framing.\n"
+    "- Neutral and factual: no hype, no editorializing, no forecasting, no advice.\n"
+    "- Do not open with filler such as 'This narrative', 'This cluster', 'This topic', "
+    "'In the world of', or 'Explores' — start with the substance, and vary how you "
+    "open across descriptions.\n"
+    "Return strictly the requested JSON."
 )
 
 _SCHEMA: dict[str, Any] = {
@@ -76,19 +88,20 @@ _SCHEMA: dict[str, Any] = {
 }
 
 
-def _build_user(inp: NamingInput, max_title_words: int) -> str:
+def _build_user(inp: NamingInput, title_words: int) -> str:
     """Render one cluster's representation into the user message."""
     lines = [f"Keywords: {', '.join(inp.terms[:15])}"]
     if inp.sources:
         lines.append(f"Sources: {', '.join(inp.sources[:4])}")
     if inp.date_range:
         lines.append(f"Active: {inp.date_range[0]} to {inp.date_range[1]}")
-    lines.append("Representative excerpts:")
+    lines.append("Central excerpts:")
     for i, ex in enumerate(inp.excerpts[:3], 1):
-        lines.append(f"{i}. {ex.strip()[:400]}")
+        lines.append(f"{i}. {ex.strip()[:500]}")
     lines.append(
-        f"\nReturn JSON with: title (a noun phrase of at most {max_title_words} "
-        "words, no trailing period) and description (one sentence, at most 25 words)."
+        "\nReturn JSON with two keys: title (a short, specific phrase — roughly "
+        f"{title_words} words, never a full sentence, no trailing period) and "
+        "description (3 to 4 plain, concrete sentences)."
     )
     return "\n".join(lines)
 
@@ -151,14 +164,72 @@ class AnthropicNamer:
     ) -> dict[str, Any]:
         resp = self._client.messages.create(
             model=self._model,
-            max_tokens=256,
-            temperature=0,
+            max_tokens=512,           # room for a 3-4 sentence description
+            temperature=0,            # deterministic → the committed cache is meaningful
             system=system,
             messages=[{"role": "user", "content": user}],
             output_config={"format": {"type": "json_schema", "schema": schema}},
         )
         text = next((b.text for b in resp.content if b.type == "text"), "")
         return json.loads(text)
+
+
+def _parse_json_object(text: str) -> dict[str, Any]:
+    """Extract the first JSON object from free-form model output.
+
+    Open models are not schema-constrained, so they may wrap the JSON in prose or
+    a code fence. Slice from the first ``{`` to the last ``}`` and parse.
+    """
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError(f"no JSON object in model output: {text[:120]!r}")
+    return json.loads(text[start : end + 1])
+
+
+class LocalHFNamer:
+    """Open-source naming client: a local instruction-tuned model via transformers.
+
+    Keeps the whole pipeline free and reproducible (no paid API, no key) — the
+    naming task is short grounded generation, well within a 7B instruct model. Greedy
+    decoding (no sampling) is the temperature-0 equivalent, so a re-bake is
+    deterministic and the committed cache stays meaningful. Heavier than the paid
+    path (a multi-GB model + GPU for reasonable speed), so it is opt-in via
+    ``display.naming.backend: local``; both are exposed for the ADR-056 A/B.
+    """
+
+    def __init__(self, model_id: str) -> None:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        self._tok = AutoTokenizer.from_pretrained(model_id)
+        self._model = AutoModelForCausalLM.from_pretrained(
+            model_id, torch_dtype="auto", device_map="auto"
+        )
+        self._model_id = model_id
+
+    @classmethod
+    def from_config(cls, cfg: dict[str, Any]) -> "LocalHFNamer":
+        nc = ((cfg.get("display") or {}).get("naming") or {})
+        return cls(str(nc.get("local_model", "Qwen/Qwen2.5-7B-Instruct")))
+
+    def name_cluster(
+        self, system: str, user: str, schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        messages = [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": user + '\n\nRespond with only a JSON object: {"title": ..., "description": ...}',
+            },
+        ]
+        prompt = self._tok.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = self._tok(prompt, return_tensors="pt").to(self._model.device)
+        out = self._model.generate(**inputs, max_new_tokens=512, do_sample=False)
+        text = self._tok.decode(
+            out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
+        )
+        return _parse_json_object(text)
 
 
 def generate_names(
@@ -183,16 +254,20 @@ def generate_names(
         )
         return {}
 
-    model = str(nc.get("model", "claude-haiku-4-5"))
+    backend = str(nc.get("backend", "anthropic")).lower()
+    # The cache key includes the effective model id, so a backend switch (paid ->
+    # local) never serves the other backend's titles from cache.
+    model = str(nc.get("local_model", "Qwen/Qwen2.5-7B-Instruct") if backend == "local"
+                else nc.get("model", "claude-haiku-4-5"))
     prompt_version = int(nc.get("prompt_version", 1))
-    max_title_words = int(nc.get("max_title_words", 6))
+    title_words = int(nc.get("max_title_words", 7))
     cache_dir = Path(nc.get("cache_dir", "data/naming_cache"))
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     out: dict[int, NarrativeName] = {}
     misses: list[tuple[NamingInput, Path]] = []
     for inp in inputs:
-        sig = _signature(inp, model, prompt_version, max_title_words)
+        sig = _signature(inp, model, prompt_version, title_words)
         path = cache_dir / f"name_{inp.cluster_id}_{sig}.json"
         if path.exists():
             try:
@@ -209,19 +284,20 @@ def generate_names(
     n_cached = len(out)
     if misses:
         if client is None:
+            builder = LocalHFNamer if backend == "local" else AnthropicNamer
             try:
-                client = AnthropicNamer.from_config(cfg)
+                client = builder.from_config(cfg)
             except Exception as exc:
                 log.warning(
-                    "Narrative naming skipped — no Anthropic client (%s); %d clusters "
-                    "keep c-TF-IDF labels (%d served from cache)",
-                    exc, len(misses), n_cached,
+                    "Narrative naming skipped — no %s client (%s); %d clusters keep "
+                    "c-TF-IDF labels (%d served from cache)",
+                    backend, exc, len(misses), n_cached,
                 )
                 return out
         produced_any = False
         for inp, path in misses:
             try:
-                d = client.name_cluster(_SYSTEM, _build_user(inp, max_title_words), _SCHEMA)
+                d = client.name_cluster(_SYSTEM, _build_user(inp, title_words), _SCHEMA)
                 name = NarrativeName(str(d["title"]).strip(), str(d["description"]).strip())
             except Exception as exc:
                 log.warning("Naming failed for cluster %s: %s", inp.cluster_id, exc)

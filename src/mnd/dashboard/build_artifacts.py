@@ -215,6 +215,7 @@ def build_dashboard_artifacts(
     top_k_edges: int = 3,
     generated_at: str | None = None,
     n_clusters_total: int | None = None,
+    cards: dict[int, "StoryCard"] | None = None,
 ) -> tuple[DashboardIndex, list[NarrativeArtifact]]:
     """Assemble the dashboard index + per-narrative artifacts.
 
@@ -247,7 +248,9 @@ def build_dashboard_artifacts(
             for cid, nbrs in weighted.items()
         }
 
-    cards = {cid: build_story_card(cid, clusters_df, topic_info) for cid in cluster_ids}
+    # Reuse pre-built cards when the caller shares them (so naming and display
+    # ground on the same central articles, ADR-061); else build them here.
+    cards = cards or {cid: build_story_card(cid, clusters_df, topic_info) for cid in cluster_ids}
 
     # Corpus frontier = latest last-active date across narratives (emerging ref).
     last_dates = [c.date_range[1] for c in cards.values() if c.date_range]
