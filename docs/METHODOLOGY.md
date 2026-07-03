@@ -109,14 +109,14 @@ Media Cloud is a volume signal only; its text never enters embedding or clusteri
 
 ### Stage 7 — Dynamics fitting
 
-Each non-noise cluster is fit on its smoothed weekly institutional curve by four lenses, reported side by side:
+Each non-noise cluster is fit on its **active lifecycle** — the central 95% of its cumulative attention mass, which drops the sparse leading and trailing stragglers (a stray article years before or after the narrative's active life) that otherwise stretch nearly every fit series across the full corpus. The trim keeps every wave that carries real attention, so multi-wave narratives are fit over all their humps; it reuses the α = 0.05 already used for the trend test, and staging and the displayed volume series stay on the full span (ADR-060). On that window the cluster is fit by four lenses, reported side by side:
 
 - **Logistic curve** (Verhulst 1838) — S-shaped growth to saturation; carrying capacity *L*, growth rate *k*, midpoint *t₀*.
 - **SIR model** (Kermack & McKendrick 1927) — Susceptible, Infected, and Recovered compartments with transmission rate β and recovery rate γ, giving R₀ = β/γ (R₀ > 1 spreading, R₀ < 1 fading).
 - **Bass diffusion** (Bass 1969) — separating external and internal influence on adoption.
 - **Model-free shape facts** — peak height and date, time to peak, active span, and wave count, read directly off the curve.
 
-The parametric fits use Bayesian inference (PyMC) with weakly-informative priors from the epidemic-modeling literature (Bjørnstad 2018; Gelman et al., *BDA3*), and report the full posterior over R₀ rather than a point estimate. AICc accompanies each fit as a displayed diagnostic and selects no model.
+The parametric fits use Bayesian inference (PyMC) with weakly-informative priors from the epidemic-modeling literature (Bjørnstad 2018; Gelman et al., *BDA3*) — the SIR transmission and recovery rates carry LogNormal priors, strictly positive so the R₀ = β/γ ratio stays finite — and report the full posterior over R₀ rather than a point estimate. Each fit is kept or flagged by a uniform convergence check (R̂ < 1.05 and effective sample size > 400; Vehtari et al. 2021): a lens is shown where it converges and marked "no fit" where it does not, so SIR appears on genuinely outbreak-shaped narratives and grays out on the diffuse or multi-wave ones no single epidemic curve describes — the same way logistic and Bass gray out on shapes they cannot fit. Because SIR alone is integrated by a numerical ODE solver (logistic and Bass are closed-form), its integration grid is bounded to a fixed step count and its sampler is tree-depth-capped, so a cluster it cannot fit is marked non-converged quickly rather than integrated over a decade of empty weeks (ADR-060). AICc accompanies each fit as a displayed diagnostic and selects no model.
 
 ### Stage 8 — Stage classification
 

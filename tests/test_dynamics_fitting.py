@@ -62,12 +62,18 @@ class TestBinToGrid:
 
 class TestSirInferenceConfig:
     def test_sir_knobs_live_under_dynamics(self):
-        # The fit-cache key hashes repr(cfg["dynamics"]); both knobs must sit under
-        # dynamics so a change invalidates stale SIR fits (run.py _fit_signature).
+        # The fit-cache key hashes repr(cfg["dynamics"]); every fit knob must sit under
+        # dynamics so a change invalidates stale fits (run.py _fit_signature).
         dyn = load_config()["dynamics"]
         assert "sir_fit_grid_days" in dyn
         assert "sir_inference" in dyn
         assert int(dyn["sir_fit_grid_days"]) >= 1
+        # ADR-060 knobs: fit window + bounded scan + fail-fast cap.
+        assert 0.0 < float(dyn["fit_window_mass_alpha"]) < 1.0
+        assert int(dyn["sir_max_grid_steps"]) >= 1
+        assert int(dyn["sir_inference"]["max_treedepth"]) >= 1
+        sir_pr = dyn["priors"]["sir"]
+        assert {"beta_mean", "beta_log_sd", "gamma_mean", "gamma_log_sd"} <= set(sir_pr)
 
     def test_sir_budget_is_cheaper_than_production(self):
         dyn = load_config()["dynamics"]

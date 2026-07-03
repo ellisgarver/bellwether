@@ -109,14 +109,26 @@ class DynamicsFitter:
     ) -> ClusterDynamics:
         """Fit every configured lens; return all side by side (ADR-039)."""
         smoothed = self.smooth_series(daily_counts)
-        t = np.arange(len(smoothed), dtype=float)
+        n = len(smoothed)
+        t = np.arange(n, dtype=float)
         y = smoothed.values.astype(float)
+
+        # Fit the lenses on the central-mass window (ADR-060): drop the sparse
+        # leading/trailing stragglers that otherwise stretch nearly every fit series
+        # to ~14 years and destabilise the SIR ODE scan. The window carries the full
+        # active lifecycle (all waves that hold real attention); only negligible-mass
+        # tails are trimmed. Each fitted curve is reprojected back onto the full daily
+        # grid for display, and shape-facts + staging stay on the full series.
+        alpha = float(self._cfg["dynamics"].get("fit_window_mass_alpha", 0.05))
+        i0, i1 = _trim_window_central_mass(y, alpha)
+        t_win = np.arange(i1 - i0 + 1, dtype=float)
+        y_win = y[i0:i1 + 1]
 
         all_fits: list[FitResult] = []
         for model_name in self._cfg["dynamics"]["models_to_fit"]:
-            log.info("Cluster %s — fitting %s", cluster_id, model_name)
-            fit = self._fit_model(cluster_id, model_name, t, y)
-            all_fits.append(fit)
+            log.info("Cluster %s — fitting %s on window [%d:%d] of %d", cluster_id, model_name, i0, i1, n)
+            fit = self._fit_model(cluster_id, model_name, t_win, y_win)
+            all_fits.append(_reproject_to_full(fit, i0, n))
 
         staging = self._select_staging_fit(cluster_id, all_fits)
         facts = shape_facts(t, y)
@@ -272,18 +284,23 @@ class DynamicsFitter:
 
         priors = self._cfg["dynamics"]["priors"]["sir"]
         inf_cfg = self._cfg["dynamics"]["sir_inference"]
-        grid = int(self._cfg["dynamics"]["sir_fit_grid_days"])
-        # N_pop is the daily total, so the population scale is grid-invariant; the
-        # scan runs on the binned (weekly) series to keep its O(T) cost tractable
-        # (ADR-053). Binning averages rather than sums, so y_fit and the priors
-        # keyed to it stay on the daily amplitude.
+        base_grid = int(self._cfg["dynamics"]["sir_fit_grid_days"])
+        max_steps = int(self._cfg["dynamics"].get("sir_max_grid_steps", 200))
+        # N_pop is the daily total, so the population scale is grid-invariant. The
+        # scan runs on a coarsened grid to keep its O(T) cost bounded: grid is chosen
+        # so the Euler scan is at most `sir_max_grid_steps` long regardless of the
+        # window's length (ADR-060), then binned. Binning averages rather than sums,
+        # so y_fit and the priors keyed to it stay on the daily amplitude.
+        grid = max(base_grid, int(np.ceil(len(y) / max(max_steps, 1))))
         N_pop = float(max(y.sum() * 2.0, 100.0))
         y_fit, eff_grid = _bin_to_grid(y, grid)
         T = len(y_fit)
 
         with pm.Model():
-            beta = pm.HalfNormal("beta", sigma=priors["beta_sd"])
-            gamma = pm.HalfNormal("gamma", sigma=priors["gamma_sd"])
+            # LogNormal keeps both rates strictly positive (ADR-060): the prior HalfNormal
+            # put mass at gamma->0, exploding R_0 = beta/gamma and the Euler scan.
+            beta = pm.LogNormal("beta", mu=float(np.log(priors["beta_mean"])), sigma=priors["beta_log_sd"])
+            gamma = pm.LogNormal("gamma", mu=float(np.log(priors["gamma_mean"])), sigma=priors["gamma_log_sd"])
             I0 = pm.HalfNormal("I0", sigma=max(float(y_fit[:5].mean()), 1.0) * 3)
             sigma = pm.HalfNormal("sigma", sigma=float(y_fit.std() + 1.0))
 
@@ -413,17 +430,27 @@ class DynamicsFitter:
         if cores == "auto":
             cores = min(inf_cfg["chains"], os.cpu_count() or 1)
 
+        max_treedepth = inf_cfg.get("max_treedepth")
+        common = dict(
+            draws=inf_cfg["draws"],
+            tune=inf_cfg["tune"],
+            chains=inf_cfg["chains"],
+            cores=cores,
+            random_seed=inf_cfg["random_seed"],
+            progressbar=False,
+        )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            return pm.sample(
-                draws=inf_cfg["draws"],
-                tune=inf_cfg["tune"],
-                chains=inf_cfg["chains"],
-                target_accept=inf_cfg["target_accept"],
-                cores=cores,
-                random_seed=inf_cfg["random_seed"],
-                progressbar=False,
-            )
+            if max_treedepth is not None:
+                # Bound leapfrog steps per draw (ADR-060 fail-fast): a cluster the
+                # SIR ODE cannot fit hits the cap and is marked non-converged in
+                # seconds rather than grinding at max tree depth on every draw.
+                step = pm.NUTS(
+                    target_accept=inf_cfg["target_accept"],
+                    max_treedepth=int(max_treedepth),
+                )
+                return pm.sample(step=step, **common)
+            return pm.sample(target_accept=inf_cfg["target_accept"], **common)
 
 
 # ------------------------------------------------------------------
@@ -451,6 +478,52 @@ def _bin_to_grid(y: np.ndarray, grid: int) -> tuple[np.ndarray, int]:
         dtype=float,
     )
     return binned, grid
+
+
+def _trim_window_central_mass(y: np.ndarray, alpha: float) -> tuple[int, int]:
+    """Index window ``[i0, i1]`` holding the central ``1 - alpha`` of cumulative mass.
+
+    The lens fit window (ADR-060). Drops the sparse leading/trailing stragglers — a
+    lone article years before or after the active life — that otherwise stretch the
+    fit series across the whole corpus and destabilise the SIR scan. Every wave that
+    carries real attention sits inside the central band, so multi-wave narratives
+    keep all their humps; only negligible-mass tails are cut. "Central ``1 - alpha``"
+    is a standard convention and reuses the project ``alpha`` — no new tuned
+    parameter. Degenerate (empty or all-zero) series return the full range.
+    """
+    y = np.asarray(y, dtype=float)
+    n = y.size
+    if n == 0:
+        return 0, 0
+    c = np.cumsum(np.clip(y, 0.0, None))
+    total = float(c[-1])
+    if total <= 0.0:
+        return 0, n - 1
+    c = c / total
+    i0 = int(np.searchsorted(c, alpha / 2.0, side="left"))
+    i1 = int(np.searchsorted(c, 1.0 - alpha / 2.0, side="left"))
+    i0 = min(i0, n - 1)
+    i1 = max(min(i1, n - 1), i0)
+    return i0, i1
+
+
+def _reproject_to_full(fr: FitResult, i0: int, n: int) -> FitResult:
+    """Place a window-local fit back on the full daily grid (ADR-060).
+
+    The lenses are fit on the central-mass window; the curve is padded with ``None``
+    before and after the window so it aligns with the full displayed volume series,
+    and peak-time values are shifted by the window offset ``i0`` into full-grid day
+    units. Non-converged fits (no curve) just get the peak-time offset.
+    """
+    if fr.curve is not None:
+        head: list[float | None] = [None] * i0
+        tail: list[float | None] = [None] * (n - i0 - len(fr.curve))
+        fr.curve = head + list(fr.curve) + tail
+    for attr in ("peak_time_mean", "peak_time_ci_low", "peak_time_ci_high"):
+        v = getattr(fr, attr, None)
+        if v is not None:
+            setattr(fr, attr, float(v) + i0)
+    return fr
 
 
 def _check_convergence(trace) -> bool:

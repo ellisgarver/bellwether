@@ -74,6 +74,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 054 | **Cross-document boilerplate strip — sentence-level recurring-passage removal at the filter stage (normalized sentence in ≥ N distinct documents), after MinHash; drops content-free shells; auditable `boilerplate_report.json`** | Live (extends 019; orthogonal to 020; relates 030/046/051) |
 | 055 | **Richer JEL cluster representation — c-TF-IDF terms + BERTopic representative documents (terms-first, full AEA taxonomy incl. Y); fixes thin-signal misses (r-star, Basel) and Y over-attraction; JEL stays a display flag** | Live (amends 020/046; relates 019/054) |
 | 056 | **Human-readable narrative names — display-layer Claude Haiku titling over c-TF-IDF labels, grounded only in the ADR-055 representation; titles cached under a representation hash and committed for key-free deterministic rebuilds; display-only, degrades to the label** | Live (display-layer; relates 043/046/050/055) |
+| 060 | **Fit lenses on the central-mass window + SIR robustness overhaul — nearly every fit-series spans ~14yr from sparse straggler tails, which broke SIR (0/365, γ→0 `HalfNormal` ridge + 855-step Euler scan). Fix: fit all three lenses on the central 95% of cumulative attention mass (α=0.05, keeps multi-wave, no new param; staging/display stay full-span); SIR gets LogNormal β/γ priors, an adaptive grid bounding the scan ≤200 steps, and a `max_treedepth` fail-fast cap so unfittable clusters go non-converged in seconds instead of grinding. Same convergence gate for all three, no outbreak-eligibility filter.** | Live (supersedes 053; amends 039/052; relates 040/058) |
 | 059 | **Emerging flag is recency-only — a narrative is emerging iff its onset falls within the 4-week recency window of the corpus frontier, regardless of stage; drops the earlier `stage == growth` gate so a just-arrived narrative whose short history hasn't yet registered a significant trend is still surfaced as newly arrived** | Live (amends 052 emerging clause; relates 016/057) |
 | 058 | **Peak-relative plateau test — `stable` vs `dormant` keyed to the narrative's own high-water window, not its quiet floor; fixes the all-`stable` collapse (342/365) where institutional tails made "above the floor" trivially true. MWU on the zero-heavy daily series was under-powered, so the split is by level: recent-window mean below `dormant_peak_fraction`=0.25 of the peak-window mean → dormant (a definition, not tuned to recovery)** | Live (amends 052 §2/§3 Level test; relates 040) |
 | 057 | **Phase-6 live emerging (design) — two display-only signals: institutional onset (existing) + press heating (4wk vs 52wk baseline, k=2, on Media Cloud attention-share); weekly refresh builds onto the model via BERTopic `merge_models` (ids/URLs/names preserved, new topics appended above τ); manual now → cron later; novel press-only clustering scoped out (ADR-010)** | Live design; press-heating + weekly-refresh implementations each need a follow-up ADR (relates 010/016/020/042/046/048/050/056) |
@@ -4601,6 +4602,110 @@ narrative can be emerging **and** any of growth/stable/dormant.
 - Amends ADR-052's emerging clause. Analysis/display-layer only; no re-embed, no
   re-cluster, no change to the four-state staging. Amends
   `src/mnd/dashboard/build_artifacts.py` and METHODOLOGY §8.
+
+---
+
+## ADR-060: Fit lenses on the central-mass window + SIR robustness overhaul
+
+- **Status**: Accepted
+- **Date**: 2026-07-02
+
+### Context
+
+The first clean run under ADR-052/058 fit logistic and Bass acceptably (69% / 79%
+converged) but **SIR converged on 0 of 365 clusters** — every SIR fit hit the
+sampler's exception path (empty `failure_reason`, no `R_0`, no AICc). Two causes,
+uncovered by local reproduction:
+
+1. **The γ→0 ridge.** The SIR priors were `HalfNormal`, which puts mass at γ→0.
+   Since `R_0 = β/γ`, γ near zero sends `R_0` and the infected compartment to
+   infinity, so the discrete Euler scan overflows to NaN and the fit throws.
+2. **The 14-year scan.** Measuring fit-series lengths across the corpus was the
+   surprise: **the median fit-series is 13.9 years (99% span > 3 years, 88% > 8).**
+   A BERTopic topic almost always has a stray related article near 2010 and near
+   2026, so its first-to-last active span covers most of the corpus. The real
+   signal — an outbreak, if any — is a concentrated hump inside a long, near-empty
+   series. So the SIR Euler scan runs ~855 weekly steps over mostly zeros; error
+   compounds and the sampler either NaNs or grinds at maximum leapfrog depth for
+   tens of minutes. (This is the same sparse-tail pathology that broke staging in
+   ADR-058.)
+
+Logistic and Bass are closed-form (a direct formula for any `t`), so series length
+is irrelevant to them; only SIR's step-by-step ODE integration is length-sensitive.
+
+An "only fit SIR on outbreak-shaped clusters" filter was considered and **rejected**
+as a researcher-tuned distinction that would make SIR inconsistent with the other
+two lenses (which are fit on every cluster, convergence-gated uniformly).
+
+### Decision
+
+Two changes; the first is uniform across all three lenses, the second is SIR-only
+and confined to numerics.
+
+1. **Fit window = the central `1 − α` of cumulative attention mass** (`dynamics
+   .fit_window_mass_alpha = 0.05`), for **all three lenses**. Drop the sparse
+   leading/trailing stragglers; keep the whole active lifecycle. Every wave that
+   carries real attention lies inside the central band, so **multi-wave narratives
+   keep all their humps** (a two-spike narrative fits both, and the single-wave
+   models correctly fail the gate on it while shape-facts reports `wave_count = 2`).
+   "Central 95%" is a standard convention and **reuses the project α = 0.05** (the
+   trend-test threshold) — no new tuned parameter. Each fitted curve is reprojected
+   onto the full daily grid (padded with nulls outside the window; peak-time shifted
+   by the offset), so it aligns with the displayed volume. **Staging (ADR-058) and
+   the displayed volume series stay on the full span** — only the fitted lens curves
+   are windowed.
+
+2. **SIR numerical robustness** (SIR-only; logistic/Bass are closed-form and need
+   none of it):
+   - **LogNormal β, γ priors** centered on the field-anchored config means
+     (β 0.3, γ 0.1; Bjørnstad 2018), replacing `HalfNormal`. Strictly positive,
+     no mass at γ→0. Mirrors the Bass lens, which already uses LogNormal rates.
+   - **Adaptive integration grid**: `grid = max(sir_fit_grid_days, ⌈window /
+     sir_max_grid_steps⌉)`, bounding the Euler scan at `sir_max_grid_steps = 200`
+     steps regardless of window length. A numerical ODE-solver step-count bound,
+     applied uniformly — **not** a data-dependent applicability filter.
+   - **`max_treedepth = 8` fail-fast cap** on the SIR NUTS sampler. A cluster SIR
+     cannot fit hits the cap and is marked non-converged in **seconds** instead of
+     grinding at max leapfrog depth on every draw. This matters because LogNormal
+     removed the NaN crash that used to make bad fits fail *fast*; the cap restores
+     fast failure without the crash.
+   - **Fuller budget** (draws 1000 / tune 1000 / chains 4 / target_accept 0.95),
+     affordable now that the window + adaptive grid make each fit short, so
+     fittable clusters clear the ESS > 400 bar (a sharp cluster reached R-hat 1.010
+     / ESS 247 at *half* this budget).
+
+3. **The convergence gate is unchanged and uniform** — R-hat < 1.05 **and** ESS >
+   400 (Vehtari et al. 2021) for all three lenses. SIR now converges on genuinely
+   outbreak-shaped narratives and fails the gate elsewhere, by the identical
+   mechanism that makes logistic converge on logistic-shaped curves and fail on
+   others. No eligibility threshold anywhere.
+
+### Consequences
+
+- **SIR becomes an honest, consistent lens.** It converges where the data supports
+  a single outbreak and grays out ("sir (no fit)") elsewhere — exactly how logistic
+  and Bass already behave on shapes they can't fit. The front end already handles
+  per-lens non-convergence (`[id].astro`), so no UI change is needed.
+- **The displayed lens curves span the active lifecycle**, not 14 years of flat
+  line with a tiny bump — a display improvement for all three lenses.
+- **No new tuned parameter that touches methodology.** The window α reuses the
+  existing 0.05; the SIR grid/tree-depth are numerical ODE-solver + Monte-Carlo
+  settings that cannot affect anchor recovery (a clustering metric), so ADR-040
+  holds.
+- **Fit cache invalidated.** `cfg["dynamics"]` changed (window α, SIR priors, grid,
+  budget), so `run.py`'s `_fit_signature` re-fits all lenses on the next analyze.
+- **Validation is on RCC, not local.** Local Mac PyMC sampling of the SIR scan
+  hangs (20+ min/cluster: NUTS grind + per-chain scan recompilation +
+  oversubscription); the fix's *direction* was validated on a sharp cluster
+  locally (R-hat 1.010), and full convergence rates are read from the RCC re-fit.
+- **α tail sensitivity, tracked.** α = 0.05 trims the outer 2.5% of mass each side,
+  which clips the extreme rise/decay tips SIR uses for γ. If the RCC re-fit shows
+  the decay tails over-clipped, α = 0.02 (central 98%) is the fallback. One-line
+  config change, no code change.
+- **Supersession.** Supersedes ADR-053 (fixed weekly grid + reduced SIR budget).
+  Amends ADR-039 (the lenses are now windowed) and ADR-052/058 (staging unchanged,
+  but the shared sparse-tail root cause is now noted). Amends `config/config.yaml`,
+  `src/mnd/dynamics/fitting.py`, and METHODOLOGY §7.
 
 ---
 
