@@ -120,9 +120,18 @@ class TestBuildAllCards:
         assert -1 not in ids
         assert ids == [0, 1]   # topic 0 (3 articles) before topic 1 (1 article)
 
-    def test_n_representative_caps_list(self):
-        cards = build_all_cards(_clusters_df(), _topic_info(), n_representative=1)
-        assert len(cards[0].representative_articles) == 1
+    def test_n_per_bucket_caps_each_panel(self):
+        cards = build_all_cards(_clusters_df(), _topic_info(), n_per_bucket=1)
+        assert len(cards[0].central_articles) == 1
+        assert len(cards[0].representative_articles) == 1  # alias of central
+        assert len(cards[0].earliest_articles) <= 1
+        assert len(cards[0].newest_articles) <= 1
+
+    def test_panels_are_deduplicated(self):
+        # No article appears in more than one panel.
+        card = build_story_card(0, _clusters_df(), _topic_info(), n_per_bucket=3)
+        seen = [a["title"] for a in card.central_articles + card.earliest_articles + card.newest_articles]
+        assert len(seen) == len(set(seen))
 
 
 class TestRepresentativeDocs:
