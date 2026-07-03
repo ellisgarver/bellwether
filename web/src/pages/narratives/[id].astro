@@ -28,6 +28,12 @@ const trendWord =
       ? "falling"
       : "no monotonic trend";
 const facts = n.shape_facts || {};
+// SIR lens (ADR-062): self-standing rise/decay numbers off the fitted curve.
+// R₀ is not reported (not identifiable from a single curve).
+const sirFit = (n.fits || []).find((f) => f.model === "sir" && f.converged);
+const sirP = (sirFit?.params || {}) as Record<string, number>;
+const num = (x: unknown, d = 2) =>
+  typeof x === "number" && isFinite(x) ? x.toFixed(d) : null;
 // Three representative-article panels (ADR-061): how the narrative entered, its
 // core pieces, and where it stands now. Falls back to the single legacy list for
 // pre-ADR-061 artifacts, and drops any empty panel.
@@ -122,8 +128,8 @@ const direction = (d: any) =>
           <tr><td>vs own peak</td><td>{sd.recent_peak_ratio == null ? "—" : `${Math.round(sd.recent_peak_ratio * 100)}% of peak level${sd.recent_near_peak ? "" : " — faded"}`}</td></tr>
         </table>
         <p class="caption">
-          {sd.r0_mean != null ? (
-            <>SIR lens (display only): R₀ {fmt(sd.r0_mean)}{sd.r0_ci_low != null && <> [{fmt(sd.r0_ci_low)}–{fmt(sd.r0_ci_high)}]</>}. R₀ gauges how contagious the wave was, not where it sits now.</>
+          {num(sirP.doubling_time_up) && num(sirP.half_life_down) ? (
+            <>SIR lens (display only): the wave doubled every {num(sirP.doubling_time_up, 1)} days on the way up and halved every {num(sirP.half_life_down, 1)} days on the way down (asymmetry {num(sirP.asymmetry, 1)}×). This describes how it spread and faded, not where it sits now.</>
           ) : (
             <>SIR lens did not converge here; the stage is read from the trend test above.</>
           )}
