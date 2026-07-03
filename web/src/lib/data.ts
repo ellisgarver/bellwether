@@ -23,10 +23,11 @@ export interface Fit {
   model: string;
   converged: boolean;
   aicc: number | null;
-  r0_mean: number | null;
-  r0_ci: [number, number] | null;
   peak_time_mean: number | null;
   peak_time_ci: [number, number] | null;
+  // Self-standing lens numbers live in `params` (ADR-062): logistic
+  // doubling_time/inflection_day/plateau; sir rise_rate/decay_rate/asymmetry/
+  // peak_height; bass total_reach/p_innovation/q_imitation. No R0 / Jinf.
   params: Record<string, unknown>;
   curve: number[] | null;
   failure_reason: string | null;
@@ -130,7 +131,6 @@ export interface IndexEntry {
 export interface DashboardIndex {
   generated_at: string;
   global_random_seed: number;
-  stage_min_r0: number;
   n_narratives: number;
   narratives: IndexEntry[];
   median_article_words: number | null;
