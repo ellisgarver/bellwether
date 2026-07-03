@@ -122,6 +122,14 @@ dynamics:
                                    # Natural weekly cycle for daily count data
                                    # (Shumway & Stoffer). Source-stratified
                                    # smoothing removed by ADR-019.
+  # Fit window (ADR-060): the three lenses are fit on the central (1 - alpha) of
+  # each narrative's cumulative attention mass, dropping the sparse leading/
+  # trailing stragglers (a lone article years before/after the active life) that
+  # otherwise stretch nearly every fit series to ~14 years and destabilise the SIR
+  # ODE scan. "Central 95%" is a standard convention and reuses the project's
+  # alpha=0.05; no new tuned parameter. Staging and the displayed volume series
+  # stay on the full span (ADR-058) — only the fitted lens curves are windowed.
+  fit_window_mass_alpha: 0.05
   # Fit/display floor (ADR-051): only clusters with at least this many unique
   # articles are fit, staged, and surfaced on the front end (map, narratives,
   # emerging, search). BERTopic at the library-default min_cluster_size (ADR-019)
@@ -159,18 +167,26 @@ dynamics:
   # SIR's integration resolution changes. R_0 = beta/gamma is dimensionless so it
   # is grid-invariant; the per-week fitted rates are converted to per-day for the
   # displayed curve and peak time (see dynamics/fitting.py).
-  sir_fit_grid_days: 7
-  # SIR-only inference budget (ADR-053). R_0 is display-only post ADR-052, so this
-  # cheaper sampler applies only to the expensive SIR lens; logistic and Bass keep
-  # the production `inference` budget above. It cannot affect anchor recovery (a
-  # clustering metric, independent of any fit), so the no-tuning rule (ADR-040)
-  # holds — this is a Monte-Carlo-precision setting, not a tuned parameter.
+  sir_fit_grid_days: 7             # base (finest) SIR integration grid; weekly
+  sir_max_grid_steps: 200          # ADR-060: cap the Euler scan at this many steps.
+                                   # grid = max(sir_fit_grid_days, ceil(window_days /
+                                   # sir_max_grid_steps)), so the ODE-solver cost is
+                                   # bounded regardless of window length. A numerical
+                                   # step-count bound, not a methodology gate.
+  # SIR-only inference budget. R_0 is display-only post ADR-052; this sampler applies
+  # only to the expensive SIR lens (logistic/Bass keep the production `inference`
+  # budget above). ADR-060 restored a fuller budget (the fit window + adaptive grid
+  # made each SIR fit cheap) and added a max_treedepth cap so a cluster SIR cannot
+  # fit fails fast (non-converged) instead of grinding at max leapfrog depth. It
+  # cannot affect anchor recovery (a clustering metric), so ADR-040 holds — a
+  # Monte-Carlo-precision + sampler-cost setting, not a tuned parameter.
   sir_inference:
     framework: "pymc"
-    draws: 500
-    tune: 500
-    chains: 2
-    target_accept: 0.9
+    draws: 1000
+    tune: 1000
+    chains: 4
+    target_accept: 0.95
+    max_treedepth: 8               # ADR-060 fail-fast: bound leapfrog steps per draw
     cores: "auto"                  # min(chains, available_cpus)
     random_seed: 42
   priors:
@@ -178,10 +194,14 @@ dynamics:
     # Data using R" + Gelman et al. BDA3 conventions. Specific values pending
     # implementation commit (sub-ADR-020 if non-trivial).
     sir:
+      # LogNormal on beta, gamma (ADR-060), centered on these field-anchored means
+      # (Bjornstad 2018). LogNormal keeps both rates strictly positive — the earlier
+      # HalfNormal put mass at gamma->0, which blew up R_0 = beta/gamma and the Euler
+      # scan (0/365 convergence). Mirrors the Bass lens, which already uses LogNormal.
       beta_mean: 0.3
-      beta_sd: 0.5
+      beta_log_sd: 0.6
       gamma_mean: 0.1
-      gamma_sd: 0.2
+      gamma_log_sd: 0.6
     logistic:
       L_log_mean: 5.0              # log(carrying capacity) prior mean
       L_log_sd: 2.0
