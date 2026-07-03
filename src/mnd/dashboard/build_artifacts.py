@@ -111,11 +111,6 @@ def _series_artifact(series: pd.Series, freq: str = "D") -> SeriesArtifact:
 
 
 def _fit_artifact(fr: FitResult) -> FitArtifact:
-    r0_ci = (
-        (_finite_or_none(fr.r0_ci_low), _finite_or_none(fr.r0_ci_high))
-        if fr.r0_ci_low is not None and fr.r0_ci_high is not None
-        else None
-    )
     peak_ci = (
         (_finite_or_none(fr.peak_time_ci_low), _finite_or_none(fr.peak_time_ci_high))
         if fr.peak_time_ci_low is not None and fr.peak_time_ci_high is not None
@@ -125,8 +120,6 @@ def _fit_artifact(fr: FitResult) -> FitArtifact:
         model=fr.model_name,
         converged=bool(fr.converged),
         aicc=_finite_or_none(fr.aicc),
-        r0_mean=_finite_or_none(fr.r0_mean),
-        r0_ci=r0_ci,
         peak_time_mean=_finite_or_none(fr.peak_time_mean),
         peak_time_ci=peak_ci,
         params=_json_safe(fr.param_summary),
@@ -328,7 +321,6 @@ def build_dashboard_artifacts(
     index = DashboardIndex(
         generated_at=generated_at or datetime.now(timezone.utc).isoformat(),
         global_random_seed=int(cfg["reproducibility"]["global_random_seed"]),
-        stage_min_r0=float(cfg["stages"]["growth_min_r0"]),
         n_narratives=len(index_rows),
         narratives=index_rows,
         median_article_words=_median_article_words(clusters_df),

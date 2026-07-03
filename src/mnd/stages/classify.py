@@ -18,13 +18,13 @@ tenth of peak fail to separate), so the recent-window mean is compared to the
 peak-window mean against a definitional fraction (stages.dormant_peak_fraction),
 not tuned to anchor recovery (ADR-040).
 
-The fitted lenses (logistic / SIR / Bass) are display-only; SIR's R_0 is shown
-as a "was it contagious?" headline but does not drive the stage. Keying the
-stage to R_0 mislabels every risen-and-fallen narrative as growth, because
-R_0 = beta/gamma is the basic reproduction number (whether it ever spread): a
-current-phase decline is an R_t statement, and sign(R_t - 1) = sign(recent
-growth rate) regardless of the generation interval (Wallinga & Lipsitch 2007).
-The model-free trend test estimates that same crossing without the SIR machinery.
+The fitted lenses (logistic / SIR / Bass) are display-only and do not drive the
+stage. This was always the right call: a reproduction number R_0 describes whether
+a narrative ever spread, not its current phase — a present-day decline is an R_t
+statement, and sign(R_t - 1) = sign(recent growth rate) regardless of the
+generation interval (Wallinga & Lipsitch 2007). The model-free trend test
+estimates that same crossing directly. (R_0 is no longer computed at all — it is
+not identifiable from a single attention curve; ADR-062.)
 
 "Newly emerging" is an orthogonal recency flag, not a stage.
 """
@@ -43,9 +43,6 @@ Stage = Literal["growth", "stable", "decay", "dormant"]
 class StageClassification:
     cluster_id: int | str
     stage: Stage
-    r0_mean: float | None
-    r0_ci_low: float | None
-    r0_ci_high: float | None
     peak_time_mean: float | None
     elapsed_days: int
     detail: dict[str, Any] = field(default_factory=dict)
@@ -136,11 +133,9 @@ def classify_stage(
     else:
         stage = "dormant"
 
-    # SIR lens carried through for display only -- no longer drives the stage.
-    r0 = getattr(fit_result, "r0_mean", None) if fit_result is not None else None
+    # Representative fit carried through for display only -- no longer drives the
+    # stage (ADR-052), and no longer carries R_0 (dropped, ADR-062).
     peak_t = getattr(fit_result, "peak_time_mean", None) if fit_result is not None else None
-    r0_ci_low = getattr(fit_result, "r0_ci_low", None) if fit_result is not None else None
-    r0_ci_high = getattr(fit_result, "r0_ci_high", None) if fit_result is not None else None
 
     detail: dict[str, Any] = {
         "total_articles": int(daily_counts.sum()),
@@ -156,11 +151,7 @@ def classify_stage(
         "peak_level": peak_level,
         "dormant_peak_fraction": dormant_fraction,
         "alpha": alpha,
-        # SIR lens (display only)
-        "r0_mean": r0,
-        "r0_median": getattr(fit_result, "r0_median", None) if fit_result is not None else None,
-        "r0_ci_low": r0_ci_low,
-        "r0_ci_high": r0_ci_high,
+        # representative lens (display only)
         "peak_time_mean": peak_t,
         "converged": getattr(fit_result, "converged", None) if fit_result is not None else None,
     }
@@ -168,9 +159,6 @@ def classify_stage(
     return StageClassification(
         cluster_id=cluster_id,
         stage=stage,
-        r0_mean=r0,
-        r0_ci_low=r0_ci_low,
-        r0_ci_high=r0_ci_high,
         peak_time_mean=peak_t,
         elapsed_days=elapsed,
         detail=detail,

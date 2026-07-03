@@ -1,4 +1,4 @@
-"""Dynamics fitting: ODE models, smoothing, normalization, and calendar annotation."""
+"""Dynamics fitting: closed-form lens models, smoothing, normalization, calendar."""
 
 from mnd.dynamics.fitting import ClusterDynamics, DynamicsFitter, FitResult
 from mnd.dynamics.models import (
@@ -6,10 +6,11 @@ from mnd.dynamics.models import (
     bass,
     bass_peak_time,
     logistic,
-    logistic_r0,
+    logistic_doubling_time,
     shape_facts,
-    sir_prevalence,
-    sir_r0,
+    sir_decay_rate,
+    sir_kssir_curve,
+    sir_rise_rate,
 )
 from mnd.dynamics.normalize import (
     adjusted_cluster_volumes,
@@ -24,12 +25,13 @@ __all__ = [
     "FitResult",
     "ClusterDynamics",
     "logistic",
-    "sir_prevalence",
+    "sir_kssir_curve",
+    "sir_rise_rate",
+    "sir_decay_rate",
     "bass",
     "bass_peak_time",
     "shape_facts",
-    "logistic_r0",
-    "sir_r0",
+    "logistic_doubling_time",
     "aicc",
     "corpus_base_rate",
     "adjusted_cluster_volumes",

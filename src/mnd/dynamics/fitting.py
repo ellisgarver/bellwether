@@ -6,16 +6,17 @@ diagnostic on each FitResult, not a selection gate. Model-free shape-facts are
 computed alongside.
 
 Stage classification no longer keys off these fits; stage is a model-free trend
-test. The fits are display lenses. `staging_fit` is retained only to surface a
-representative R_0 headline -- the SIR fit when it converged, else the logistic
-fit -- as the "was it contagious?" SIR-lens value. Bass has no R_0 (its headline
-is the innovation/imitation balance).
+test. The fits are display lenses. Each lens reports self-standing numbers in the
+series' own units (ADR-062): logistic -> doubling time / inflection / plateau;
+SIR -> rise rate / decay rate / asymmetry / peak; Bass -> total reach / innovation
+p / imitation q. R_0 and J_inf are not reported -- neither is identifiable from a
+single attention curve.
 
-SIR model: uses a pytensor.scan discrete-time Euler loop so the ODE is
-differentiable through PyMC's NUTS sampler without an external ODE solver. The
-scan cost is O(series length), so the SIR fit runs on a weekly grid (ADR-053);
-the fitted per-week rates are converted to per-day for the displayed daily curve
-and peak time, and R_0 = beta/gamma is grid-invariant.
+SIR model (ADR-062): the mean function is Schlickeiser & Kröger's closed-form
+prevalence (an exponential rise meeting a shifted sech² decay at the peak),
+elementary and differentiable, so NUTS runs at logistic/Bass cost with no ODE
+solver and no scan. This replaced the former Euler scan, the analysis layer's
+compute pole. Priors are data-scaled and weakly informative -- no epidemiology.
 
 Graceful failure: genuine per-cluster convergence failures (low ESS, high R-hat,
 numerical exceptions) are recorded in FitResult.failure_reason and the pipeline
@@ -40,11 +41,11 @@ from mnd.dynamics.models import (
     bass,
     bass_peak_time,
     logistic,
-    logistic_r0,
+    logistic_doubling_time,
     shape_facts,
-    sir_peak_time,
-    sir_prevalence,
-    sir_r0,
+    sir_decay_rate,
+    sir_kssir_curve,
+    sir_rise_rate,
 )
 from mnd.utils.config import load_config
 from mnd.utils.logging import get_logger
@@ -58,10 +59,11 @@ class FitResult:
     model_name: str
     converged: bool
     aicc: float = float("inf")
-    r0_mean: float | None = None
-    r0_median: float | None = None
-    r0_ci_low: float | None = None
-    r0_ci_high: float | None = None
+    # Lens-specific self-standing numbers (ADR-062) live in ``param_summary``:
+    #   logistic -> doubling_time, inflection_day, plateau
+    #   sir      -> rise_rate, decay_rate, asymmetry, peak_height
+    #   bass     -> total_reach, p_innovation, q_imitation, external_vs_internal
+    # R_0 / J_inf are removed: not identifiable from a single attention curve.
     peak_time_mean: float | None = None
     peak_time_ci_low: float | None = None
     peak_time_ci_high: float | None = None
@@ -134,10 +136,10 @@ class DynamicsFitter:
         facts = shape_facts(t, y)
 
         log.info(
-            "Cluster %s staging: %s (R0=%s, converged=%s); waves=%s",
+            "Cluster %s staging: %s (peak_day=%s, converged=%s); waves=%s",
             cluster_id,
             staging.model_name,
-            f"{staging.r0_mean:.2f}" if staging.r0_mean is not None else "n/a",
+            f"{staging.peak_time_mean:.0f}" if staging.peak_time_mean is not None else "n/a",
             staging.converged,
             facts.get("wave_count"),
         )
@@ -154,11 +156,11 @@ class DynamicsFitter:
     def _select_staging_fit(
         cluster_id: int | str, all_fits: list[FitResult]
     ) -> FitResult:
-        """Pick the fit whose R_0 headline is displayed (display only).
+        """Pick the representative fit carried on the narrative (display only).
 
-        Prefer the converged SIR fit (its beta/gamma R_0 is the genuine "was it
-        contagious?" value), else the converged logistic fit, else any fit. This
-        no longer decides the stage; that is the model-free trend test.
+        Prefer the converged SIR fit (its rise/decay asymmetry is the "how did it
+        spread and fade?" view), else the converged logistic fit, else any fit.
+        This no longer decides the stage; that is the model-free trend test.
         """
         by_name = {f.model_name: f for f in all_fits}
         sir_fit = by_name.get("sir")
@@ -244,123 +246,133 @@ class DynamicsFitter:
 
         summary = az.summary(trace, var_names=["L", "k", "t0"], hdi_prob=0.94)
         converged = _check_convergence(trace)
-        gamma_prior = self._cfg["dynamics"]["priors"]["sir"]["gamma_mean"]
         k_mean = float(summary.loc["k", "mean"])
-        k_lo = float(summary.loc["k", "hdi_3%"])
-        k_hi = float(summary.loc["k", "hdi_97%"])
         L_mean = float(summary.loc["L", "mean"])
         t0_mean = float(summary.loc["t0", "mean"])
-        # logistic_r0 is monotonic in k, so the median commutes through it.
-        k_median = float(np.median(np.asarray(trace.posterior["k"]).reshape(-1)))
         curve = logistic(t, L_mean, k_mean, t0_mean)
         ll = _gaussian_loglik(y, curve)
+
+        # Self-standing numbers (ADR-062): growth rate -> doubling time (days),
+        # inflection date, plateau level. No R_0 (that borrowed the SIR disease
+        # gamma and was not identifiable).
+        params = dict(summary.to_dict())
+        params["doubling_time"] = logistic_doubling_time(k_mean)
+        params["inflection_day"] = t0_mean
+        params["plateau"] = L_mean
 
         return FitResult(
             cluster_id=cluster_id,
             model_name="logistic",
             converged=converged,
             aicc=aicc(ll, k=3, n=len(y)),
-            r0_mean=logistic_r0(k_mean, gamma_prior),
-            r0_median=logistic_r0(k_median, gamma_prior),
-            r0_ci_low=logistic_r0(k_lo, gamma_prior),
-            r0_ci_high=logistic_r0(k_hi, gamma_prior),
             peak_time_mean=t0_mean,
             peak_time_ci_low=float(summary.loc["t0", "hdi_3%"]),
             peak_time_ci_high=float(summary.loc["t0", "hdi_97%"]),
-            param_summary=summary.to_dict(),
+            param_summary=params,
             curve=[float(v) for v in curve],
         )
 
     # ------------------------------------------------------------------
-    # SIR — discrete-time Euler via pytensor.scan (differentiable)
+    # SIR — Schlickeiser & Kröger closed-form prevalence (ADR-062)
     # ------------------------------------------------------------------
 
     def _fit_sir(
         self, cluster_id: int | str, t: np.ndarray, y: np.ndarray
     ) -> FitResult:
+        """Fit the closed-form SIR prevalence (ADR-062): elementary, no ODE scan.
+
+        The mean function is Schlickeiser & Kröger's analytic prevalence — an
+        exponential rise meeting a shifted sech² decay at the peak — expressed in
+        PyTensor so NUTS runs at logistic/Bass cost. Priors are data-scaled and
+        weakly informative (no disease constants). What the lens reports is the
+        rise and decay rates read off the fitted limbs; R_0 = 1/k0 is fit as a
+        shape scalar but never reported (not identifiable from one curve).
+        """
         import pymc as pm
-        import pytensor
         import pytensor.tensor as pt
+
+        from mnd.dynamics.models import _SIR_ETA
 
         priors = self._cfg["dynamics"]["priors"]["sir"]
         inf_cfg = self._cfg["dynamics"]["sir_inference"]
-        base_grid = int(self._cfg["dynamics"]["sir_fit_grid_days"])
-        max_steps = int(self._cfg["dynamics"].get("sir_max_grid_steps", 200))
-        # N_pop is the daily total, so the population scale is grid-invariant. The
-        # scan runs on a coarsened grid to keep its O(T) cost bounded: grid is chosen
-        # so the Euler scan is at most `sir_max_grid_steps` long regardless of the
-        # window's length (ADR-060), then binned. Binning averages rather than sums,
-        # so y_fit and the priors keyed to it stay on the daily amplitude.
-        grid = max(base_grid, int(np.ceil(len(y) / max(max_steps, 1))))
-        N_pop = float(max(y.sum() * 2.0, 100.0))
-        y_fit, eff_grid = _bin_to_grid(y, grid)
-        T = len(y_fit)
+        eta = _SIR_ETA
+        span = float(max(len(y), 2))
+        obs_peak = float(max(y.max(), 1.0))
+        peak_day_guess = float(np.argmax(y))
 
         with pm.Model():
-            # LogNormal keeps both rates strictly positive (ADR-060): the prior HalfNormal
-            # put mass at gamma->0, exploding R_0 = beta/gamma and the Euler scan.
-            beta = pm.LogNormal("beta", mu=float(np.log(priors["beta_mean"])), sigma=priors["beta_log_sd"])
-            gamma = pm.LogNormal("gamma", mu=float(np.log(priors["gamma_mean"])), sigma=priors["gamma_log_sd"])
-            I0 = pm.HalfNormal("I0", sigma=max(float(y_fit[:5].mean()), 1.0) * 3)
-            sigma = pm.HalfNormal("sigma", sigma=float(y_fit.std() + 1.0))
-
-            S_init = pt.as_tensor_variable(N_pop) - I0
-            R_init = pt.zeros(())
-
-            def sir_step(S_prev, I_prev, R_prev, b, g, n):
-                new_inf = pt.clip(b * S_prev * I_prev / n, 0.0, S_prev)
-                rec = pt.clip(g * I_prev, 0.0, I_prev)
-                return S_prev - new_inf, I_prev + new_inf - rec, R_prev + rec
-
-            (_, I_seq, _), _ = pytensor.scan(
-                sir_step,
-                outputs_info=[S_init, I0, R_init],
-                non_sequences=[beta, gamma, pt.as_tensor_variable(N_pop)],
-                n_steps=T - 1,
+            # Data-scaled, weakly-informative priors (ADR-062) — no epidemiology.
+            peak_height = pm.LogNormal(
+                "peak_height", mu=float(np.log(obs_peak)),
+                sigma=float(priors["peak_height_log_sd"]),
             )
-            I_traj = pt.concatenate([I0[None], I_seq])
-            pm.Normal("obs", mu=I_traj, sigma=sigma, observed=y_fit)
+            peak_time = pm.Normal(
+                "peak_time", mu=peak_day_guess, sigma=float(span / 4.0 + 1.0)
+            )
+            # k0 = 1/R0 in (0,1); Beta(a,b) is a gentle shape prior (a=b=2 -> centred
+            # on k0=0.5, i.e. R0=2), not tuned to any anchor.
+            k0 = pm.Beta("k0", alpha=float(priors["k0_beta_a"]), beta=float(priors["k0_beta_b"]))
+            timescale = pm.LogNormal(
+                "timescale", mu=float(np.log(span / 6.0 + 1.0)),
+                sigma=float(priors["timescale_log_sd"]),
+            )
+            sigma = pm.HalfNormal("sigma", sigma=float(y.std() + 1.0))
+
+            # Closed-form prevalence in PyTensor (mirrors models.sir_kssir_curve).
+            Imax = 1.0 - k0 - k0 * pt.log((1.0 - eta) / k0)          # eq 51
+            Umax = pt.log(Imax / eta)                                # eq 37
+            O = Imax / k0                                            # eq 59
+            kappa = 1.0 / (pt.exp(O) - 1.0)                          # eq 62
+            Phi = pt.arctanh(pt.sqrt(pt.clip(1.0 - kappa * O, 0.0, 1.0 - 1e-9)))  # eq 66
+            tauU = Umax * k0 / (1.0 - k0)                            # small-eta peak time
+            tau = tauU + (pt.as_tensor_variable(t) - peak_time) / timescale
+            rise_arg = pt.clip((tau - tauU) * (Umax / tauU), -50.0, 0.0)
+            rise = peak_height * pt.exp(rise_arg)                    # eq 88
+            zeta = k0 * (tau - tauU) / (2.0 * pt.sqrt(1.0 + kappa)) + Phi
+            decay = peak_height * (pt.cosh(Phi) / pt.cosh(zeta)) ** 2  # eq 76
+            mu = pt.switch(tau < tauU, rise, decay)
+
+            pm.Normal("obs", mu=mu, sigma=sigma, observed=y)
             trace = self._sample(inf_cfg)
 
         import arviz as az
 
-        summary_bg = az.summary(trace, var_names=["beta", "gamma"], hdi_prob=0.94)
-        summary_I0 = az.summary(trace, var_names=["I0"], hdi_prob=0.94)
+        summary = az.summary(
+            trace, var_names=["peak_height", "peak_time", "k0", "timescale"],
+            hdi_prob=0.94,
+        )
         converged = _check_convergence(trace)
-        beta_mean = float(summary_bg.loc["beta", "mean"])
-        gamma_mean = float(summary_bg.loc["gamma", "mean"])
-        beta_lo = float(summary_bg.loc["beta", "hdi_3%"])
-        beta_hi = float(summary_bg.loc["beta", "hdi_97%"])
-        gamma_lo = float(summary_bg.loc["gamma", "hdi_3%"])
-        gamma_hi = float(summary_bg.loc["gamma", "hdi_97%"])
-        I0_mean = float(summary_I0.loc["I0", "mean"])
-        # R0=beta/gamma is a ratio, so median(R0) needs the per-draw ratio,
-        # not the ratio of the marginal medians.
-        beta_draws = np.asarray(trace.posterior["beta"]).reshape(-1)
-        gamma_draws = np.clip(np.asarray(trace.posterior["gamma"]).reshape(-1), 1e-6, None)
-        r0_median = float(np.median(beta_draws / gamma_draws))
-        # beta/gamma are per-grid-step rates. R_0 = beta/gamma is dimensionless,
-        # so it is reported directly from the posterior (the grid factor cancels).
-        # The displayed curve and peak carry time units, so convert to per-day
-        # before integrating on the daily grid t (ADR-053).
-        beta_day = beta_mean / eff_grid
-        gamma_day = gamma_mean / eff_grid
-        y_hat = sir_prevalence(t, N_pop, I0_mean, beta_day, gamma_day)
-        ll = _gaussian_loglik(y, y_hat)
-        peak = sir_peak_time(N_pop, I0_mean, beta_day, gamma_day)
+        ph = float(summary.loc["peak_height", "mean"])
+        pt_mean = float(summary.loc["peak_time", "mean"])
+        k0_mean = float(summary.loc["k0", "mean"])
+        ts_mean = float(summary.loc["timescale", "mean"])
+
+        curve = sir_kssir_curve(t, ph, pt_mean, k0_mean, ts_mean)
+        ll = _gaussian_loglik(y, curve)
+
+        # Self-standing numbers (ADR-062): the identifiable limb rates, in per-day
+        # units. rise_rate and decay_rate are the observed log-slopes; k0 and
+        # timescale individually are not identifiable, but these products are.
+        rise_rate = sir_rise_rate(k0_mean, ts_mean)
+        decay_rate = sir_decay_rate(k0_mean, ts_mean)
+        params = dict(summary.to_dict())
+        params["rise_rate"] = rise_rate
+        params["decay_rate"] = decay_rate
+        params["doubling_time_up"] = float(np.log(2.0) / rise_rate) if rise_rate > 0 else float("inf")
+        params["half_life_down"] = float(np.log(2.0) / decay_rate) if decay_rate > 0 else float("inf")
+        params["asymmetry"] = float(rise_rate / decay_rate) if decay_rate > 0 else float("inf")
+        params["peak_height"] = ph
 
         return FitResult(
             cluster_id=cluster_id,
             model_name="sir",
             converged=converged,
-            aicc=aicc(ll, k=3, n=len(y)),
-            r0_mean=sir_r0(beta_mean, gamma_mean),
-            r0_median=r0_median,
-            r0_ci_low=sir_r0(beta_lo, max(gamma_hi, 1e-6)),
-            r0_ci_high=sir_r0(beta_hi, max(gamma_lo, 1e-6)),
-            peak_time_mean=peak,
-            param_summary={**summary_bg.to_dict(), **summary_I0.to_dict()},
-            curve=[float(v) for v in y_hat],
+            aicc=aicc(ll, k=4, n=len(y)),
+            peak_time_mean=pt_mean,
+            peak_time_ci_low=float(summary.loc["peak_time", "hdi_3%"]),
+            peak_time_ci_high=float(summary.loc["peak_time", "hdi_97%"]),
+            param_summary=params,
+            curve=[float(v) for v in curve],
         )
 
     # ------------------------------------------------------------------
@@ -400,16 +412,16 @@ class DynamicsFitter:
         y_hat = bass(t, m_mean, p_mean, q_mean)
         ll = _gaussian_loglik(y, y_hat)
 
-        # Bass has no R_0; its headline is the innovation/imitation balance.
+        # Bass headline: total reach + the innovation/imitation balance.
         return FitResult(
             cluster_id=cluster_id,
             model_name="bass",
             converged=converged,
             aicc=aicc(ll, k=3, n=len(y)),
-            r0_mean=None,
             peak_time_mean=bass_peak_time(p_mean, q_mean),
             param_summary={
                 **summary.to_dict(),
+                "total_reach": m_mean,
                 "p_innovation": p_mean,
                 "q_imitation": q_mean,
                 "external_vs_internal": p_mean / max(q_mean, 1e-9),
@@ -456,29 +468,6 @@ class DynamicsFitter:
 # ------------------------------------------------------------------
 # Module-level helpers
 # ------------------------------------------------------------------
-
-def _bin_to_grid(y: np.ndarray, grid: int) -> tuple[np.ndarray, int]:
-    """Block-average a daily series onto a coarser grid for the SIR fit (ADR-053).
-
-    The SIR scan cost is O(len(y)); binning the already-7-day-smoothed daily
-    series onto a weekly grid shortens the scan ~``grid``-fold. Averaging (not
-    summing) preserves the daily amplitude, so N_pop, the priors, and the fitted
-    I0 stay on daily units and the per-grid-step rates convert back to per-day by
-    dividing by the returned factor. Returns the series and the grid factor
-    actually applied (1 when no binning happened). Series shorter than four
-    grid-steps are already cheap and are returned unchanged on the daily grid.
-    """
-    y = np.asarray(y, dtype=float)
-    grid = max(int(grid), 1)
-    if grid == 1 or len(y) < 4 * grid:
-        return y, 1
-    n_bins = int(np.ceil(len(y) / grid))
-    binned = np.array(
-        [float(y[i * grid : (i + 1) * grid].mean()) for i in range(n_bins)],
-        dtype=float,
-    )
-    return binned, grid
-
 
 def _trim_window_central_mass(y: np.ndarray, alpha: float) -> tuple[int, int]:
     """Index window ``[i0, i1]`` holding the central ``1 - alpha`` of cumulative mass.
