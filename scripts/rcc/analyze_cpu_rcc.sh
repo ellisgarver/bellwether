@@ -57,6 +57,9 @@ echo "Python: $PYTHON_USED"
 export USE_TF=0
 export KERAS_BACKEND=torch
 export MND_EMBEDDING_DEVICE=cpu
+# Keep the ~16 GB Qwen3-8B HF cache on scratch, not the 30 GB home quota.
+export HF_HOME="/scratch/midway3/ehgarver/huggingface"
+export HF_HUB_OFFLINE=0
 # Keep BLAS from oversubscribing across the PyMC chain processes.
 export OMP_NUM_THREADS=2
 export MKL_NUM_THREADS=2
