@@ -10,6 +10,7 @@ Dispatches pipeline stages:
   validate            — anchor narrative recovery (reported as rate, not gated)
   analyze             — clusters → normalize → JEL → dynamics → stages →
                         similar → dashboard artifacts (the pipeline→front-end seam)
+  update              — portable weekly delta: per-source over-fetch + analyze (ADR-063)
   corpus-composition  — report article counts per source per year
 
 All paths default to config.paths.*. Override with --input / --output flags.
@@ -42,10 +43,49 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from mnd.utils.config import load_config, project_root
+from mnd.utils.config import data_root, load_config, project_root
 from mnd.utils.logging import get_logger
 
 log = get_logger("run_pipeline")
+
+# The ADR-020 basis set — the 12 sub-ingestors mapping 1:1 to the dimensions of US
+# macro discourse. Used by `update` to advance each source from its own frontier.
+BASIS_SET_SOURCES = (
+    "federalreserve", "fed_regional", "congressional", "imf", "bis",
+    "treasury_ofr", "cea", "voxeu", "brookings", "piie", "cbo", "nber",
+)
+
+
+def _source_delta_windows(
+    articles_df: "pd.DataFrame",
+    sources: tuple[str, ...],
+    buffer_days: int,
+    today: str,
+    full_start: str,
+) -> list[tuple[str, str, str]]:
+    """Per-source over-fetch windows for a weekly delta (ADR-063).
+
+    Each source advances from its *own* last-captured ``published_at`` minus
+    ``buffer_days`` (so the staggered per-source frontiers do not leave gaps), to
+    ``today``; the buffer overlap is absorbed by URL/content dedup. A source with no
+    articles yet starts at ``full_start``. Returns ``[(source, start, end), ...]``.
+    """
+    import pandas as pd
+
+    windows: list[tuple[str, str, str]] = []
+    if "source_id" in articles_df.columns and "published_at" in articles_df.columns:
+        pub = pd.to_datetime(articles_df["published_at"], errors="coerce", utc=True)
+        max_by_source = pub.groupby(articles_df["source_id"]).max()
+    else:
+        max_by_source = pd.Series(dtype="datetime64[ns, UTC]")
+    for src in sources:
+        last = max_by_source.get(src)
+        if pd.isna(last) if last is not None else True:
+            start = full_start
+        else:
+            start = (last - pd.Timedelta(days=buffer_days)).date().isoformat()
+        windows.append((src, start, today))
+    return windows
 
 
 @click.group()
@@ -130,7 +170,7 @@ def ingest(
     }
 
     cfg = ctx.obj["cfg"]
-    root = project_root()
+    root = data_root()
     raw_dir = Path(output_dir) if output_dir else root / cfg["paths"]["raw_articles"]
     raw_dir.mkdir(parents=True, exist_ok=True)
 
@@ -288,7 +328,7 @@ def cbo_merge_shards(
     """
     import json
 
-    root = project_root()
+    root = data_root()
     cfg = ctx.obj["cfg"]
     raw_dir = Path(output_dir) if output_dir else root / cfg["paths"]["raw_articles"]
 
@@ -363,7 +403,7 @@ def filter_pre_embed(
     Run this after ingestion and before the filter / embed stages.
     """
     cfg = ctx.obj["cfg"]
-    root = project_root()
+    root = data_root()
     raw_dir = Path(input_dir) if input_dir else root / cfg["paths"]["raw_articles"]
     out_path = Path(output) if output else root / cfg["paths"]["corpus_for_embedding"]
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -438,7 +478,7 @@ def filter_cmd(
     from mnd.filtering import BoilerplateStripper, Deduplicator
 
     cfg = ctx.obj["cfg"]
-    root = project_root()
+    root = data_root()
     out_path = Path(output) if output else root / cfg["paths"]["processed_articles"]
 
     corpus_path = root / cfg["paths"]["corpus_for_embedding"]
@@ -544,7 +584,7 @@ def embed(
     from mnd.embedding.embedder import Embedder
 
     cfg = ctx.obj["cfg"]
-    root = project_root()
+    root = data_root()
     parquet_path = (
         Path(input_path) if input_path else root / cfg["paths"]["processed_articles"]
     )
@@ -644,7 +684,7 @@ def embed_index(ctx: click.Context) -> None:
     from mnd.embedding import cache as embed_cache
 
     cfg = ctx.obj["cfg"]
-    root = project_root()
+    root = data_root()
     chunks_path = root / cfg["paths"]["processed_chunks"]
     npy_path = root / cfg["paths"]["processed_embeddings"]
     index_path = embed_cache.index_path_for(npy_path)
@@ -692,7 +732,7 @@ def cluster(
     from mnd.clustering import BertopicPipeline
 
     cfg = ctx.obj["cfg"]
-    root = project_root()
+    root = data_root()
     arts_path = Path(articles) if articles else root / cfg["paths"]["processed_chunks"]
     emb_path = Path(embeddings) if embeddings else root / cfg["paths"]["processed_embeddings"]
     out_path = Path(output) if output else root / cfg["paths"]["processed_clusters"]
@@ -762,7 +802,7 @@ def stability(
     from mnd.clustering import BertopicPipeline
 
     cfg = ctx.obj["cfg"]
-    root = project_root()
+    root = data_root()
     # Embeddings are chunk-aligned (chunk_corpus splits long docs), so docs must
     # come from processed_chunks — not processed_articles — to match row counts.
     arts_path = Path(articles) if articles else root / cfg["paths"]["processed_chunks"]
@@ -823,7 +863,7 @@ def validate(ctx: click.Context, anchors: str, clusters: str | None) -> None:
     from mnd.validation import validate_anchor_recovery
 
     cfg = ctx.obj["cfg"]
-    root = project_root()
+    root = data_root()
     clusters_path = (
         Path(clusters) if clusters else root / cfg["paths"]["processed_clusters"]
     )
@@ -873,7 +913,7 @@ def analyze(
     from mnd.dashboard.run import run_analysis
 
     cfg = ctx.obj["cfg"]
-    root = project_root()
+    root = data_root()
     clusters_path = Path(clusters) if clusters else root / cfg["paths"]["processed_clusters"]
     emb_path = Path(embeddings) if embeddings else root / cfg["paths"]["processed_embeddings"]
     ti_path = (
@@ -897,6 +937,82 @@ def analyze(
         cfg=cfg,
     )
     log.info("analyze: wrote dashboard artifacts → %s", out)
+
+
+# ---------------------------------------------------------------------------
+# update  (ADR-063 — portable weekly refresh)
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--sources", default="all", show_default=True,
+              help="'all' = the 12 basis-set sources, or a comma-separated subset.")
+@click.option("--buffer-days", type=int, default=None,
+              help="Over-fetch each source from its frontier minus this many days "
+                   "(default: config update.buffer_days).")
+@click.option("--skip-ingest", is_flag=True, default=False,
+              help="Skip the delta ingest; only refresh analyze / the press layer.")
+@click.option("--skip-analyze", is_flag=True, default=False,
+              help="Skip the analyze re-bake; only fetch the delta.")
+@click.pass_context
+def update(
+    ctx: click.Context,
+    sources: str,
+    buffer_days: int | None,
+    skip_ingest: bool,
+    skip_analyze: bool,
+) -> None:
+    """Portable weekly refresh (ADR-063): per-source delta ingest + analyze.
+
+    Single-process and CPU-only, with all paths under ``MND_DATA_ROOT`` — it runs
+    unchanged on a laptop, a cron VM, GitHub Actions, or an RCC node, no SLURM and
+    no GPU. Each source advances from its own last-captured date (minus a buffer;
+    dedup absorbs the overlap), and ``analyze`` re-bakes the artifacts, refreshing
+    the Media Cloud press layer + press-heating against the current narrative set.
+
+    Deferred (ADR-057 §3): identity-stable institutional re-clustering
+    (``merge_models``). Until it lands, newly-ingested institutional articles are
+    parked in raw and the narrative *set* stays "as of the last full build" — the
+    live movement comes from the press layer. Use the SLURM fan-out
+    (``submit_parallel_ingest.sh``) for a full rebuild.
+    """
+    from datetime import date as date_t
+
+    cfg = ctx.obj["cfg"]
+    upd = cfg.get("update", {})
+    buffer = int(buffer_days if buffer_days is not None else upd.get("buffer_days", 14))
+    full_start = str(upd.get("full_start", "2010-01-01"))
+    today = date_t.today().isoformat()
+    src_tuple = (
+        BASIS_SET_SOURCES if sources.strip() == "all"
+        else tuple(s.strip() for s in sources.split(",") if s.strip())
+    )
+
+    if not skip_ingest:
+        articles_path = data_root() / cfg["paths"]["processed_articles"]
+        articles_df = (
+            pd.read_parquet(str(articles_path)) if articles_path.exists()
+            else pd.DataFrame()
+        )
+        windows = _source_delta_windows(articles_df, src_tuple, buffer, today, full_start)
+        log.info("update: delta ingest for %d sources (buffer=%dd → %s)",
+                 len(windows), buffer, today)
+        for src, start, end in windows:
+            log.info("update: ingest %-15s %s → %s", src, start, end)
+            ctx.invoke(ingest, start=start, end=end, sources=src,
+                       output_dir=None, shard=None)
+        log.warning(
+            "update: new institutional articles are PARKED in raw until the "
+            "merge_models re-cluster lands (ADR-057 §3); the narrative set stays "
+            "'as of the last full build'. The Media Cloud press layer refreshes in "
+            "the analyze step below."
+        )
+
+    if not skip_analyze:
+        log.info("update: re-baking artifacts (refreshes the Media Cloud press layer)")
+        ctx.invoke(analyze, clusters=None, embeddings=None, topic_info=None,
+                   output_dir=None)
+
+    log.info("update: complete")
 
 
 # ---------------------------------------------------------------------------
@@ -927,7 +1043,7 @@ def corpus_composition(
       - Missing Tier 4 coverage (AP News / MarketWatch absent pre-2015)
     """
     cfg = ctx.obj["cfg"]
-    root = project_root()
+    root = data_root()
     raw_dir = Path(input_dir) if input_dir else root / cfg["paths"]["raw_articles"]
 
     # Load from raw JSONL if available; fall back to processed parquet

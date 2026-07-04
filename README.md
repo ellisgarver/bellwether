@@ -149,6 +149,55 @@ every ingest job:
 
 `curl_cffi==0.15.0` must be installed in the RCC `mnd` conda env (`pip install -r requirements.txt`).
 
+The SLURM fan-out is the **full-rebuild** path (GPU embed of the whole corpus). It
+is RCC-convenient but not required — everything it does is also reachable through
+the portable per-stage commands above and the `update` command below.
+
+## Weekly updates (portable — no RCC, no GPU, no SLURM)
+
+The weekly refresh is a single, self-contained command that runs anywhere Python
+does — a laptop, a small cron VM, GitHub Actions, or an RCC login/compute node:
+
+```bash
+python scripts/run_pipeline.py update
+```
+
+It advances each source from its own last-captured date (over-fetching a buffer so
+staggered per-source frontiers leave no gap; dedup absorbs the overlap), then
+re-bakes the dashboard artifacts — refreshing the **Media Cloud press layer** and
+the **press-heating** emerging signal against the current narrative set. Because
+the delta is small and embedding is incremental, it is CPU-minutes, not GPU-hours.
+
+> Identity-stable institutional re-clustering (`merge_models`, ADR-057 §3) is not
+> wired yet, so newly-ingested institutional articles are **parked** until the next
+> full rebuild and the narrative *set* is "as of the last full build". The live
+> movement between rebuilds comes from the press layer.
+
+**Data location.** By default all data lives under `data/` in the repo, so a fresh
+clone needs no configuration. To put data elsewhere (e.g. RCC scratch, off the home
+quota), set `MND_DATA_ROOT`:
+
+```bash
+export MND_DATA_ROOT=/scratch/$USER/mnd-data      # optional; defaults to the repo
+```
+
+**Scheduling** is left to you — the command is backend-agnostic. Pick whichever
+runner fits your environment:
+
+```bash
+# cron (weekly, Monday 06:00) — a laptop or a VM
+0 6 * * 1  cd /path/to/macro-narrative-dynamics && python scripts/run_pipeline.py update >> logs/update.log 2>&1
+
+# systemd timer: an update.service running the command + an update.timer OnCalendar=weekly
+
+# GitHub Actions: on: schedule: - cron: "0 6 * * 1"  →  run the command (set MEDIACLOUD_API_KEY as a secret)
+
+# RCC: a login-node crontab entry, or an sbatch --begin=... resubmitting weekly
+```
+
+Set `MEDIACLOUD_API_KEY` for the press layer; without it, `update` still refreshes
+everything else and simply omits the press sections.
+
 ## Reproducibility
 
 - Dependencies pinned in `requirements.txt`.

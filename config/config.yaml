@@ -338,6 +338,16 @@ display:
 # -----------------------------------------------------------------------------
 # Storage paths
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Weekly update (ADR-063) — the portable `run_pipeline.py update` delta refresh.
+# -----------------------------------------------------------------------------
+update:
+  # Over-fetch each source from its own last-captured date minus this many days,
+  # so staggered per-source frontiers leave no gap; dedup absorbs the overlap.
+  buffer_days: 14
+  # Window start for a source that has no articles yet (matches the corpus window).
+  full_start: "2010-01-01"
+
 paths:
   raw_articles: "data/raw/articles"
   raw_validation: "data/raw/validation"
