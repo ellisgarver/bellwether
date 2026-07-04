@@ -77,6 +77,8 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 061 | **Three representative-article panels — the narrative's core (most term-aligned + substantial), earliest, and newest, de-duplicated, `n_per_bucket`=3 each; the central panel also grounds the ADR-056 naming layer (replacing the BERTopic rep-doc excerpts). JEL scope keeps its ADR-055 representation unchanged.** | Live (extends 055/056; display + naming layer) |
 | 060 | **Fit lenses on the central-mass window + SIR robustness overhaul — nearly every fit-series spans ~14yr from sparse straggler tails, which broke SIR (0/365, γ→0 `HalfNormal` ridge + 855-step Euler scan). Fix: fit all three lenses on the central 95% of cumulative attention mass (α=0.05, keeps multi-wave, no new param; staging/display stay full-span); SIR gets LogNormal β/γ priors, an adaptive grid bounding the scan ≤200 steps, and a `max_treedepth` fail-fast cap so unfittable clusters go non-converged in seconds instead of grinding. Same convergence gate for all three, no outbreak-eligibility filter.** | Live (supersedes 053; amends 039/052; relates 040/058) |
 | 062 | **SIR lens via the Schlickeiser–Kröger closed-form solution — retire the `pytensor.scan` Euler ODE (the sole compute pole: ~23 min × 365 clusters ≈ 140 CPU-h) for the near-exact analytic prevalence I(τ), elementary on both branches (rise `η·e^{g−1}`, decay `(k₀/κ)·cosh⁻²ζ`); fit collapses to logistic/Bass cost (1–3 ms). De-risk surfaced R₀ is NOT identifiable from a single curve (true of the current Euler fit too, and it contaminated logistic's R₀=1+k/γ), so DROP R₀ + J∞, RETIRE the Bjørnstad disease β/γ priors + the `N_pop=2·Σy` fudge, and report only curve-identifiable numbers in real units: SIR → rise/decay rates + asymmetry + peak; logistic → doubling time + inflection + plateau; Bass unchanged (field-anchored p/q, total reach m). Display-only + convergence gate + no-tuning intact.** | Live (supersedes SIR numerics + disease priors of 053/060; amends 039/052; relates 040) |
+| 063 | **Portable weekly-update orchestration — a single-process `run_pipeline.py update` runs the weekly delta (per-source over-fetch since each source's own `max(published_at)` − buffer → filter → incremental embed → analyze) sequentially, CPU-only, with all paths behind a config `data_root` (env `MND_DATA_ROOT`), so it runs on a laptop / cron VM / GitHub Actions / RCC with no SLURM and no GPU. The parallel SLURM fan-out stays as the full-rebuild path only. Identity-stable institutional re-clustering (`merge_models`) is DEFERRED (ADR-057 §3) — until it lands, `update` refreshes the corpus delta + the Media Cloud press layer (ADR-064) and the narrative set is captioned "as of last full build". Scheduler documented backend-agnostically, not auto-enabled.** | Live (implements 057 §3 partial; relates 016/050; portability for README) |
+| 064 | **Media Cloud Premium press layer + press-heating emerging signal — add the premium-press outlet collection (ADR-016: WSJ/Bloomberg/FT/Reuters/…) alongside the broad US-National collection, both via the one Media Cloud module. Wire ADR-057 §2: per already-tracked narrative, `detect_anomalies` on the attention-share ratio over a 4-week window vs a 52-week baseline at k=2σ, surfaced as a SEPARATE "heating in the press" signal beside the institutional recency flag in the Emerging view. Recomputes at bake time from live press against the existing narrative set — no re-embed, no re-cluster, never feeds embedding/clustering/scope (ADR-010/020/046). Degrades to absent when unkeyed.** | Live (implements 057 §2; extends 016/042/048; relates 040) |
 | 059 | **Emerging flag is recency-only — a narrative is emerging iff its onset falls within the 4-week recency window of the corpus frontier, regardless of stage; drops the earlier `stage == growth` gate so a just-arrived narrative whose short history hasn't yet registered a significant trend is still surfaced as newly arrived** | Live (amends 052 emerging clause; relates 016/057) |
 | 058 | **Peak-relative plateau test — `stable` vs `dormant` keyed to the narrative's own high-water window, not its quiet floor; fixes the all-`stable` collapse (342/365) where institutional tails made "above the floor" trivially true. MWU on the zero-heavy daily series was under-powered, so the split is by level: recent-window mean below `dormant_peak_fraction`=0.25 of the peak-window mean → dormant (a definition, not tuned to recovery)** | Live (amends 052 §2/§3 Level test; relates 040) |
 | 057 | **Phase-6 live emerging (design) — two display-only signals: institutional onset (existing) + press heating (4wk vs 52wk baseline, k=2, on Media Cloud attention-share); weekly refresh builds onto the model via BERTopic `merge_models` (ids/URLs/names preserved, new topics appended above τ); manual now → cron later; novel press-only clustering scoped out (ADR-010)** | Live design; press-heating + weekly-refresh implementations each need a follow-up ADR (relates 010/016/020/042/046/048/050/056) |
@@ -4929,6 +4931,168 @@ fit loop — orthogonal infra (no ADR), pursued separately.
   self-exciting point process (Crane & Sornette 2008, endogenous/exogenous
   classes), which uses the article timestamps directly. Noted as a candidate for
   a later ADR; Bass stays as-is for now.
+
+---
+
+## ADR-063: Portable weekly-update orchestration (`update` command)
+
+- **Status**: Accepted
+- **Date**: 2026-07-04
+
+### Context
+
+Phase 6 needs the corpus to refresh on a cadence, and the mission pivot (a public
+educational tool, reproducible by others per the README) makes **portability** a
+first-class requirement: someone should be able to check the data or fork a
+spin-off without a UChicago RCC account. Two problems block that today.
+
+1. **Orchestration is RCC-coupled.** The only runner is
+   `scripts/rcc/submit_parallel_ingest.sh` — hardcoded `/scratch/midway3/ehgarver`
+   paths, a SLURM fan-out (one `sbatch` per source), and `afterok` chaining. The
+   `run_pipeline.py` CLI itself is portable, but the *orchestration* around it is
+   not; there is no way to run "ingest the new week, then the rest" off RCC.
+2. **Ingest has no delta mode.** `ingest` takes one global `--start/--end`. A
+   weekly refresh with a single global start leaves per-source gaps (sources have
+   staggered last-captured dates), and re-fetching 2010–present every week is
+   absurd. Checkpoint dedup exists but nothing computes a per-source delta window.
+
+Two pieces already support an efficient delta: incremental embedding reuses
+vectors keyed on `(chunk_id, text_sha1)` and encodes only new/changed chunks
+(ADR-050), and a weekly delta is *small* — a few hundred articles — so it needs
+neither the parallel fan-out nor an A100.
+
+Settled by the Phase-6 scoping discussion (2026-07-04): the default weekly path is
+a **portable single-process command**, `merge_models` re-clustering is **deferred**
+(ADR-057 §3, still needs its identity-stability validation), and the schedule is
+**documented backend-agnostically, not auto-enabled**.
+
+### Decision
+
+1. **A single-process `run_pipeline.py update` command** runs the weekly delta
+   sequentially, in one process, CPU-only: per-source over-fetch ingest → filter →
+   incremental embed (ADR-050, only new chunks) → analyze (which now also refreshes
+   the Media Cloud press layer, ADR-064). No SLURM, no GPU, no parallel fan-out. It
+   runs unchanged on a laptop, a cron VM, GitHub Actions, or an RCC login/compute
+   node. Because the embed step is incremental and the delta is small, the whole
+   run is minutes on CPU.
+
+2. **Per-source over-fetch delta.** For each source, `update` reads the corpus's
+   own `max(published_at)` for that source and ingests from `(that − buffer_days)`
+   to today, so every source advances from its *own* frontier (fixing the
+   staggered-end-date gap) and the buffer overlap is absorbed by URL/content dedup
+   — the only legitimate ingest filters (corpus-correctness invariant). `buffer_days`
+   is a config value.
+
+3. **Paths behind a config `data_root`.** All data locations derive from
+   `paths.data_root` (env override `MND_DATA_ROOT`), defaulting to the repo's
+   `data/`. The `/scratch/midway3/ehgarver` locations move from hardcoded strings
+   into the RCC environment's `MND_DATA_ROOT`, so nothing in the Python or the
+   `update` path names a cluster-specific directory. The RCC SLURM scripts become
+   thin adapters that set `MND_DATA_ROOT` and call the same CLI.
+
+4. **The parallel SLURM fan-out is the full-rebuild path only.**
+   `submit_parallel_ingest.sh` stays for the `NUKE_RAW` historical rebuild (12
+   sources, long poles, A100 embed). `update` never fans out.
+
+5. **Institutional re-clustering is deferred (ADR-057 §3).** Until `merge_models`
+   (its own ADR) lands with the anchor-id-stability check, `update` does **not**
+   re-cluster: it keeps the corpus delta warm (ingested + embedded, ready to fold
+   in) and refreshes the parts that need no re-cluster — the Media Cloud press layer
+   and press-heating (ADR-064), recomputed against the existing narrative set. The
+   institutional narrative set is captioned **"as of the last full build"** until
+   the merge path is validated. This is the honest near-term state ADR-057 named.
+
+6. **Scheduling documented, not auto-enabled.** The README gets a backend-agnostic
+   "run it weekly" section with example `cron`, `systemd` timer, GitHub Actions, and
+   RCC-`cron` snippets — all invoking the one `update` command. No scheduler is
+   committed live; the operator turns it on.
+
+### Consequences
+
+- **Reproducibility.** A forker runs `pip install -e .` then
+  `python scripts/run_pipeline.py update` (or a full build) with no RCC, no SLURM,
+  no GPU — the README can honestly claim portability. Right-sizing is automatic:
+  weekly deltas are CPU-minutes; only a full rebuild wants the GPU fan-out.
+- **Efficiency.** Incremental embed + per-source delta means the weekly cost scales
+  with *new* articles, not corpus size. No re-fetch, no re-embed of unchanged text.
+- **Honesty.** Deferring `merge_models` is stated, not hidden: the narrative set is
+  "as of last build" until validated, while press-heating gives the live signal.
+- **Relates.** ADR-050 (incremental embed), ADR-016 (weekly cadence), ADR-057
+  (Phase-6 design; this implements §3's portable-refresh half), ADR-064 (the press
+  layer `update` refreshes). The `merge_models` identity-stable re-cluster remains a
+  separate, gated ADR.
+
+---
+
+## ADR-064: Media Cloud Premium press layer + press-heating emerging signal
+
+- **Status**: Accepted
+- **Date**: 2026-07-04
+
+### Context
+
+ADR-016 defined the Layer-1B journalism-dynamics source as **Media Cloud Premium
+Press** — daily story counts across a premium-press outlet collection (WSJ,
+Bloomberg, FT, Reuters, NYT, Barron's, Dow Jones, MarketWatch, AP Business, …) via
+the same Media Cloud API that serves the broad Layer-2 collection. ADR-057 §2 then
+specified a **press-heating** emerging signal on top of it. Neither is wired yet:
+
+- `src/mnd/detection/mediacloud.py` queries only the **broad US-National
+  collection** (`34412234`); no premium collection is defined, and the per-narrative
+  overlay in `analyze` uses the broad one.
+- `detect_anomalies` (z-score over a baseline) exists but is **unwired** — nothing
+  flags a tracked narrative spiking in the press, and the Emerging view carries only
+  the within-corpus recency flag (`is_emerging`), which goes stale between builds.
+
+Hard invariants (ADR-010/020/042/046/057): press *text* is never embedded or
+clustered; the press layer is display/validation only and never feeds embedding,
+clustering, or JEL scope; values are fixed a priori (ADR-040); press counts thin
+before ~2017 (`RELIABLE_SINCE_YEAR`).
+
+### Decision
+
+1. **Add the premium-press collection alongside the broad one.** A
+   `PREMIUM_PRESS_COLLECTION` id (config-overridable) joins `US_NATIONAL_COLLECTION`
+   in the one Media Cloud module. The per-narrative overlay can be built for both
+   scopes — broad for the Layer-2 attention-share baseline, premium for the
+   Layer-1B "what the financial press is saying" volume — selected by config; the
+   fetch/normalize/anomaly code is shared, only the collection id differs.
+
+2. **Wire press-heating (ADR-057 §2) as a separate Emerging signal.** For each
+   already-tracked narrative, at bake time, run the anomaly test on the **attention-
+   share ratio** (`story_count / total_count`, robust to overall press-volume drift)
+   over the trailing window: flag "heating in the press" when the most-recent
+   **4-week** mean sits **≥ k·σ (k = 2)** above the narrative's own **52-week**
+   baseline. It is surfaced **beside**, never merged with, the institutional
+   recency flag, so the reader can tell "our sources just started on this" from "the
+   press is spiking on a story we already track". Captioned literally: "press
+   attention more than 2σ above its yearly baseline". Window/baseline/k are fixed
+   config, not tuned to anchor recovery (ADR-040).
+
+3. **Recompute at bake time, never in the substrate.** The signal is computed in
+   `analyze` from the live Media Cloud series against the *existing* clusters — no
+   re-embed, no re-cluster, no touch to embedding/clustering/scope (ADR-010/020/046
+   intact), exactly like the ADR-042/048 overlays. This is what lets the weekly
+   `update` (ADR-063) refresh the live feel without the deferred re-cluster.
+
+4. **Degrade gracefully.** Absent `MEDIACLOUD_API_KEY`, the whole layer is omitted
+   (as the existing overlay already does); pre-2017 narratives get no heating
+   signal (below `RELIABLE_SINCE_YEAR`) and are captioned as such rather than shown
+   a misleading flat line.
+
+### Consequences
+
+- **A live surface.** The Emerging view gains a press-led signal that refreshes
+  every `update` without re-clustering — the near-term Phase-6 win ADR-057 named,
+  and the reason the deferred `merge_models` is not blocking.
+- **Honesty.** The two signals stay separate and literally captioned; the tool
+  never implies the institutions are writing about something when only the press
+  is (ADR-057 §4 scoped out press-only narratives entirely).
+- **Invariants preserved.** Nothing here feeds embedding, clustering, or scope;
+  press text is never embedded; k/window/baseline are fixed a priori.
+- **Relates.** ADR-016 (Premium press definition), ADR-042/048 (press overlay +
+  lead-lag), ADR-057 §2 (this implements it), ADR-063 (the `update` that refreshes
+  it), ADR-040 (no-tuning).
 
 ---
 
