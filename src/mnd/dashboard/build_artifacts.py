@@ -305,6 +305,13 @@ def build_dashboard_artifacts(
                 # first appears in the trailing weeks is surfaced as emerging whether
                 # or not its short history already registers a significant trend.
                 is_emerging=_compute_emerging(card.date_range, frontier, recency_weeks),
+                # Press-heating: the press is spiking on this tracked narrative now
+                # (ADR-064). A separate signal from institutional recency, never merged.
+                is_press_heating=bool(
+                    (mc := mediacloud.get(cid)) is not None
+                    and mc.press_heating
+                    and mc.press_heating.get("is_heating")
+                ),
                 umap_xy=umap_xy.get(cid),
                 umap_xyz=umap_xyz.get(cid),
                 similar_edges=edges.get(cid, []),

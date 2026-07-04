@@ -18,23 +18,28 @@ function spark(values: number[], n = 44): number[] {
   return out;
 }
 
-// load each emerging narrative once (also used for sparks) so they can be
-// ordered by how fast attention is climbing: the recent-trend slope from the
-// model-free classifier (Theil-Sen slope of log volume). missing slope sorts last.
-const narrs = index.narratives
-  .filter((e) => e.is_emerging)
-  .map((e) => loadNarrative(e.cluster_id));
+// Two distinct signals, shown side by side and never merged (ADR-057/064):
+//  1. institutional onset — a narrative first appeared within the recency window
+//     of the corpus frontier (is_emerging).
+//  2. press heating — the press is spiking on a narrative we already track
+//     (is_press_heating), from live Media Cloud attention-share.
+// A narrative can carry either, both, or neither; keeping them separate lets the
+// reader tell "our sources just started on this" from "the press is spiking on it".
+const need = index.narratives.filter((e) => e.is_emerging || e.is_press_heating);
+const narrs = need.map((e) => loadNarrative(e.cluster_id));
+const byId = (id: number) => narrs.find((n) => n.cluster_id === id)!;
 const speed = (n: ReturnType<typeof loadNarrative>): number => {
   const s = n.stage_detail?.trend_slope;
   return typeof s === "number" ? s : -Infinity;
 };
 const emerging = index.narratives
   .filter((e) => e.is_emerging)
-  .sort((a, b) => {
-    const na = narrs.find((n) => n.cluster_id === a.cluster_id)!;
-    const nb = narrs.find((n) => n.cluster_id === b.cluster_id)!;
-    return speed(nb) - speed(na);
-  });
+  .sort((a, b) => speed(byId(b.cluster_id)) - speed(byId(a.cluster_id)));
+// heating ordered by the press z-score (how far above baseline), strongest first.
+const heatZ = (id: number) => byId(id).mediacloud?.press_heating?.z ?? -Infinity;
+const heating = index.narratives
+  .filter((e) => e.is_press_heating)
+  .sort((a, b) => heatZ(b.cluster_id) - heatZ(a.cluster_id));
 const sparks: Record<number, number[]> = Object.fromEntries(
   narrs.map((n) => [n.cluster_id, spark(n.volume.values)]),
 );
@@ -66,6 +71,26 @@ const sparks: Record<number, number[]> = Object.fromEntries(
     </>
   ) : (
     <p class="muted reveal">no narratives fall within the emerging window.</p>
+  )}
+
+  {heating.length > 0 && (
+    <section class="heating reveal">
+      <p class="eyebrow">a separate signal</p>
+      <h2>heating in the press</h2>
+      <p class="lede">
+        narratives we already track whose recent press attention sits more than
+        {" "}{heating[0]?.is_press_heating ? (byId(heating[0].cluster_id).mediacloud?.press_heating?.k ?? 2) : 2}σ
+        above their own yearly baseline (Media Cloud). this is a press-led signal,
+        distinct from when our institutional sources first pick a story up.
+      </p>
+      <div class="grid">
+        {heating.map((e) => (
+          <div class="card-wrap">
+            <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
+          </div>
+        ))}
+      </div>
+    </section>
   )}
 
   <script>
@@ -102,4 +127,9 @@ const sparks: Record<number, number[]> = Object.fromEntries(
   .toolbar input[type="search"]:focus {
     outline: none; border-bottom-color: var(--accent);
   }
+  .heating {
+    margin-top: 3.5rem; padding-top: 2rem; border-top: 1px solid var(--line);
+  }
+  .heating h2 { margin: 0.2rem 0 0.4rem; }
+  .heating .lede { margin-bottom: 1.4rem; }
 </style>

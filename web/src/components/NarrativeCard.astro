@@ -38,6 +38,9 @@ const col = STAGE_COLOR[entry.stage];
     )}
     <div class="badges">
       <StageBadge stage={entry.stage} emerging={entry.is_emerging} inScope={entry.in_scope} />
+      {entry.is_press_heating && (
+        <span class="heat" title="press attention is spiking above this narrative's own yearly baseline (ADR-064)">press heating</span>
+      )}
     </div>
   </div>
 </a>
@@ -51,4 +54,10 @@ const col = STAGE_COLOR[entry.stage];
   /* tags sit in a single row beneath the sparkline so a second tag (emerging /
      out-of-scope) widens the row instead of stacking and lengthening the cell. */
   .badges { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
+  .heat {
+    font-size: 0.72rem; padding: 0.1rem 0.45rem; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, #c2410c 45%, var(--paper));
+    color: #c2410c; background: color-mix(in srgb, #c2410c 12%, var(--paper));
+    white-space: nowrap;
+  }
 </style>

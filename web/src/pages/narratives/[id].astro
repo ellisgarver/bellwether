@@ -167,6 +167,11 @@ const direction = (d: any) =>
           <div>
             <p class="eyebrow">broad-press</p>
             <h2>did discourse lead or lag press?</h2>
+            {n.mediacloud.press_heating?.is_heating && (
+              <p class="note heat-note">
+                <span class="heat">press heating</span> {n.mediacloud.press_heating.caption} — a press-led spike, separate from when our institutional sources picked it up.
+              </p>
+            )}
             {mcg ? (
               <>
                 <p class="note">{mcg.verdict}</p>
@@ -454,6 +459,13 @@ const direction = (d: any) =>
      but a single narrative's name is a label, not a page banner — keep it at
      the pre-change h1 size so it doesn't dwarf the meta line beneath it. */
   h1 { font-size: clamp(2rem, 4vw, 3.1rem); }
+  .heat-note { margin-top: 0.6rem; }
+  .heat-note .heat {
+    font-size: 0.72rem; padding: 0.1rem 0.45rem; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, #c2410c 45%, var(--paper));
+    color: #c2410c; background: color-mix(in srgb, #c2410c 12%, var(--paper));
+    margin-right: 0.35rem; white-space: nowrap;
+  }
   .back { margin: 0 0 0.6rem; }
   /* a single divider between the JEL code and the color-bubble tags, replacing
      the gray dot separators around them. */
