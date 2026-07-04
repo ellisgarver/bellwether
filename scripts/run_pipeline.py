@@ -770,6 +770,12 @@ def cluster(
     results["topic_info"].to_parquet(
         out_path.parent / "topic_info.parquet", index=False
     )
+    # Persist the fitted model (ADR-066): required for the weekly `merge_models`
+    # re-cluster. Non-fatal if it fails — clustering outputs are already written.
+    try:
+        pipeline.save_model(out_path.parent / "topic_model")
+    except Exception as exc:
+        log.warning("BERTopic model persistence skipped (%s); merge path will need a rebuild", exc)
     log.info(
         "Saved clusters (%d topics) → %s", results["n_topics"], out_path
     )
