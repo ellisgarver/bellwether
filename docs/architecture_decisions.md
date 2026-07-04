@@ -78,6 +78,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 060 | **Fit lenses on the central-mass window + SIR robustness overhaul — nearly every fit-series spans ~14yr from sparse straggler tails, which broke SIR (0/365, γ→0 `HalfNormal` ridge + 855-step Euler scan). Fix: fit all three lenses on the central 95% of cumulative attention mass (α=0.05, keeps multi-wave, no new param; staging/display stay full-span); SIR gets LogNormal β/γ priors, an adaptive grid bounding the scan ≤200 steps, and a `max_treedepth` fail-fast cap so unfittable clusters go non-converged in seconds instead of grinding. Same convergence gate for all three, no outbreak-eligibility filter.** | Live (supersedes 053; amends 039/052; relates 040/058) |
 | 062 | **SIR lens via the Schlickeiser–Kröger closed-form solution — retire the `pytensor.scan` Euler ODE (the sole compute pole: ~23 min × 365 clusters ≈ 140 CPU-h) for the near-exact analytic prevalence I(τ), elementary on both branches (rise `η·e^{g−1}`, decay `(k₀/κ)·cosh⁻²ζ`); fit collapses to logistic/Bass cost (1–3 ms). De-risk surfaced R₀ is NOT identifiable from a single curve (true of the current Euler fit too, and it contaminated logistic's R₀=1+k/γ), so DROP R₀ + J∞, RETIRE the Bjørnstad disease β/γ priors + the `N_pop=2·Σy` fudge, and report only curve-identifiable numbers in real units: SIR → rise/decay rates + asymmetry + peak; logistic → doubling time + inflection + plateau; Bass unchanged (field-anchored p/q, total reach m). Display-only + convergence gate + no-tuning intact.** | Live (supersedes SIR numerics + disease priors of 053/060; amends 039/052; relates 040) |
 | 063 | **Portable weekly-update orchestration — a single-process `run_pipeline.py update` runs the weekly delta (per-source over-fetch since each source's own `max(published_at)` − buffer → filter → incremental embed → analyze) sequentially, CPU-only, with all paths behind a config `data_root` (env `MND_DATA_ROOT`), so it runs on a laptop / cron VM / GitHub Actions / RCC with no SLURM and no GPU. The parallel SLURM fan-out stays as the full-rebuild path only. Identity-stable institutional re-clustering (`merge_models`) is DEFERRED (ADR-057 §3) — until it lands, `update` refreshes the corpus delta + the Media Cloud press layer (ADR-064) and the narrative set is captioned "as of last full build". Scheduler documented backend-agnostically, not auto-enabled.** | Live (implements 057 §3 partial; relates 016/050; portability for README) |
+| 065 | **Incremental `analyze` re-bake — per-lens fit cache + JEL-encode cache. The fit cache keyed the whole `cfg["dynamics"]` and stored one pickle per cluster (all 3 lenses), so a one-lens prior change refit logistic+Bass identically; now each lens's `FitResult` is cached under a sig hashing only that lens's priors+inference (+series, window, seed). JEL re-encoded all ~365 reps with the 8B model every run even on unchanged clusters (~1h); now each `ClusterJELAssignment` is cached by representation+prototypes+embedder-id, the embedder loads only if a cluster misses, and an unchanged `clusters.parquet` ⇒ zero encodes. Display-mechanics only, results identical (ADR-040).** | Live (relates 050/055/062/063) |
 | 064 | **Media Cloud Premium press layer + press-heating emerging signal — add the premium-press outlet collection (ADR-016: WSJ/Bloomberg/FT/Reuters/…) alongside the broad US-National collection, both via the one Media Cloud module. Wire ADR-057 §2: per already-tracked narrative, `detect_anomalies` on the attention-share ratio over a 4-week window vs a 52-week baseline at k=2σ, surfaced as a SEPARATE "heating in the press" signal beside the institutional recency flag in the Emerging view. Recomputes at bake time from live press against the existing narrative set — no re-embed, no re-cluster, never feeds embedding/clustering/scope (ADR-010/020/046). Degrades to absent when unkeyed.** | Live (implements 057 §2; extends 016/042/048; relates 040) |
 | 059 | **Emerging flag is recency-only — a narrative is emerging iff its onset falls within the 4-week recency window of the corpus frontier, regardless of stage; drops the earlier `stage == growth` gate so a just-arrived narrative whose short history hasn't yet registered a significant trend is still surfaced as newly arrived** | Live (amends 052 emerging clause; relates 016/057) |
 | 058 | **Peak-relative plateau test — `stable` vs `dormant` keyed to the narrative's own high-water window, not its quiet floor; fixes the all-`stable` collapse (342/365) where institutional tails made "above the floor" trivially true. MWU on the zero-heavy daily series was under-powered, so the split is by level: recent-window mean below `dormant_peak_fraction`=0.25 of the peak-window mean → dormant (a definition, not tuned to recovery)** | Live (amends 052 §2/§3 Level test; relates 040) |
@@ -5093,6 +5094,71 @@ before ~2017 (`RELIABLE_SINCE_YEAR`).
 - **Relates.** ADR-016 (Premium press definition), ADR-042/048 (press overlay +
   lead-lag), ADR-057 §2 (this implements it), ADR-063 (the `update` that refreshes
   it), ADR-040 (no-tuning).
+
+---
+
+## ADR-065: Incremental `analyze` re-bake — per-lens fit cache + JEL-encode cache
+
+- **Status**: Accepted
+- **Date**: 2026-07-04
+
+### Context
+
+Phase 6's whole point is that a re-run should cost only what actually changed
+(ADR-050 did this for embedding; ADR-063 for ingest). The `analyze` re-bake broke
+that promise in two places, both surfaced when the ADR-062 SIR-prior change forced
+a full re-run:
+
+1. **The fit cache is all-or-nothing.** `_fit_signature` hashes the *entire*
+   `cfg["dynamics"]` dict, and the cache stores one pickle per *cluster* (all three
+   lenses together). So changing one lens's prior (e.g. the SIR reparametrization)
+   invalidates every cluster's cache and refits logistic and Bass too — byte-for-byte
+   identical work, ~2/3 of the fit cost wasted.
+
+2. **JEL re-encodes on every run.** `analyze` loads the 8B embedder (~1 min) and
+   encodes all ~365 cluster representations (~tens of minutes on CPU) to assign JEL
+   scope, *even when `clusters.parquet` is unchanged*. On a re-analyze — and on
+   every weekly `update`, which re-bakes against the same clusters — that ~1 h is
+   pure waste. JEL assignment is deterministic in (representation text, prototype
+   descriptions, embedder), so it is cacheable exactly like the fits.
+
+### Decision
+
+Cache at the granularity of the thing that changes; both are content-addressed so
+a genuine change still invalidates cleanly, and both are display-mechanics only
+(identical results, no methodology change — ADR-040 intact).
+
+1. **Per-lens fit cache.** `fit_cluster` caches each lens's `FitResult` separately
+   under `fit_{cid}_{model}_{sig}.pkl`, where `sig` hashes the (windowed) series,
+   the **global** fit config (smoothing, fit window, seed), and **only that lens's**
+   priors + inference block (`priors.sir` + `sir_inference` for SIR; `priors.{model}`
+   + `inference` for logistic/Bass). A one-lens config edit re-fits only that lens;
+   the resume granularity becomes per-(cluster, lens), so a wall-clock timeout loses
+   at most one lens of one cluster. Staging and shape-facts stay recomputed (cheap,
+   model-free).
+
+2. **JEL-encode cache.** Each cluster's `ClusterJELAssignment` is cached under a
+   `sig` hashing its JEL representation text, the macro scope, the prototype
+   descriptions, and the embedder model id + revision. On re-run, cached assignments
+   load directly; the 8B embedder is built **only if at least one cluster misses**,
+   and then encodes only the misses (plus the ~20 prototypes). An unchanged
+   `clusters.parquet` ⇒ zero encodes, no model load — the ~1 h step becomes seconds.
+
+### Consequences
+
+- **Cheap re-runs, the Phase-6 promise kept.** A lens-only change re-fits one lens;
+  a pure re-bake (unchanged clusters — the weekly `update` case) skips the JEL
+  encode and the two unchanged lenses entirely. The immediate ADR-062 SIR re-run
+  refits SIR only.
+- **Correctness preserved.** Content-addressed keys mean any real change to inputs
+  (corpus, config, embedder revision) still invalidates; a fixed seed keeps a cache
+  hit identical to a refit. Unreadable/partial entries are discarded and recomputed,
+  as before.
+- **Cache location.** Both live under the dashboard `out_dir` (`.fit_cache`,
+  `.jel_cache`), git-ignored, safe to delete to force a clean rebuild.
+- **Relates.** ADR-050 (incremental embed — same content-addressed philosophy),
+  ADR-063 (the weekly `update` this makes cheap), ADR-055/046 (JEL representation +
+  display-flag semantics unchanged), ADR-062 (the change that exposed #1).
 
 ---
 

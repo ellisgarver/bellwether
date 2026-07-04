@@ -13,7 +13,7 @@ from mnd.utils.config import load_config
 class TestSirClosedFormConfig:
     def test_sir_knobs_live_under_dynamics(self):
         # The fit-cache key hashes repr(cfg["dynamics"]); every fit knob must sit
-        # under dynamics so a change invalidates stale fits (run.py _fit_signature).
+        # under dynamics so a change invalidates stale fits (fitting._lens_fit_signature).
         dyn = load_config()["dynamics"]
         assert "sir_inference" in dyn
         assert 0.0 < float(dyn["fit_window_mass_alpha"]) < 1.0

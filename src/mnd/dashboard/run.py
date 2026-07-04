@@ -108,61 +108,30 @@ def _umap_positions(
     }
 
 
-def _fit_signature(series: pd.Series, cfg: dict[str, Any]) -> str:
-    """Content hash of a cluster's fit inputs, used as the fit-cache key.
-
-    Covers the source series and every config knob that affects a fit — the model
-    set, inference settings, priors, smoothing window, and the global seed — so a
-    corpus change or any config edit produces a new key and invalidates a stale
-    cache entry. Because the seed is fixed, a cache hit is identical to a refit.
-    """
-    import hashlib
-
-    payload = (
-        np.ascontiguousarray(series.to_numpy(dtype=float)).tobytes()
-        + repr(cfg["dynamics"]).encode()
-        + repr(cfg["reproducibility"]["global_random_seed"]).encode()
-    )
-    return hashlib.sha1(payload).hexdigest()[:12]
-
-
 def _fit_with_resume(
     fitter: DynamicsFitter,
     series_by_cid: dict[int, pd.Series],
     cfg: dict[str, Any],
     cache_dir: Path,
 ) -> dict[int, ClusterDynamics]:
-    """Fit every cluster, persisting each result so a re-run resumes mid-corpus.
+    """Fit every cluster, caching each lens so a re-run resumes and reuses (ADR-065).
 
-    Each cluster's ``ClusterDynamics`` is pickled under a content-hashed filename
-    as soon as it is fit; a later invocation reloads any cluster whose inputs are
-    unchanged and fits only the remainder. This lets the dynamics step survive a
-    wall-clock timeout — resubmitting the job continues from the last completed
-    cluster instead of refitting the whole corpus. An unreadable cache entry is
-    discarded and refit rather than aborting the run.
+    Caching is now per-(cluster, lens): ``fit_cluster`` reloads any lens whose own
+    config is unchanged and fits only the rest, so a one-lens prior change re-fits
+    only that lens (not all three), and a wall-clock timeout loses at most one lens
+    of one cluster. Staging + shape-facts are recomputed (cheap, model-free).
     """
-    import pickle
-
     cache_dir.mkdir(parents=True, exist_ok=True)
-    out: dict[int, ClusterDynamics] = {}
-    loaded = 0
-    for cid, series in series_by_cid.items():
-        path = cache_dir / f"cluster_{cid}_{_fit_signature(series, cfg)}.pkl"
-        if path.exists():
-            try:
-                out[cid] = pickle.loads(path.read_bytes())
-                loaded += 1
-                continue
-            except Exception as exc:  # partial/corrupt write — refit this cluster
-                log.warning(
-                    "Fit cache unreadable for cluster %s (%s); refitting", cid, exc
-                )
-        cd = fitter.fit_cluster(cid, series)
-        path.write_bytes(pickle.dumps(cd))
-        out[cid] = cd
+    fitter._cache_loaded = 0
+    fitter._cache_fit = 0
+    out: dict[int, ClusterDynamics] = {
+        cid: fitter.fit_cluster(cid, series, cache_dir=cache_dir)
+        for cid, series in series_by_cid.items()
+    }
     log.info(
-        "Dynamics fits: %d/%d loaded from cache, %d freshly fit (cache dir: %s)",
-        loaded, len(series_by_cid), len(series_by_cid) - loaded, cache_dir,
+        "Dynamics fits: %d lens-fits loaded from cache, %d freshly fit "
+        "(per-lens, ADR-065; cache dir: %s)",
+        fitter._cache_loaded, fitter._cache_fit, cache_dir,
     )
     return out
 
@@ -245,7 +214,6 @@ def run_analysis(
     # JEL scope is a per-narrative display flag, not a gate (ADR-046): out-of-scope
     # narratives are shown with their code, not dropped. Computed for surfaced only.
     cluster_terms = {cid: _terms_from_topic_info(topic_info, cid)[1] for cid in fit_ids}
-    embedder = embedder if embedder is not None else _default_embedder()
     # Richer JEL representation (ADR-055): terms first (always survive the embedder
     # sequence cap) then BERTopic representative-doc text. Bare terms are too thin a
     # signal and pushed core macro clusters (r-star, Basel) to the "Y" catch-all.
@@ -254,12 +222,11 @@ def run_analysis(
         cid: cluster_terms[cid] + _representative_docs_from_topic_info(topic_info, cid, n_jel_docs)
         for cid in fit_ids
     }
-    jel = classify_clusters(jel_representation, embedder=embedder)
-    in_scope_n = sum(1 for cid in fit_ids if cid in jel and jel[cid].in_scope)
-    log.info(
-        "JEL scope: %d/%d surfaced narratives in-scope (E/F/G/H); out-of-scope "
-        "flagged by JEL code, not dropped (ADR-046)",
-        in_scope_n, len(fit_ids),
+    # Cache each cluster's JEL assignment (ADR-065): reuse when the representation is
+    # unchanged, so a re-bake on the same clusters skips the 8B encode entirely —
+    # the embedder loads only if some cluster's representation actually changed.
+    jel = _jel_with_cache(
+        jel_representation, cfg, Path(out_dir) / ".jel_cache", embedder=embedder
     )
 
     # Story cards (extractive) built once here and shared with naming + artifacts,
@@ -520,3 +487,72 @@ def _default_embedder() -> Any:
     from mnd.embedding.embedder import Embedder
 
     return Embedder.from_config("primary")
+
+
+def _jel_with_cache(
+    jel_representation: dict[int, list[str]],
+    cfg: dict[str, Any],
+    cache_dir: Path,
+    embedder: Any | None = None,
+) -> dict[int, Any]:
+    """Assign JEL scope, reusing cached assignments for unchanged clusters (ADR-065).
+
+    JEL assignment is deterministic in (representation text, prototype descriptions,
+    macro scope, embedder). Each cluster's ``ClusterJELAssignment`` is cached under a
+    content hash of those; on a re-bake with an unchanged ``clusters.parquet`` every
+    cluster hits and the 8B embedder is **never loaded** — the ~1 h encode collapses
+    to a cache read. The embedder is built lazily only if at least one cluster misses,
+    and then classifies only the misses (plus the shared prototypes).
+    """
+    import hashlib
+    import pickle
+
+    # NB: use the module-level ``classify_clusters`` (imported at top) so tests can
+    # monkeypatch it; only the constants are pulled in locally for the cache key.
+    from mnd.clustering.jel_classifier import (
+        DEFAULT_MACRO_JEL_SCOPE,
+        JEL_CODE_DESCRIPTIONS,
+    )
+
+    emb = cfg.get("embedding", {})
+    static_sig = hashlib.sha1(
+        (
+            repr(sorted(JEL_CODE_DESCRIPTIONS.items()))
+            + repr(sorted(DEFAULT_MACRO_JEL_SCOPE))
+            + f"{emb.get('model', '')}@{emb.get('revision', '')}"
+        ).encode()
+    ).hexdigest()[:12]
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    out: dict[int, Any] = {}
+    misses: dict[int, Path] = {}
+    for cid, rep in jel_representation.items():
+        sig = hashlib.sha1((repr(rep) + static_sig).encode()).hexdigest()[:12]
+        path = cache_dir / f"jel_{cid}_{sig}.pkl"
+        if path.exists():
+            try:
+                out[cid] = pickle.loads(path.read_bytes())
+                continue
+            except Exception as exc:  # partial/corrupt write — recompute
+                log.warning("JEL cache unreadable for %s (%s); recomputing", cid, exc)
+        misses[cid] = path
+
+    if misses:
+        if embedder is None:
+            embedder = _default_embedder()
+        fresh = classify_clusters(
+            {cid: jel_representation[cid] for cid in misses}, embedder=embedder
+        )
+        for cid, path in misses.items():
+            if cid in fresh:
+                out[cid] = fresh[cid]
+                path.write_bytes(pickle.dumps(fresh[cid]))
+
+    in_scope_n = sum(1 for a in out.values() if getattr(a, "in_scope", False))
+    log.info(
+        "JEL scope (ADR-065): %d/%d loaded from cache, %d encoded; %d in-scope "
+        "(E/F/G/H, out-of-scope flagged not dropped — ADR-046)",
+        len(jel_representation) - len(misses), len(jel_representation),
+        len(misses), in_scope_n,
+    )
+    return out

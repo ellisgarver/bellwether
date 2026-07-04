@@ -92,6 +92,9 @@ class DynamicsFitter:
 
     def __init__(self, cfg: dict[str, Any] | None = None) -> None:
         self._cfg = cfg or load_config()
+        # Per-lens fit-cache accounting (ADR-065), reset per _fit_with_resume run.
+        self._cache_loaded = 0
+        self._cache_fit = 0
 
     @classmethod
     def from_config(cls) -> "DynamicsFitter":
@@ -107,9 +110,18 @@ class DynamicsFitter:
         return series.rolling(window=w, center=True, min_periods=1).mean()
 
     def fit_cluster(
-        self, cluster_id: int | str, daily_counts: pd.Series
+        self,
+        cluster_id: int | str,
+        daily_counts: pd.Series,
+        cache_dir: Path | None = None,
     ) -> ClusterDynamics:
-        """Fit every configured lens; return all side by side (ADR-039)."""
+        """Fit every configured lens; return all side by side (ADR-039).
+
+        When ``cache_dir`` is given, each lens's ``FitResult`` is cached separately
+        keyed on that lens's own config (ADR-065), so a change to one lens's priors
+        re-fits only that lens and a re-bake reloads the rest. Staging and
+        shape-facts are recomputed (cheap, model-free).
+        """
         smoothed = self.smooth_series(daily_counts)
         n = len(smoothed)
         t = np.arange(n, dtype=float)
@@ -117,20 +129,19 @@ class DynamicsFitter:
 
         # Fit the lenses on the central-mass window (ADR-060): drop the sparse
         # leading/trailing stragglers that otherwise stretch nearly every fit series
-        # to ~14 years and destabilise the SIR ODE scan. The window carries the full
-        # active lifecycle (all waves that hold real attention); only negligible-mass
-        # tails are trimmed. Each fitted curve is reprojected back onto the full daily
-        # grid for display, and shape-facts + staging stay on the full series.
+        # to ~14 years. The window carries the full active lifecycle (all waves that
+        # hold real attention); only negligible-mass tails are trimmed. Each fitted
+        # curve is reprojected back onto the full daily grid for display, and
+        # shape-facts + staging stay on the full series.
         alpha = float(self._cfg["dynamics"].get("fit_window_mass_alpha", 0.05))
         i0, i1 = _trim_window_central_mass(y, alpha)
         t_win = np.arange(i1 - i0 + 1, dtype=float)
         y_win = y[i0:i1 + 1]
 
-        all_fits: list[FitResult] = []
-        for model_name in self._cfg["dynamics"]["models_to_fit"]:
-            log.info("Cluster %s — fitting %s on window [%d:%d] of %d", cluster_id, model_name, i0, i1, n)
-            fit = self._fit_model(cluster_id, model_name, t_win, y_win)
-            all_fits.append(_reproject_to_full(fit, i0, n))
+        all_fits: list[FitResult] = [
+            self._fit_lens_cached(cluster_id, model_name, t_win, y_win, y, i0, i1, n, cache_dir)
+            for model_name in self._cfg["dynamics"]["models_to_fit"]
+        ]
 
         staging = self._select_staging_fit(cluster_id, all_fits)
         facts = shape_facts(t, y)
@@ -151,6 +162,44 @@ class DynamicsFitter:
             time_series=smoothed,
             raw_series=daily_counts,
         )
+
+    def _fit_lens_cached(
+        self,
+        cluster_id: int | str,
+        model_name: str,
+        t_win: np.ndarray,
+        y_win: np.ndarray,
+        y_full: np.ndarray,
+        i0: int,
+        i1: int,
+        n: int,
+        cache_dir: Path | None,
+    ) -> FitResult:
+        """Fit one lens, reusing a cached reprojected FitResult when unchanged (ADR-065)."""
+        import pickle
+
+        path = None
+        if cache_dir is not None:
+            sig = _lens_fit_signature(y_full, model_name, self._cfg)
+            path = cache_dir / f"fit_{cluster_id}_{model_name}_{sig}.pkl"
+            if path.exists():
+                try:
+                    fr = pickle.loads(path.read_bytes())
+                    self._cache_loaded += 1
+                    return fr
+                except Exception as exc:  # partial/corrupt write — refit this lens
+                    log.warning(
+                        "Fit cache unreadable for %s/%s (%s); refitting",
+                        cluster_id, model_name, exc,
+                    )
+        log.info("Cluster %s — fitting %s on window [%d:%d] of %d",
+                 cluster_id, model_name, i0, i1, n)
+        fr = _reproject_to_full(self._fit_model(cluster_id, model_name, t_win, y_win), i0, n)
+        self._cache_fit += 1
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(pickle.dumps(fr))
+        return fr
 
     @staticmethod
     def _select_staging_fit(
@@ -478,6 +527,32 @@ class DynamicsFitter:
 # ------------------------------------------------------------------
 # Module-level helpers
 # ------------------------------------------------------------------
+
+def _lens_fit_signature(y_full: np.ndarray, model_name: str, cfg: dict[str, Any]) -> str:
+    """Content hash of one lens's fit inputs (ADR-065).
+
+    Covers the smoothed series, the shared fit config (smoothing window, fit-window
+    alpha, global seed), and only *this lens's* priors + inference block — so a
+    change to one lens's config invalidates only its cache, while the other lenses
+    reload unchanged. A fixed seed keeps a cache hit identical to a refit.
+    """
+    import hashlib
+
+    dyn = cfg["dynamics"]
+    lens_cfg: dict[str, Any] = {
+        "model": model_name,
+        "smoothing": dyn.get("smoothing_window_days"),
+        "fit_window_mass_alpha": dyn.get("fit_window_mass_alpha"),
+        "seed": cfg["reproducibility"]["global_random_seed"],
+        "priors": dyn.get("priors", {}).get(model_name),
+        "inference": dyn.get("sir_inference") if model_name == "sir" else dyn.get("inference"),
+    }
+    payload = (
+        np.ascontiguousarray(np.asarray(y_full, dtype=float)).tobytes()
+        + repr(lens_cfg).encode()
+    )
+    return hashlib.sha1(payload).hexdigest()[:12]
+
 
 def _trim_window_central_mass(y: np.ndarray, alpha: float) -> tuple[int, int]:
     """Index window ``[i0, i1]`` holding the central ``1 - alpha`` of cumulative mass.
