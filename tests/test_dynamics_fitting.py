@@ -30,7 +30,7 @@ class TestSirClosedFormConfig:
         # ADR-062: the Bjornstad disease beta/gamma priors are retired; the shape
         # prior is a gentle Beta on k0 and the scale priors are data-scaled sds.
         sir_pr = load_config()["dynamics"]["priors"]["sir"]
-        assert {"k0_beta_a", "k0_beta_b", "peak_height_log_sd", "timescale_log_sd"} <= set(sir_pr)
+        assert {"k0_beta_a", "k0_beta_b", "peak_height_log_sd", "rise_rate_log_sd"} <= set(sir_pr)
         assert not ({"beta_mean", "gamma_mean"} & set(sir_pr))
 
     def test_sir_budget_is_cheaper_than_production(self):
