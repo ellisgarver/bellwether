@@ -454,7 +454,11 @@ def _mediacloud_overlays(
     ``reliable_since_year`` so the UI can caption that rather than show a flat line.
     Display/validation only — never feeds embedding, clustering, or the fit.
     """
-    from mnd.detection.mediacloud import MediaCloudDetector, RELIABLE_SINCE_YEAR
+    from mnd.detection.mediacloud import (
+        MediaCloudDetector,
+        RELIABLE_SINCE_YEAR,
+        press_heating,
+    )
     from mnd.dashboard.artifacts import MediaCloudArtifact
 
     try:
@@ -463,10 +467,13 @@ def _mediacloud_overlays(
         log.warning("Media Cloud overlay skipped — no MEDIACLOUD key (%s); section absent", exc)
         return {}
 
-    k = int(cfg.get("detection", {}).get("mediacloud", {}).get("query_top_terms", 6))
+    mc_cfg = cfg.get("detection", {}).get("mediacloud", {})
+    k = int(mc_cfg.get("query_top_terms", 6))
+    heat_cfg = mc_cfg.get("press_heating", {})
     caption = f"Broad-press story counts (Media Cloud). Reliable from ~{RELIABLE_SINCE_YEAR}."
 
     out: dict[int, Any] = {}
+    n_heating = 0
     for cid in fit_ids:
         query = _mediacloud_query(cluster_terms.get(cid, []), k)
         if not query:
@@ -482,6 +489,17 @@ def _mediacloud_overlays(
             continue
         if not records:
             continue
+        # Press-heating: recent attention-share vs the narrative's own yearly
+        # baseline (ADR-064 / ADR-057 §2). Display-only; None when too little history.
+        heating = press_heating(
+            records,
+            recent_weeks=int(heat_cfg.get("recent_weeks", 4)),
+            baseline_weeks=int(heat_cfg.get("baseline_weeks", 52)),
+            k=float(heat_cfg.get("k_sigma", 2.0)),
+            reliable_since_year=RELIABLE_SINCE_YEAR,
+        )
+        if heating and heating.get("is_heating"):
+            n_heating += 1
         out[cid] = MediaCloudArtifact(
             dates=[r["date"] for r in records],
             story_count=[int(r["story_count"]) for r in records],
@@ -489,10 +507,11 @@ def _mediacloud_overlays(
             reliable_since_year=RELIABLE_SINCE_YEAR,
             caption=caption,
             granger=_press_granger(adj[cid], records),
+            press_heating=heating,
         )
     log.info(
-        "Built Media Cloud press overlay for %d/%d narratives (ADR-042/048)",
-        len(out), len(fit_ids),
+        "Built Media Cloud press overlay for %d/%d narratives (%d heating) (ADR-042/048/064)",
+        len(out), len(fit_ids), n_heating,
     )
     return out
 

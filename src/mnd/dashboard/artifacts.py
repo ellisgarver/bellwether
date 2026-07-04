@@ -116,6 +116,10 @@ class MediaCloudArtifact:
     # Bidirectional press-vs-discourse lead-lag (ADR-048), same shape as
     # MarketsArtifact.granger; None when there aren't enough weekly obs.
     granger: dict[str, Any] | None = None
+    # Press-heating signal (ADR-064): recent press attention-share vs the narrative's
+    # own yearly baseline. dict {is_heating, z, k, recent_weeks, baseline_weeks,
+    # caption} or None when there is too little reliable history to judge.
+    press_heating: dict[str, Any] | None = None
 
 
 @dataclass
@@ -185,6 +189,7 @@ class IndexEntry:
     in_scope: bool = True
     jel_code: str | None = None
     is_emerging: bool = False                    # 4-week recency flag (ADR-019)
+    is_press_heating: bool = False               # press spiking now (ADR-064; separate signal)
     umap_xy: tuple[float, float] | None = None   # 2-D display projection (ADR-044)
     umap_xyz: tuple[float, float, float] | None = None  # 3-D display projection (ADR-044)
     similar_edges: list[tuple[int, float]] = field(default_factory=list)

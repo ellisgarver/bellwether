@@ -53,6 +53,16 @@ export interface MediaCloud {
   ratio: number[];
   reliable_since_year: number;
   caption: string;
+  // Press-heating (ADR-064): recent attention-share vs the narrative's yearly
+  // baseline. null when there's too little reliable history to judge.
+  press_heating?: {
+    is_heating: boolean;
+    z: number;
+    k: number;
+    recent_weeks: number;
+    baseline_weeks: number;
+    caption: string;
+  } | null;
 }
 
 export interface Markets {
@@ -123,6 +133,7 @@ export interface IndexEntry {
   in_scope: boolean;
   jel_code: string | null;
   is_emerging: boolean;
+  is_press_heating?: boolean;   // press spiking on this tracked narrative now (ADR-064)
   umap_xy: [number, number] | null;
   umap_xyz: [number, number, number] | null;
   similar_edges: [number, number][];
