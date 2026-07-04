@@ -302,6 +302,11 @@ class DynamicsFitter:
 
         with pm.Model():
             # Data-scaled, weakly-informative priors (ADR-062) — no epidemiology.
+            # Sampled in the DATA-IDENTIFIED coordinates (rise_rate, k0), not
+            # (timescale, k0): timescale and k0 act on the curve only through their
+            # combination, so sampling them directly is a curved ridge that fails to
+            # mix (0/365 converged). rise_rate is pinned by the rising limb and k0 by
+            # the decaying limb; timescale is derived, collapsing the ridge (ADR-062).
             peak_height = pm.LogNormal(
                 "peak_height", mu=float(np.log(obs_peak)),
                 sigma=float(priors["peak_height_log_sd"]),
@@ -312,10 +317,13 @@ class DynamicsFitter:
             # k0 = 1/R0 in (0,1); Beta(a,b) is a gentle shape prior (a=b=2 -> centred
             # on k0=0.5, i.e. R0=2), not tuned to any anchor.
             k0 = pm.Beta("k0", alpha=float(priors["k0_beta_a"]), beta=float(priors["k0_beta_b"]))
-            timescale = pm.LogNormal(
-                "timescale", mu=float(np.log(span / 6.0 + 1.0)),
-                sigma=float(priors["timescale_log_sd"]),
+            # Early exponential growth rate (per day), data-scaled to the window.
+            rise_rate = pm.LogNormal(
+                "rise_rate", mu=float(np.log(6.0 / span)),
+                sigma=float(priors["rise_rate_log_sd"]),
             )
+            # timescale = (1-k0)/(k0*rise_rate) since rise_rate = (1-k0)/(k0*timescale).
+            timescale = (1.0 - k0) / (k0 * rise_rate)
             sigma = pm.HalfNormal("sigma", sigma=float(y.std() + 1.0))
 
             # Closed-form prevalence in PyTensor (mirrors models.sir_kssir_curve).
@@ -338,14 +346,16 @@ class DynamicsFitter:
         import arviz as az
 
         summary = az.summary(
-            trace, var_names=["peak_height", "peak_time", "k0", "timescale"],
+            trace, var_names=["peak_height", "peak_time", "k0", "rise_rate"],
             hdi_prob=0.94,
         )
         converged = _check_convergence(trace)
         ph = float(summary.loc["peak_height", "mean"])
         pt_mean = float(summary.loc["peak_time", "mean"])
         k0_mean = float(summary.loc["k0", "mean"])
-        ts_mean = float(summary.loc["timescale", "mean"])
+        rr_mean = float(summary.loc["rise_rate", "mean"])
+        # timescale derived from the sampled (rise_rate, k0), matching the model.
+        ts_mean = (1.0 - k0_mean) / (k0_mean * max(rr_mean, 1e-9))
 
         curve = sir_kssir_curve(t, ph, pt_mean, k0_mean, ts_mean)
         ll = _gaussian_loglik(y, curve)

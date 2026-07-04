@@ -186,7 +186,7 @@ dynamics:
       k0_beta_a: 2.0
       k0_beta_b: 2.0
       peak_height_log_sd: 0.5       # LogNormal sd around the observed peak
-      timescale_log_sd: 0.7         # LogNormal sd around span/6 days per reduced unit
+      rise_rate_log_sd: 1.0         # LogNormal sd around 6/span (per-day early growth rate)
     logistic:
       L_log_mean: 5.0              # log(carrying capacity) prior mean
       L_log_sd: 2.0
