@@ -71,7 +71,7 @@ def _topic_info() -> pd.DataFrame:
 class _FakeFitter:
     """Returns a converged growth-stage ClusterDynamics echoing the input series."""
 
-    def fit_cluster(self, cluster_id, daily_counts):
+    def fit_cluster(self, cluster_id, daily_counts, cache_dir=None):
         fit = FitResult(
             cluster_id=cluster_id, model_name="sir", converged=True, aicc=10.0,
             peak_time_mean=5.0,
@@ -176,39 +176,48 @@ def _echo_dynamics(cluster_id, daily_counts):
     )
 
 
-def test_fit_with_resume_reuses_cache_and_invalidates_on_config_change(tmp_path):
-    """A warm re-run reloads fits without refitting; a config change refits.
+def test_per_lens_fit_cache_reuses_and_invalidates_per_lens(tmp_path):
+    """Per-lens cache (ADR-065): a warm re-bake reloads every lens without refitting,
+    and a one-lens config change re-fits only that lens — not all three.
 
-    This is the property the SLURM dynamics step relies on: resubmitting after a
-    wall-clock timeout must continue from the cached clusters, and a corpus or
-    config edit must not silently serve stale fits.
+    Uses the real DynamicsFitter with `_fit_model` stubbed (no PyMC) so the cache
+    key / reuse path is exercised end-to-end.
     """
-    series = _series_by_cid()
+    import copy
+
+    from mnd.dynamics.fitting import DynamicsFitter, FitResult
+    from mnd.utils.config import load_config
+
+    cfg = load_config()
     cache_dir = tmp_path / ".fit_cache"
+    series = _series_by_cid()[0]
 
-    calls: list = []
+    class _StubFitter(DynamicsFitter):
+        def __init__(self, c):
+            super().__init__(c)
+            self.model_calls: list = []
 
-    class _CountingFitter:
-        def fit_cluster(self, cluster_id, daily_counts):
-            calls.append(cluster_id)
-            return _echo_dynamics(cluster_id, daily_counts)
+        def _fit_model(self, cid, model_name, t, y):
+            self.model_calls.append((cid, model_name))
+            return FitResult(cluster_id=cid, model_name=model_name, converged=True,
+                             aicc=1.0, curve=[float(v) for v in y])
 
-    # Cold run: both clusters are fit and written to the cache.
-    first = driver._fit_with_resume(_CountingFitter(), series, CFG, cache_dir)
-    assert sorted(calls) == [0, 1]
-    assert set(first) == {0, 1}
+    n_lenses = len(cfg["dynamics"]["models_to_fit"])
 
-    # Warm run: a fitter that raises if called proves every result came from disk.
-    class _NoFitFitter:
-        def fit_cluster(self, cluster_id, daily_counts):
-            raise AssertionError(f"cluster {cluster_id} refit despite a warm cache")
+    # Cold: every lens is fit and cached.
+    cold = _StubFitter(cfg)
+    cold.fit_cluster(0, series, cache_dir=cache_dir)
+    assert len(cold.model_calls) == n_lenses and cold._cache_fit == n_lenses
 
-    warm = driver._fit_with_resume(_NoFitFitter(), series, CFG, cache_dir)
-    assert {cid: cd.cluster_id for cid, cd in warm.items()} == {0: 0, 1: 1}
+    # Warm: nothing refits — all lenses come from disk.
+    warm = _StubFitter(cfg)
+    warm.fit_cluster(0, series, cache_dir=cache_dir)
+    assert warm.model_calls == [] and warm._cache_loaded == n_lenses
 
-    # Changing the seed changes the signature, so the cold fitter runs again.
-    calls.clear()
-    changed_cfg = {**CFG, "reproducibility": {"global_random_seed": 7}}
-    counting = _CountingFitter()
-    driver._fit_with_resume(counting, series, changed_cfg, cache_dir)
-    assert sorted(calls) == [0, 1]
+    # One-lens change: only SIR's cache key changes, so only SIR refits.
+    cfg2 = copy.deepcopy(cfg)
+    cfg2["dynamics"]["priors"]["sir"]["k0_beta_a"] = 3.0
+    changed = _StubFitter(cfg2)
+    changed.fit_cluster(0, series, cache_dir=cache_dir)
+    assert changed.model_calls == [(0, "sir")]
+    assert changed._cache_fit == 1 and changed._cache_loaded == n_lenses - 1
