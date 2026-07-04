@@ -110,6 +110,28 @@ class BertopicPipeline:
             "n_topics": n_topics,
         }
 
+    def save_model(self, path: "str | Path") -> None:
+        """Persist the fitted BERTopic model (ADR-066 prereq for `merge_models`).
+
+        Safetensors serialization to a directory; the embedding model is stored by
+        id (not re-serialized), matching how `embed`/JEL pin it. Required for the
+        weekly incremental re-cluster, which merges a new-week model into this one —
+        `merge_models` needs the model object, not just `clusters.parquet`.
+        """
+        from pathlib import Path as _Path
+
+        if self._model is None:
+            raise RuntimeError("No fitted model to save; call fit_transform first.")
+        out = _Path(path)
+        out.mkdir(parents=True, exist_ok=True)
+        self._model.save(
+            str(out),
+            serialization="safetensors",
+            save_ctfidf=True,
+            save_embedding_model=self._cfg.get("embedding", {}).get("model"),
+        )
+        log.info("Saved BERTopic model → %s (safetensors)", out)
+
     # ------------------------------------------------------------------
     # Bootstrap stability (diagnostic, not a gate)
     # ------------------------------------------------------------------

@@ -78,6 +78,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 060 | **Fit lenses on the central-mass window + SIR robustness overhaul — nearly every fit-series spans ~14yr from sparse straggler tails, which broke SIR (0/365, γ→0 `HalfNormal` ridge + 855-step Euler scan). Fix: fit all three lenses on the central 95% of cumulative attention mass (α=0.05, keeps multi-wave, no new param; staging/display stay full-span); SIR gets LogNormal β/γ priors, an adaptive grid bounding the scan ≤200 steps, and a `max_treedepth` fail-fast cap so unfittable clusters go non-converged in seconds instead of grinding. Same convergence gate for all three, no outbreak-eligibility filter.** | Live (supersedes 053; amends 039/052; relates 040/058) |
 | 062 | **SIR lens via the Schlickeiser–Kröger closed-form solution — retire the `pytensor.scan` Euler ODE (the sole compute pole: ~23 min × 365 clusters ≈ 140 CPU-h) for the near-exact analytic prevalence I(τ), elementary on both branches (rise `η·e^{g−1}`, decay `(k₀/κ)·cosh⁻²ζ`); fit collapses to logistic/Bass cost (1–3 ms). De-risk surfaced R₀ is NOT identifiable from a single curve (true of the current Euler fit too, and it contaminated logistic's R₀=1+k/γ), so DROP R₀ + J∞, RETIRE the Bjørnstad disease β/γ priors + the `N_pop=2·Σy` fudge, and report only curve-identifiable numbers in real units: SIR → rise/decay rates + asymmetry + peak; logistic → doubling time + inflection + plateau; Bass unchanged (field-anchored p/q, total reach m). Display-only + convergence gate + no-tuning intact.** | Live (supersedes SIR numerics + disease priors of 053/060; amends 039/052; relates 040) |
 | 063 | **Portable weekly-update orchestration — a single-process `run_pipeline.py update` runs the weekly delta (per-source over-fetch since each source's own `max(published_at)` − buffer → filter → incremental embed → analyze) sequentially, CPU-only, with all paths behind a config `data_root` (env `MND_DATA_ROOT`), so it runs on a laptop / cron VM / GitHub Actions / RCC with no SLURM and no GPU. The parallel SLURM fan-out stays as the full-rebuild path only. Identity-stable institutional re-clustering (`merge_models`) is DEFERRED (ADR-057 §3) — until it lands, `update` refreshes the corpus delta + the Media Cloud press layer (ADR-064) and the narrative set is captioned "as of last full build". Scheduler documented backend-agnostically, not auto-enabled.** | Live (implements 057 §3 partial; relates 016/050; portability for README) |
+| 066 | **Weekly incremental re-cluster via BERTopic `merge_models` (design + prereq). Prereq (accepted): the `cluster` stage now persists the fitted BERTopic model (safetensors → `topic_model/`) — it was discarded, and `merge_models` needs the model object, not just `clusters.parquet`. Mechanism (proposed, pending validation): `update` fits a new-week model and `merge_models([base,new], min_similarity=τ)` to keep existing topic ids/URLs/names and append only genuinely-new topics; gated on an anchor-id-stability test (a synthetic weekly merge must not renumber any of the 10 anchors). τ + split/merge back-test + cron cadence deferred until that passes.** | Proposed (implements 057 §3; relates 050/056/063/065) |
 | 065 | **Incremental `analyze` re-bake — per-lens fit cache + JEL-encode cache. The fit cache keyed the whole `cfg["dynamics"]` and stored one pickle per cluster (all 3 lenses), so a one-lens prior change refit logistic+Bass identically; now each lens's `FitResult` is cached under a sig hashing only that lens's priors+inference (+series, window, seed). JEL re-encoded all ~365 reps with the 8B model every run even on unchanged clusters (~1h); now each `ClusterJELAssignment` is cached by representation+prototypes+embedder-id, the embedder loads only if a cluster misses, and an unchanged `clusters.parquet` ⇒ zero encodes. Display-mechanics only, results identical (ADR-040).** | Live (relates 050/055/062/063) |
 | 064 | **Media Cloud Premium press layer + press-heating emerging signal — add the premium-press outlet collection (ADR-016: WSJ/Bloomberg/FT/Reuters/…) alongside the broad US-National collection, both via the one Media Cloud module. Wire ADR-057 §2: per already-tracked narrative, `detect_anomalies` on the attention-share ratio over a 4-week window vs a 52-week baseline at k=2σ, surfaced as a SEPARATE "heating in the press" signal beside the institutional recency flag in the Emerging view. Recomputes at bake time from live press against the existing narrative set — no re-embed, no re-cluster, never feeds embedding/clustering/scope (ADR-010/020/046). Degrades to absent when unkeyed.** | Live (implements 057 §2; extends 016/042/048; relates 040) |
 | 059 | **Emerging flag is recency-only — a narrative is emerging iff its onset falls within the 4-week recency window of the corpus frontier, regardless of stage; drops the earlier `stage == growth` gate so a just-arrived narrative whose short history hasn't yet registered a significant trend is still surfaced as newly arrived** | Live (amends 052 emerging clause; relates 016/057) |
@@ -5159,6 +5160,80 @@ a genuine change still invalidates cleanly, and both are display-mechanics only
 - **Relates.** ADR-050 (incremental embed — same content-addressed philosophy),
   ADR-063 (the weekly `update` this makes cheap), ADR-055/046 (JEL representation +
   display-flag semantics unchanged), ADR-062 (the change that exposed #1).
+
+---
+
+## ADR-066: Weekly incremental re-cluster via BERTopic `merge_models` (design + model-persistence prereq)
+
+- **Status**: Proposed (prereq accepted; merge mechanism pending anchor-id validation)
+- **Date**: 2026-07-04
+
+### Context
+
+ADR-057 §3 chose BERTopic's `merge_models` as the weekly-refresh mechanism: fold
+the new week into the existing narrative set so **every existing topic keeps its
+id** (its narrative-page URL and ADR-056 name are stable *by construction*) and
+only genuinely-new topics (similarity to every existing topic below τ) are
+appended. ADR-063's `update` currently defers this — new institutional articles are
+parked, the narrative set is "as of last build" — precisely because this piece is
+unbuilt and needs validation.
+
+A blocker surfaced on inspection: **the fitted BERTopic model is never persisted.**
+The `cluster` stage runs `BertopicPipeline.fit_transform` and saves only
+`clusters.parquet` (topic assignments) + `topic_info.parquet` + `embeddings.npy`;
+the model object (`pipeline._model`) is discarded. `merge_models([base, new])`
+operates on *model objects*, so without a saved base model there is nothing to
+merge the new week into. Persisting the model is a hard prerequisite for the whole
+weekly-refresh path, independent of the merge details.
+
+### Decision
+
+**Part A — model-persistence prereq (accepted, buildable now).** The `cluster`
+stage persists the fitted BERTopic model with safetensors serialization to
+`topic_model/` alongside `clusters.parquet`. The embedding model is referenced by
+id (not re-serialized), matching how `embed` and JEL already pin it. A saved model
+plus the existing `clusters.parquet` is enough to (a) merge a new week and (b)
+reproduce assignments. This is a self-contained addition with no effect on current
+outputs.
+
+**Part B — weekly merge mechanism (proposed; pending validation).**
+
+1. `update` (once merged in): per-source delta ingest → filter → incremental embed
+   of only the new chunks (ADR-050) → **fit a BERTopic model on the new-week docs**
+   → `merge_models([base_model, new_model], min_similarity=τ)` → persist the merged
+   model + refreshed `clusters.parquet` → `analyze` (which now, via ADR-065, refits
+   only new/changed clusters and re-encodes JEL only for them).
+2. **τ (the similarity floor).** A new-week topic within τ of an existing topic is
+   absorbed into it (existing id kept); below τ it is appended as a new id. Higher τ
+   fragments continuing stories into new topics; lower τ over-absorbs distinct new
+   stories. A starting value is proposed and **reported, not tuned to anchor
+   recovery** (ADR-040); the validation below, not anchor performance, sizes it.
+3. **Topic drift (split/merge).** A narrative that splits across a weekly boundary,
+   or two that converge, is handled by `merge_models`' similarity step; the ADR
+   documents the observed behavior on a back-test rather than a bespoke assignment
+   layer.
+4. **Anchor-id-stability gate (the credibility check ADR-057 required).** A test
+   that runs a synthetic weekly merge and **fails loudly if any of the 10 anchor
+   narratives changes topic id across the merge.** The weekly path does not ship
+   until this passes: id stability is the whole point.
+5. **Occasional full rebuild** stays the clean-slate path (the SLURM fan-out), with
+   Hungarian centroid-matching to map fresh ids back to the prior set when a rebuild
+   is warranted — never the weekly mechanism.
+
+### Consequences
+
+- **Unblocks true weekly narrative-set updates:** existing narratives extend with
+  the week's articles, new ones appear, and ids/URLs/names persist — the tracking
+  invariant ADR-057 named. Combined with ADR-065, the weekly re-bake refits only
+  what changed.
+- **Prereq is low-risk and immediately useful** (also lets anyone reload the model
+  to inspect or reproduce clustering). Part B is gated on the anchor-id test.
+- **Deferred until validated:** τ's final value, the split/merge back-test, and the
+  cron cadence (ADR-057 said "manual → cron once identity stability is validated").
+- **Relates.** ADR-057 §3 (the design this implements), ADR-050 (incremental embed),
+  ADR-063 (the `update` this completes), ADR-065 (per-cluster refit/JEL reuse that
+  makes the merged re-bake cheap), ADR-056 (names keyed on representation, stable
+  across a merge), the anchor set (the id-stability gate).
 
 ---
 
