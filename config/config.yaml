@@ -214,6 +214,20 @@ detection:
     # no-tuning rule holds); 6 balances topical specificity against an over-narrow
     # query that returns near-zero press counts.
     query_top_terms: 6
+    # Premium-press outlet collection id(s) — the Layer-1B financial-press proxy
+    # (ADR-016/064). Media Cloud has no single canonical "premium press" id, so the
+    # operator supplies collection id(s) for their premium-press outlets here; empty
+    # -> premium overlay absent, falls back to the broad collection.
+    premium_collection_ids: []
+    # Press-heating emerging signal (ADR-064 / ADR-057 §2). Fires when a narrative's
+    # most-recent `recent_weeks` of press attention-share sits >= `k_sigma` σ above
+    # its own trailing `baseline_weeks` baseline. Fixed a priori, not tuned (ADR-040):
+    # recent window matches the institutional emerging horizon (4 weeks), baseline is
+    # a year (seasonality), k=2 is the deliberately sensitive start (~upper 2.3%).
+    press_heating:
+      recent_weeks: 4
+      baseline_weeks: 52
+      k_sigma: 2.0
 
 # -----------------------------------------------------------------------------
 # Stage classification — model-free attention-trajectory test

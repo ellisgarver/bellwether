@@ -53,6 +53,14 @@ log = get_logger(__name__)
 # US National collection — the broad US news proxy for macro discourse (ADR-042).
 US_NATIONAL_COLLECTION = 34412234
 
+# Premium-press outlet collection(s) — the Layer-1B financial-press proxy (ADR-016:
+# WSJ, Bloomberg, FT, Reuters, NYT, Barron's, Dow Jones, MarketWatch, AP Business …).
+# Media Cloud has no single canonical "premium press" id, so this is left to config
+# (``detection.mediacloud.premium_collection_ids``); the operator supplies the
+# collection id(s) for their premium-press outlets. Empty -> the premium overlay is
+# simply absent and callers fall back to the broad collection (ADR-064).
+PREMIUM_PRESS_COLLECTION_IDS: list[int] = []
+
 # Counts are unreliable before roughly this year; surfaced so callers can caption.
 RELIABLE_SINCE_YEAR = 2017
 
@@ -227,6 +235,76 @@ class MediaCloudDetector:
             z = (r["story_count"] - mean) / stdev
             result.append({**r, "is_anomaly": z > threshold_sigma, "z_score": round(z, 3)})
         return result
+
+
+def press_heating(
+    records: list[dict],
+    *,
+    recent_weeks: int = 4,
+    baseline_weeks: int = 52,
+    k: float = 2.0,
+    reliable_since_year: int = RELIABLE_SINCE_YEAR,
+) -> dict | None:
+    """Press-heating signal for one narrative (ADR-064 / ADR-057 §2).
+
+    Fires when a narrative's most-recent ``recent_weeks`` of press *attention share*
+    (``story_count / total_count``, robust to overall press-volume drift) sits
+    ``>= k`` standard deviations above its own trailing ``baseline_weeks`` baseline.
+    This is a display-only "the press is spiking on a story we already track" flag,
+    kept separate from the institutional recency flag; it never feeds embedding,
+    clustering, or scope (ADR-010/020/046).
+
+    Operates on the ``ratio`` field of the daily records (see ``fetch_story_counts``).
+    Records are resampled to weekly means so the window matches the institutional
+    emerging horizon and the baseline carries a year of seasonality. Returns ``None``
+    when there is too little reliable history to judge (fewer than
+    ``recent_weeks + baseline_weeks`` reliable weeks, or all-zero baseline).
+
+    The returned dict is display-ready:
+        {is_heating, z, recent_mean, baseline_mean, k, recent_weeks,
+         baseline_weeks, caption}
+    """
+    import pandas as pd
+
+    if not records:
+        return None
+    rows = [
+        (d, float(r.get("ratio", 0.0) or 0.0))
+        for r in records
+        if (d := _coerce_date(r.get("date"))) is not None
+        and d.year >= reliable_since_year
+    ]
+    if not rows:
+        return None
+    s = pd.Series(
+        [v for _, v in rows], index=pd.DatetimeIndex([d for d, _ in rows])
+    ).sort_index()
+    weekly = s.resample("W").mean().dropna()
+    if len(weekly) < recent_weeks + baseline_weeks:
+        return None
+
+    recent = weekly.iloc[-recent_weeks:]
+    baseline = weekly.iloc[-(recent_weeks + baseline_weeks):-recent_weeks]
+    base_mean = float(baseline.mean())
+    base_std = float(baseline.std(ddof=1))
+    if base_std <= 0.0:
+        return None
+    recent_mean = float(recent.mean())
+    z = (recent_mean - base_mean) / base_std
+    return {
+        "is_heating": bool(z >= k),
+        "z": round(z, 3),
+        "recent_mean": recent_mean,
+        "baseline_mean": base_mean,
+        "k": k,
+        "recent_weeks": recent_weeks,
+        "baseline_weeks": baseline_weeks,
+        "caption": (
+            f"press attention {z:.1f}σ above its {baseline_weeks}-week baseline"
+            if z >= k
+            else f"press attention within {k:.0f}σ of its {baseline_weeks}-week baseline"
+        ),
+    }
 
 
 def _coerce_date(value) -> date | None:
