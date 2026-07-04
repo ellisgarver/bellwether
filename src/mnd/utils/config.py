@@ -59,3 +59,16 @@ def load_yaml(relative_path: str) -> dict[str, Any]:
 def project_root() -> Path:
     """Public accessor for the project root."""
     return _project_root()
+
+
+def data_root() -> Path:
+    """Root for reading/writing pipeline data (ADR-063).
+
+    Defaults to the project root, so a fresh clone works with no configuration
+    (``data/...`` lives under the repo). Set ``MND_DATA_ROOT`` to redirect all
+    data elsewhere — e.g. RCC points it at ``/scratch/...`` to keep large outputs
+    off the home quota — without any cluster-specific path baked into the code.
+    Config ``paths.*`` are resolved relative to this.
+    """
+    env = os.environ.get("MND_DATA_ROOT")
+    return Path(env) if env else _project_root()
