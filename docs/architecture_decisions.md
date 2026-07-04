@@ -5165,8 +5165,19 @@ a genuine change still invalidates cleanly, and both are display-mechanics only
 
 ## ADR-066: Weekly incremental re-cluster via BERTopic `merge_models` (design + model-persistence prereq)
 
-- **Status**: Proposed (prereq accepted; merge mechanism pending anchor-id validation)
+- **Status**: Proposed (prereq accepted + shipped; mechanism validated synthetically,
+  pending real-corpus anchor-id validation + `update` wiring)
 - **Date**: 2026-07-04
+
+> **Validation note (2026-07-04).** `merge_models` was probed on BERTopic 0.16.4:
+> with realistic (angularly-separated) topic embeddings it **preserves base topic
+> ids**, appends genuinely-new topics, and `merged.transform` routes new-week docs
+> to the kept id (continuing story) or the appended id (new story). An initial
+> "scrambled assignment" observation was a degenerate-toy-data artifact (collinear
+> blobs from the origin, on which cosine cannot separate topics), not a merge fault.
+> `src/mnd/clustering/incremental.py` implements `merge_new_week` + the
+> `anchors_keep_ids` gate; the synthetic anchor-id-stability test passes. Still
+> gated on running the gate against the **real** anchors + wiring into `update`.
 
 ### Context
 
