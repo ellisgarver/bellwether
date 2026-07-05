@@ -83,38 +83,43 @@ class MarketsOverlay:
         return MARKET_SERIES.get(series, series)
 
     def build_overlay(
-        self, daily_volume: pd.Series, series: str = "vix"
+        self,
+        daily_volume: pd.Series,
+        series: str = "vix",
+        market_weekly: pd.Series | None = None,
     ) -> pd.DataFrame:
         """Return a weekly ``[volume, market]`` DataFrame aligned on a common index.
 
-        The market series is fetched over the narrative's own date span and
-        resampled to the weekly mean (markets are a level, not a count). Rows
-        where either column is missing are dropped so Granger sees a clean,
-        gap-free pair.
+        The market series is resampled to the weekly mean (markets are a level, not a
+        count) and aligned to the narrative's volume; rows missing either column are
+        dropped so Granger sees a clean, gap-free pair. Pass ``market_weekly`` — the
+        whole FRED series fetched once and resampled — to slice per narrative instead
+        of re-fetching FRED for every one (ADR-068). Without it, the series is fetched
+        per call over the narrative's own span (the standalone path).
         """
-        if self._fred is None:
-            raise ValueError("No FRED client configured; use MarketsOverlay.from_env().")
-
         weekly = self.weekly_volume(daily_volume)
         if weekly.empty:
             return pd.DataFrame(columns=["volume", "market"])
 
         series_id = self._resolve_series_id(series)
-        start = weekly.index.min().date()
-        end = weekly.index.max().date()
+        if market_weekly is None:
+            if self._fred is None:
+                raise ValueError("No FRED client configured; use MarketsOverlay.from_env().")
+            raw = self._fred.fetch(
+                series={series_id: series_id},
+                start=weekly.index.min().date(),
+                end=weekly.index.max().date(),
+            )
+            if raw is None or raw.empty or series_id not in raw.columns:
+                log.warning("Markets overlay: FRED returned no data for %s", series_id)
+                out = weekly.to_frame()
+                out["market"] = np.nan
+                return out
+            market = raw[series_id].copy()
+            market.index = pd.to_datetime(market.index)
+            market_weekly = market.resample("W").mean()
 
-        raw = self._fred.fetch(series={series_id: series_id}, start=start, end=end)
-        if raw is None or raw.empty or series_id not in raw.columns:
-            log.warning("Markets overlay: FRED returned no data for %s", series_id)
-            out = weekly.to_frame()
-            out["market"] = np.nan
-            return out
-
-        market = raw[series_id].copy()
-        market.index = pd.to_datetime(market.index)
-        market_weekly = market.resample("W").mean()
-        market_weekly.name = "market"
-
+        market_weekly = market_weekly.rename("market")
         out = pd.concat([weekly, market_weekly], axis=1).dropna()
         out.attrs["series_id"] = series_id
         out.attrs["series_label"] = series

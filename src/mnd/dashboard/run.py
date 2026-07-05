@@ -257,9 +257,10 @@ def run_analysis(
 
     # 5. Display overlays (ADR-041/047 markets, ADR-042/048 press) — each built per
     # narrative when its key is configured, absent otherwise (the front end omits
-    # the section). Both are display/validation only and never feed the fit.
-    markets = _markets_overlays(adj, fit_ids)
-    mediacloud = _mediacloud_overlays(adj, fit_ids, cluster_terms, cfg)
+    # the section). Delta-cached + fetched efficiently (ADR-068); display-only.
+    overlay_cache = Path(out_dir) / ".overlay_cache"
+    markets = _markets_overlays(adj, fit_ids, cfg, overlay_cache)
+    mediacloud = _mediacloud_overlays(adj, fit_ids, cluster_terms, cfg, overlay_cache)
 
     # 6. Assemble + persist.
     index, narratives = build_dashboard_artifacts(
@@ -315,17 +316,19 @@ def _naming_inputs(
 
 
 def _markets_overlays(
-    adj: dict[int, pd.Series], fit_ids: list[int]
+    adj: dict[int, pd.Series], fit_ids: list[int], cfg: dict[str, Any], cache_dir: Path,
 ) -> dict[int, Any]:
     """Build a VIX markets overlay + bidirectional Granger per narrative (ADR-047).
 
-    VIX is the canonical series and the only one the lag test runs against; extra
-    series are display-only and not computed here. Requires a FRED key — if one is
-    absent (or a fetch fails), the affected narratives simply get no markets block
-    and the front end omits the section. Short narratives (< 20 usable weekly obs)
-    still get the overlay drawn; their Granger readout reports "insufficient data".
+    VIX is the canonical series and the only one the lag test runs against. It is
+    fetched from FRED **once** over the whole corpus span (delta-cached, ADR-068) and
+    sliced per narrative — not re-fetched 365×. Requires a FRED key — if one is
+    absent (or the fetch fails), narratives get no markets block and the front end
+    omits the section. Short narratives (< 20 usable weekly obs) still get the overlay
+    drawn; their Granger readout reports "insufficient data".
     """
     from mnd.detection.markets import TIMING_NOT_CAUSE, MarketsOverlay
+    from mnd.detection.series_cache import cache_key, delta_fetch
     from mnd.dashboard.artifacts import MarketsArtifact
 
     try:
@@ -334,10 +337,43 @@ def _markets_overlays(
         log.warning("Markets overlay skipped — no FRED client (%s); section absent", exc)
         return {}
 
+    # Fetch the (single) VIX series once, delta-cached, over the global span.
+    series_id = overlay._resolve_series_id("vix")
+    starts = [adj[cid].index.min() for cid in fit_ids if len(adj[cid])]
+    if not starts:
+        return {}
+    global_start = min(starts).date().isoformat()
+    today = pd.Timestamp.utcnow().date().isoformat()
+    refetch_days = int(cfg.get("detection", {}).get("markets", {}).get("refetch_days", 7))
+
+    def _fred_fetch(a: str, b: str) -> list[dict]:
+        raw = overlay._fred.fetch(series={series_id: series_id}, start=a, end=b)
+        if raw is None or raw.empty or series_id not in raw.columns:
+            return []
+        return [
+            {"date": pd.Timestamp(idx).date().isoformat(), "value": float(v)}
+            for idx, v in raw[series_id].items() if pd.notna(v)
+        ]
+
+    try:
+        records = delta_fetch(
+            _fred_fetch, cache_dir / f"markets_{cache_key(series_id)}.json",
+            global_start, today, refetch_days=refetch_days, today=today, date_key="date",
+        )
+    except Exception as exc:
+        log.warning("Markets overlay skipped — FRED fetch failed (%s); section absent", exc)
+        return {}
+    if not records:
+        return {}
+    market_daily = pd.Series(
+        {pd.Timestamp(r["date"]): r["value"] for r in records}
+    ).sort_index()
+    market_weekly = market_daily.resample("W").mean()
+
     out: dict[int, Any] = {}
     for cid in fit_ids:
         try:
-            df = overlay.build_overlay(adj[cid], series="vix")
+            df = overlay.build_overlay(adj[cid], series="vix", market_weekly=market_weekly)
         except Exception as exc:
             log.warning("Markets overlay failed for cluster %d: %s", cid, exc)
             continue
@@ -404,20 +440,26 @@ def _mediacloud_overlays(
     fit_ids: list[int],
     cluster_terms: dict[int, list[str]],
     cfg: dict[str, Any],
+    cache_dir: Path,
 ) -> dict[int, Any]:
     """Broad-press story-count overlay + bidirectional press-vs-discourse Granger
     per narrative (ADR-042/048). The per-narrative query is the OR of its top
-    c-TF-IDF terms. Requires MEDIACLOUD_API_KEY — if absent (or a fetch fails),
-    the affected narratives simply get no mediacloud block and the front end omits
-    the section. Press coverage thins before ~2017; the artifact carries
+    c-TF-IDF terms, delta-cached and fetched in parallel (ADR-068). Requires
+    MEDIACLOUD_API_KEY — if absent (or a fetch fails), the affected narratives simply
+    get no mediacloud block and the front end omits the section. Press coverage thins
+    before ~2017; the artifact carries
     ``reliable_since_year`` so the UI can caption that rather than show a flat line.
     Display/validation only — never feeds embedding, clustering, or the fit.
     """
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import date as _date
+
     from mnd.detection.mediacloud import (
         MediaCloudDetector,
         RELIABLE_SINCE_YEAR,
         press_heating,
     )
+    from mnd.detection.series_cache import cache_key, delta_fetch
     from mnd.dashboard.artifacts import MediaCloudArtifact
 
     try:
@@ -429,27 +471,45 @@ def _mediacloud_overlays(
     mc_cfg = cfg.get("detection", {}).get("mediacloud", {})
     k = int(mc_cfg.get("query_top_terms", 6))
     heat_cfg = mc_cfg.get("press_heating", {})
+    refetch_days = int(mc_cfg.get("refetch_days", 28))
+    max_workers = int(mc_cfg.get("max_workers", 6))
     caption = f"Broad-press story counts (Media Cloud). Reliable from ~{RELIABLE_SINCE_YEAR}."
+    today = pd.Timestamp.utcnow().date().isoformat()
+
+    # Per-narrative query + span; skip degenerate ones.
+    tasks: list[tuple[int, str, str, str]] = []
+    for cid in fit_ids:
+        query = _mediacloud_query(cluster_terms.get(cid, []), k)
+        idx = pd.to_datetime(adj[cid].index)
+        if not query or len(idx) == 0:
+            continue
+        tasks.append((cid, query, idx.min().date().isoformat(), idx.max().date().isoformat()))
+
+    def _fetch(task: tuple[int, str, str, str]) -> tuple[int, list[dict]]:
+        cid, query, start, end = task
+        fn = lambda a, b: list(  # noqa: E731
+            detector.fetch_story_counts(query, _date.fromisoformat(a), _date.fromisoformat(b))
+        )
+        try:
+            recs = delta_fetch(
+                fn, cache_dir / f"mediacloud_{cache_key(query)}.json",
+                start, end, refetch_days=refetch_days, today=today,
+            )
+        except Exception as exc:
+            log.warning("Media Cloud fetch failed for cluster %d: %s", cid, exc)
+            return cid, []
+        return cid, recs
+
+    # Delta-cached fetches run in a bounded thread pool (I/O-bound); each keeps its
+    # own tenacity backoff so bursts respect the rate limit (ADR-068).
+    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
+        fetched = list(pool.map(_fetch, tasks))
 
     out: dict[int, Any] = {}
     n_heating = 0
-    for cid in fit_ids:
-        query = _mediacloud_query(cluster_terms.get(cid, []), k)
-        if not query:
-            continue
-        idx = pd.to_datetime(adj[cid].index)
-        if len(idx) == 0:
-            continue
-        start, end = idx.min().date(), idx.max().date()
-        try:
-            records = list(detector.fetch_story_counts(query, start, end))
-        except Exception as exc:
-            log.warning("Media Cloud fetch failed for cluster %d: %s", cid, exc)
-            continue
+    for cid, records in fetched:
         if not records:
             continue
-        # Press-heating: recent attention-share vs the narrative's own yearly
-        # baseline (ADR-064 / ADR-057 §2). Display-only; None when too little history.
         heating = press_heating(
             records,
             recent_weeks=int(heat_cfg.get("recent_weeks", 4)),
@@ -469,7 +529,7 @@ def _mediacloud_overlays(
             press_heating=heating,
         )
     log.info(
-        "Built Media Cloud press overlay for %d/%d narratives (%d heating) (ADR-042/048/064)",
+        "Built Media Cloud press overlay for %d/%d narratives (%d heating) (ADR-042/048/064/068)",
         len(out), len(fit_ids), n_heating,
     )
     return out
