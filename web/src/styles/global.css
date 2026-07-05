@@ -168,6 +168,9 @@ a.card:hover { background: var(--paper-2); padding-left: 0.9rem; padding-right: 
 .tab:hover:not(:disabled) { color: var(--ink); }
 .tab.active { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
 .tab:disabled { opacity: 0.4; cursor: not-allowed; }
+/* low fit-quality lens: grayed but still selectable, so every lens stays visible */
+.tab.muted { opacity: 0.5; font-style: italic; }
+.tab.muted.active { opacity: 0.85; }
 .toggle-row { display: flex; flex-wrap: wrap; gap: 1.4rem; margin: var(--space-3) 0; }
 .toggle { display: inline-flex; align-items: center; gap: 0.45rem; font-size: var(--fs-ui); cursor: pointer; color: var(--muted); }
 .toggle:hover { color: var(--ink); }

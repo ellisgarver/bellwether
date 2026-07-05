@@ -5254,6 +5254,17 @@ outputs.
 - **Status**: Accepted
 - **Date**: 2026-07-05
 
+> **Amendment (2026-07-05).** The fit-quality gate (R² ≥ `min_fit_r2`) **labels,
+> it does not hide.** The first real run showed SIR R² is ~0.02 at the median —
+> most institutional narratives are diffuse/multi-wave, not clean single bumps, so a
+> hide-on-low-R² gate blanked the lens on ~90% of narratives. That is honest but too
+> sparse and hides information. Instead the front end now surfaces **all three lens
+> curves on every narrative**, each labelled with its R², with the poor-fitting ones
+> **grayed but still selectable** (and captioned "poor fit — numbers not meaningful,
+> shown for comparison"); the default lens is the best-fitting one. `converged` is
+> therefore a *good-fit* label, not a show/hide switch. The model-free spine (volume
+> curve + stage + shape facts) remains the always-present primary layer.
+
 ### Context
 
 An analysis-layer review (2026-07-05) against the tool's purpose — an insightful,
