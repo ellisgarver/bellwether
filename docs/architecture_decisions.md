@@ -78,6 +78,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 060 | **Fit lenses on the central-mass window + SIR robustness overhaul — nearly every fit-series spans ~14yr from sparse straggler tails, which broke SIR (0/365, γ→0 `HalfNormal` ridge + 855-step Euler scan). Fix: fit all three lenses on the central 95% of cumulative attention mass (α=0.05, keeps multi-wave, no new param; staging/display stay full-span); SIR gets LogNormal β/γ priors, an adaptive grid bounding the scan ≤200 steps, and a `max_treedepth` fail-fast cap so unfittable clusters go non-converged in seconds instead of grinding. Same convergence gate for all three, no outbreak-eligibility filter.** | Live (supersedes 053; amends 039/052; relates 040/058) |
 | 062 | **SIR lens via the Schlickeiser–Kröger closed-form solution — retire the `pytensor.scan` Euler ODE (the sole compute pole: ~23 min × 365 clusters ≈ 140 CPU-h) for the near-exact analytic prevalence I(τ), elementary on both branches (rise `η·e^{g−1}`, decay `(k₀/κ)·cosh⁻²ζ`); fit collapses to logistic/Bass cost (1–3 ms). De-risk surfaced R₀ is NOT identifiable from a single curve (true of the current Euler fit too, and it contaminated logistic's R₀=1+k/γ), so DROP R₀ + J∞, RETIRE the Bjørnstad disease β/γ priors + the `N_pop=2·Σy` fudge, and report only curve-identifiable numbers in real units: SIR → rise/decay rates + asymmetry + peak; logistic → doubling time + inflection + plateau; Bass unchanged (field-anchored p/q, total reach m). Display-only + convergence gate + no-tuning intact.** | Live (supersedes SIR numerics + disease priors of 053/060; amends 039/052; relates 040) |
 | 063 | **Portable weekly-update orchestration — a single-process `run_pipeline.py update` runs the weekly delta (per-source over-fetch since each source's own `max(published_at)` − buffer → filter → incremental embed → analyze) sequentially, CPU-only, with all paths behind a config `data_root` (env `MND_DATA_ROOT`), so it runs on a laptop / cron VM / GitHub Actions / RCC with no SLURM and no GPU. The parallel SLURM fan-out stays as the full-rebuild path only. Identity-stable institutional re-clustering (`merge_models`) is DEFERRED (ADR-057 §3) — until it lands, `update` refreshes the corpus delta + the Media Cloud press layer (ADR-064) and the narrative set is captioned "as of last full build". Scheduler documented backend-agnostically, not auto-enabled.** | Live (implements 057 §3 partial; relates 016/050; portability for README) |
+| 067 | **Simplify the analysis layer — least-squares lens fits, centroid JEL, open-model naming. (1) Retire Bayesian NUTS for all three lenses → bounded `scipy.least_squares` point fits (same displayed numbers + curve, ~1–3 ms vs ~30–60 s); MCMC convergence gate → fit-quality gate (R² ≥ `min_fit_r2`, fixed a priori); posterior CIs dropped; NUTS budgets retired (amends 039). (2) JEL uses existing cluster centroids instead of re-encoding terms+docs with Qwen3-8B (~1 h → seconds; amends 055). (3) Naming swaps Anthropic→OpenAI-compatible/Llama client (key-free/reproducible; amends 056). Analyze now finishes in minutes, fully locally testable; reader-facing output unchanged. Kept: all three lenses, shape facts, all similar measures, Granger lead-lag, markets, press-heating.** | Live (amends 039/055/056; keeps 052/062/065/040/046) |
 | 066 | **Weekly incremental re-cluster via BERTopic `merge_models` (design + prereq). Prereq (accepted): the `cluster` stage now persists the fitted BERTopic model (safetensors → `topic_model/`) — it was discarded, and `merge_models` needs the model object, not just `clusters.parquet`. Mechanism (proposed, pending validation): `update` fits a new-week model and `merge_models([base,new], min_similarity=τ)` to keep existing topic ids/URLs/names and append only genuinely-new topics; gated on an anchor-id-stability test (a synthetic weekly merge must not renumber any of the 10 anchors). τ + split/merge back-test + cron cadence deferred until that passes.** | Proposed (implements 057 §3; relates 050/056/063/065) |
 | 065 | **Incremental `analyze` re-bake — per-lens fit cache + JEL-encode cache. The fit cache keyed the whole `cfg["dynamics"]` and stored one pickle per cluster (all 3 lenses), so a one-lens prior change refit logistic+Bass identically; now each lens's `FitResult` is cached under a sig hashing only that lens's priors+inference (+series, window, seed). JEL re-encoded all ~365 reps with the 8B model every run even on unchanged clusters (~1h); now each `ClusterJELAssignment` is cached by representation+prototypes+embedder-id, the embedder loads only if a cluster misses, and an unchanged `clusters.parquet` ⇒ zero encodes. Display-mechanics only, results identical (ADR-040).** | Live (relates 050/055/062/063) |
 | 064 | **Media Cloud Premium press layer + press-heating emerging signal — add the premium-press outlet collection (ADR-016: WSJ/Bloomberg/FT/Reuters/…) alongside the broad US-National collection, both via the one Media Cloud module. Wire ADR-057 §2: per already-tracked narrative, `detect_anomalies` on the attention-share ratio over a 4-week window vs a 52-week baseline at k=2σ, surfaced as a SEPARATE "heating in the press" signal beside the institutional recency flag in the Emerging view. Recomputes at bake time from live press against the existing narrative set — no re-embed, no re-cluster, never feeds embedding/clustering/scope (ADR-010/020/046). Degrades to absent when unkeyed.** | Live (implements 057 §2; extends 016/042/048; relates 040) |
@@ -5245,6 +5246,77 @@ outputs.
   ADR-063 (the `update` this completes), ADR-065 (per-cluster refit/JEL reuse that
   makes the merged re-bake cheap), ADR-056 (names keyed on representation, stable
   across a merge), the anchor set (the id-stability gate).
+
+---
+
+## ADR-067: Simplify the analysis layer — least-squares lens fits, centroid JEL, open-model naming
+
+- **Status**: Accepted
+- **Date**: 2026-07-05
+
+### Context
+
+An analysis-layer review (2026-07-05) against the tool's purpose — an insightful,
+quick, *educational* landing page, not a predictor or an all-knower — found three
+places paying heavy cost for no display benefit. All three are display-mechanics:
+they change *how* a number/label is produced, not the methodology the reader sees.
+
+1. **Bayesian NUTS lens fits are over-engineered for their use.** The three lenses
+   (logistic/SIR/Bass) are fit with full PyMC NUTS — thousands of draws × 4 chains —
+   yet after ADR-052 (model-free staging) and ADR-062 (R₀/J∞ dropped), the fits feed
+   only **display point estimates + a curve**. A full posterior is sampled and then
+   collapsed to a mean. This is ~90% of the analyze compute (~30–60 s/fit × 3 × 365,
+   overrunning an 18 h wall); the ADR-062 de-risk showed the same curves fit by
+   `scipy.least_squares` in **1–3 ms**.
+2. **JEL re-encodes with the 8B model on CPU (~1 h/run).** Scope (E/F/G/H) is a
+   display flag, but it re-embeds each cluster's terms+docs with Qwen3-8B when the
+   **cluster centroids already sit in `embeddings.npy`**.
+3. **Naming ships a paid Anthropic client.** The display layer permits a paid LLM
+   (ADR-056), but an open model keeps the whole pipeline key-free/reproducible for
+   spin-offs — the intended direction.
+
+Kept deliberately (reviewed, earn their place): all three lenses; the model-free
+shape facts + stage; all three similar-narrative measures; the Media Cloud overlay
++ **Granger lead-lag** (an interesting, on-mission "who led whom" readout); markets
+overlay; press-heating.
+
+### Decision
+
+1. **Retire NUTS for least-squares/MAP point fits (all three lenses).** Each lens
+   fits by bounded nonlinear least-squares (`scipy.optimize.least_squares`) with
+   data-scaled initial values and the same reported numbers (logistic doubling
+   time/inflection/plateau; SIR rise/decay/asymmetry/peak; Bass total-reach/p/q) and
+   the same displayed curve. The MCMC **convergence gate (R̂/ESS) is replaced by a
+   fit-quality gate**: optimizer success **and** R² ≥ `dynamics.min_fit_r2` (fixed a
+   priori, not tuned to anchors — ADR-040). Posterior credible intervals are dropped
+   (they were barely used; peak-time CI becomes optional/SE-based or absent). AICc is
+   unchanged (Gaussian log-likelihood from residuals). Amends ADR-039 (fits are now
+   optimization, not sampling); the `dynamics.inference`/`sir_inference` NUTS budgets
+   are retired. This runs locally in full (no PyMC), so the whole fit layer is now
+   testable off-cluster.
+2. **JEL uses the existing cluster centroids** (mean of member embeddings from
+   `embeddings.npy`) as the cluster representation, nearest-prototype as before — no
+   8B re-encode. The prototypes are still embedded once. Amends ADR-055 (the richer
+   terms+docs representation is dropped for scope; centroids are sufficient for a
+   display flag and remove the ~1 h pole). Keeps the ADR-065 cache.
+3. **Open-model naming via an OpenAI-compatible client.** Naming reads
+   `display.naming.{base_url, model}` (env `MND_NAMING_BASE_URL`/`MND_NAMING_MODEL`);
+   default points at a local Ollama Llama endpoint. Degrades to the c-TF-IDF label
+   when unreachable, exactly as today. Amends ADR-056 (provider swapped Anthropic →
+   OpenAI-compatible/Llama); titles remain cached/committed for key-free rebuilds.
+
+### Consequences
+
+- **Runtime collapses.** Fits go from ~30–60 s to ~ms; JEL from ~1 h to seconds
+  (centroids + ADR-065 cache). The analyze step finishes in minutes on one node —
+  the 18 h wall and the cluster-parallelism question both become moot.
+- **Simpler + reproducible.** No PyMC in the fit path, no 8B re-encode for scope, no
+  paid key required anywhere. The fit layer is fully locally testable.
+- **What the reader sees is unchanged** except the lens curves are least-squares
+  point fits (same numbers) and a lens grays out on low R² instead of non-convergence.
+- **Relates.** Amends ADR-039 (fit method), ADR-055 (JEL representation), ADR-056
+  (naming provider); keeps ADR-052/062 (staging, lens numbers), ADR-065 (caches),
+  ADR-040/046 (no-tuning, JEL-as-flag).
 
 ---
 

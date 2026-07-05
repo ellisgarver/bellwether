@@ -151,33 +151,15 @@ dynamics:
     - "sir"                        # Kermack & McKendrick 1927 — "contagious? burn out?"
     - "logistic"                   # Verhulst 1838 — "how fast / where level off?"
     - "bass"                       # Bass 1969 — "external shock vs word-of-mouth?"
-  inference:
-    framework: "pymc"
-    draws: 2000
-    tune: 1000
-    chains: 4
-    target_accept: 0.95
-    cores: "auto"                  # min(chains, available_cpus)
-    random_seed: 42
-  # SIR-only inference budget. Post ADR-062 the SIR mean function is the
-  # Schlickeiser–Kröger closed form (no Euler scan / ODE), so the fit is cheap like
-  # logistic/Bass; this budget and the max_treedepth fail-fast carry over from
-  # ADR-060 but now bound an elementary model. Not a tuned parameter (ADR-040).
-  # (The former sir_fit_grid_days / sir_max_grid_steps scan caps are retired.)
-  sir_inference:
-    framework: "pymc"
-    draws: 1000
-    tune: 1000
-    chains: 4
-    target_accept: 0.95
-    max_treedepth: 8               # ADR-060 fail-fast: bound leapfrog steps per draw
-    cores: "auto"                  # min(chains, available_cpus)
-    random_seed: 42
+  # Lens fits are bounded least-squares (ADR-067), not MCMC — no draws/chains. A
+  # lens is shown iff the optimizer succeeds AND its R² clears this floor; below it
+  # the lens grays out (the fit-quality gate that replaced the MCMC R-hat/ESS gate).
+  # Fixed a priori, not tuned to anchor recovery (ADR-040).
+  min_fit_r2: 0.3
   priors:
-    # Weakly informative. Bass is field-anchored to a real meta-analysis (below);
-    # SIR and logistic priors are data-scaled in code (peak, span) — no borrowed
-    # epidemiological constants (ADR-062 retired the Bjornstad beta/gamma priors,
-    # which pinned a non-identifiable R_0).
+    # Init anchors for the least-squares optimizer (ADR-067; formerly Bayesian
+    # priors). Bass p/q seed from the Sultan–Farley–Lehmann 1990 meta-analysis
+    # means (below); logistic/SIR init are data-scaled in code (peak, span).
     sir:
       # Closed-form SIR (ADR-062). The fit parameters are peak_height, peak_time,
       # the shape scalar k0 = 1/R0, and a timescale; peak_height/peak_time/timescale
