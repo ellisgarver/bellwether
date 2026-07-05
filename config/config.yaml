@@ -310,8 +310,12 @@ display:
     # representation hash, and committed so the static site rebuilds with no key.
     # Disabled or unkeyed → the front end falls back to the c-TF-IDF label.
     enabled: true
-    backend: "anthropic"        # "anthropic" (paid Claude Haiku) | "local" (open HF model)
-    model: "claude-haiku-4-5"   # backend=anthropic: cheapest tier, ample for this task
+    # "llama" (default): open Llama via an OpenAI-compatible endpoint (ADR-067) —
+    # key-free/reproducible; defaults to a local Ollama (`ollama pull llama3.1`).
+    # "local": in-process transformers model. "anthropic": paid Claude Haiku.
+    backend: "llama"
+    base_url: "http://localhost:11434/v1"   # backend=llama: Ollama (or any OpenAI-compatible URL)
+    model: "llama3.1"           # backend=llama: served model id (env MND_NAMING_MODEL overrides)
     local_model: "Qwen/Qwen2.5-7B-Instruct"   # backend=local: open, Apache-2.0, no key
     max_title_words: 7          # soft target for the title (not a hard cap)
     prompt_version: 2           # bump to invalidate the cache when the prompt changes

@@ -2,25 +2,27 @@
 
 Turns each surfaced cluster's existing representation — the ADR-055 c-TF-IDF
 terms plus its BERTopic representative-document excerpts, and its date span and
-source mix — into a short human-readable title and a one-line description via a
-paid LLM. This replaces BERTopic's default underscore-joined label
+source mix — into a short human-readable title and a one-line description via an
+LLM. This replaces BERTopic's default underscore-joined label
 (``23_nps_lands_acres_park``) at the *display* layer only.
 
-The name never feeds embedding, clustering, JEL scope, fitting, staging, or
-anchor recovery: the no-paid-dependency rule binds the data-fetching and analysis
-pipeline, and the presentation layer is exempt (CLAUDE.md). Reproducibility is
-preserved by caching each title under a content hash of its representation and
-committing the cache (``display.naming.cache_dir``, a tracked path): a bake reuses
-every unchanged cluster's title and only calls the model for new or changed
-clusters, so the static site rebuilds deterministically with no API key. The
-feature degrades to absent — the front end falls back to the c-TF-IDF label —
-when naming is disabled or no Anthropic client can be built, exactly like the
-markets (ADR-047) and Media Cloud (ADR-048) overlays.
+Default backend is an **open Llama** via an OpenAI-compatible endpoint (ADR-067),
+so the whole pipeline is key-free and reproducible — a local Ollama out of the box,
+or any hosted OpenAI-compatible URL. A paid Anthropic backend and an in-process
+transformers backend remain selectable via ``display.naming.backend``.
 
-The model call is synchronous (one short Messages request per cache miss,
-``temperature=0`` for stability, a JSON-schema structured output). The committed
-cache makes each bake incremental, so the Batches API's throughput is unnecessary
-here; it remains a drop-in option if a cold full-corpus naming pass ever matters.
+The name never feeds embedding, clustering, JEL scope, fitting, staging, or
+anchor recovery (display layer only; CLAUDE.md). Reproducibility is preserved by
+caching each title under a content hash of its representation and committing the
+cache (``display.naming.cache_dir``, a tracked path): a bake reuses every unchanged
+cluster's title and only calls the model for new or changed clusters, so the static
+site rebuilds deterministically. The feature degrades to absent — the front end
+falls back to the c-TF-IDF label — when naming is disabled or no client can be
+reached, exactly like the markets (ADR-047) and Media Cloud (ADR-048) overlays.
+
+Each call is synchronous (one short request per cache miss, ``temperature=0`` for
+determinism, a JSON object response). The committed cache makes each bake
+incremental.
 """
 from __future__ import annotations
 
@@ -232,6 +234,62 @@ class LocalHFNamer:
         return _parse_json_object(text)
 
 
+class OpenAICompatNamer:
+    """Open-model naming via an OpenAI-compatible chat endpoint (ADR-067).
+
+    The default and recommended path: a Llama served locally by Ollama
+    (``ollama pull llama3.1`` → ``http://localhost:11434/v1``) — key-free, free, and
+    reproducible, keeping the whole pipeline runnable without any paid API. The same
+    client also drives any hosted OpenAI-compatible Llama endpoint (Together, Groq,
+    Fireworks, vLLM) by pointing ``base_url`` / setting ``MND_NAMING_API_KEY``.
+
+    Uses only ``urllib`` (no SDK dependency). Temperature 0 → greedy/deterministic,
+    so the committed name cache stays meaningful. Unreachable endpoint → the first
+    call raises and ``generate_names`` aborts to c-TF-IDF labels (no key required).
+    """
+
+    def __init__(self, base_url: str, model: str, api_key: str | None = None) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+        self._api_key = api_key
+
+    @classmethod
+    def from_config(cls, cfg: dict[str, Any]) -> "OpenAICompatNamer":
+        import os
+
+        nc = (cfg.get("display") or {}).get("naming") or {}
+        base_url = os.environ.get("MND_NAMING_BASE_URL", nc.get("base_url", "http://localhost:11434/v1"))
+        model = os.environ.get("MND_NAMING_MODEL", nc.get("model", "llama3.1"))
+        api_key = os.environ.get("MND_NAMING_API_KEY", nc.get("api_key"))
+        return cls(base_url, model, api_key)
+
+    def name_cluster(
+        self, system: str, user: str, schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        import urllib.request
+
+        payload = {
+            "model": self._model,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},  # honored where supported
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user + '\n\nRespond with only a JSON object: {"title": ..., "description": ...}'},
+            ],
+        }
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        req = urllib.request.Request(
+            f"{self._base_url}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        return _parse_json_object(body["choices"][0]["message"]["content"])
+
+
 def generate_names(
     inputs: list[NamingInput],
     cfg: dict[str, Any],
@@ -254,11 +312,19 @@ def generate_names(
         )
         return {}
 
-    backend = str(nc.get("backend", "anthropic")).lower()
-    # The cache key includes the effective model id, so a backend switch (paid ->
-    # local) never serves the other backend's titles from cache.
-    model = str(nc.get("local_model", "Qwen/Qwen2.5-7B-Instruct") if backend == "local"
-                else nc.get("model", "claude-haiku-4-5"))
+    import os
+
+    # Default: open Llama via an OpenAI-compatible endpoint (Ollama), key-free and
+    # reproducible (ADR-067). "local" = in-process transformers; "anthropic" = paid.
+    backend = str(nc.get("backend", "llama")).lower()
+    # The cache key includes the effective model id, so a backend/model switch never
+    # serves another backend's titles from cache.
+    if backend == "llama":
+        model = str(os.environ.get("MND_NAMING_MODEL", nc.get("model", "llama3.1")))
+    elif backend == "local":
+        model = str(nc.get("local_model", "Qwen/Qwen2.5-7B-Instruct"))
+    else:
+        model = str(nc.get("model", "claude-haiku-4-5"))
     prompt_version = int(nc.get("prompt_version", 1))
     title_words = int(nc.get("max_title_words", 7))
     cache_dir = Path(nc.get("cache_dir", "data/naming_cache"))
@@ -284,7 +350,11 @@ def generate_names(
     n_cached = len(out)
     if misses:
         if client is None:
-            builder = LocalHFNamer if backend == "local" else AnthropicNamer
+            builder = {
+                "llama": OpenAICompatNamer,
+                "local": LocalHFNamer,
+                "anthropic": AnthropicNamer,
+            }.get(backend, OpenAICompatNamer)
             try:
                 client = builder.from_config(cfg)
             except Exception as exc:
