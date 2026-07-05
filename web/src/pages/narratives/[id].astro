@@ -30,8 +30,9 @@ const trendWord =
 const facts = n.shape_facts || {};
 // SIR lens (ADR-062): self-standing rise/decay numbers off the fitted curve.
 // R₀ is not reported (not identifiable from a single curve).
-const sirFit = (n.fits || []).find((f) => f.model === "sir" && f.converged);
+const sirFit = (n.fits || []).find((f) => f.model === "sir");
 const sirP = (sirFit?.params || {}) as Record<string, number>;
+const sirGoodFit = !!sirFit?.converged;
 const num = (x: unknown, d = 2) =>
   typeof x === "number" && isFinite(x) ? x.toFixed(d) : null;
 // Three representative-article panels (ADR-061): how the narrative entered, its
@@ -129,9 +130,13 @@ const direction = (d: any) =>
         </table>
         <p class="caption">
           {num(sirP.doubling_time_up) && num(sirP.half_life_down) ? (
-            <>SIR lens (display only): the wave doubled every {num(sirP.doubling_time_up, 1)} days on the way up and halved every {num(sirP.half_life_down, 1)} days on the way down (asymmetry {num(sirP.asymmetry, 1)}×). This describes how it spread and faded, not where it sits now.</>
+            sirGoodFit ? (
+              <>SIR lens (display only): the wave doubled every {num(sirP.doubling_time_up, 1)} days on the way up and halved every {num(sirP.half_life_down, 1)} days on the way down (asymmetry {num(sirP.asymmetry, 1)}×). This describes how it spread and faded, not where it sits now.</>
+            ) : (
+              <>SIR lens is a <strong>poor fit</strong> for this narrative (R² {num(sirP.r2)}) — its shape isn't a clean rise-and-fall, so the rise/decay numbers aren't meaningful here. The lens is still available on the chart for comparison; the stage comes from the model-free trend test above.</>
+            )
           ) : (
-            <>SIR lens did not converge here; the stage is read from the trend test above.</>
+            <>SIR lens unavailable here; the stage is read from the trend test above.</>
           )}
         </p>
       </div>
@@ -267,15 +272,26 @@ const direction = (d: any) =>
     }
 
     const fits = n.fits;
-    let activeFit = fits.findIndex((f) => f.model === n.staging_model);
-    if (activeFit < 0) activeFit = 0;
+    const r2of = (f) => (f.params && typeof f.params.r2 === "number") ? f.params.r2 : null;
+    // All three lenses are always available; default to the best-fitting one, and
+    // gray the poor fits (still clickable) so the reader can see every lens and its
+    // fit quality rather than have low-fit ones hidden.
+    let activeFit = fits
+      .map((f, i) => [i, f.curve ? (r2of(f) ?? -1) : -2])
+      .sort((a, b) => b[1] - a[1])[0]?.[0] ?? 0;
 
     fits.forEach((f, i) => {
       const b = document.createElement("button");
-      b.className = "tab" + (i === activeFit ? " active" : "");
-      b.textContent = f.model + (f.converged ? "" : " (no fit)");
-      b.disabled = !f.converged || !f.curve;
-      if (b.disabled) b.title = f.failure_reason || "fit did not converge";
+      const r2 = r2of(f);
+      const poor = !f.converged;
+      b.className = "tab" + (i === activeFit ? " active" : "") + (poor ? " muted" : "");
+      b.textContent = f.model + (r2 != null ? ` · R²${r2.toFixed(2)}` : "");
+      b.disabled = !f.curve;
+      b.title = !f.curve
+        ? (f.failure_reason || "no fitted curve")
+        : (poor
+            ? `low fit quality (R²=${r2 != null ? r2.toFixed(2) : "n/a"}) — this shape doesn't describe this narrative well; shown for comparison`
+            : `good fit (R²=${r2 != null ? r2.toFixed(2) : "n/a"})`);
       b.addEventListener("click", () => {
         activeFit = i; resetView(); render();
         [...tabsEl.children].forEach((c, j) => c.classList.toggle("active", j === i));
