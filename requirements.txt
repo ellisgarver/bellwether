@@ -33,9 +33,7 @@ umap-learn==0.5.6
 hdbscan==0.8.38.post2
 nltk==3.9.1
 
-# Bayesian dynamics ---------------------------------------------------------
-pymc==5.16.2
-arviz==0.19.0
+# Dynamics lens fits are bounded least-squares via scipy (ADR-067) — no PyMC/NUTS.
 
 # Deduplication & text ------------------------------------------------------
 datasketch==1.6.5         # MinHash near-duplicate detection
