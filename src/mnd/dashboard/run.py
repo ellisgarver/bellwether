@@ -49,7 +49,6 @@ from mnd.dashboard.build_artifacts import (
 from mnd.dashboard.naming import NamingInput, generate_names
 from mnd.dashboard.story_card import (
     NOISE_TOPIC,
-    _representative_docs_from_topic_info,
     _terms_from_topic_info,
     build_story_card,
 )
@@ -211,23 +210,17 @@ def run_analysis(
             "dashboard. Lower dynamics.min_articles_to_fit or check clusters.parquet."
         )
 
-    # JEL scope is a per-narrative display flag, not a gate (ADR-046): out-of-scope
-    # narratives are shown with their code, not dropped. Computed for surfaced only.
+    # Cluster centroids (mean chunk embedding) — reused for JEL scope, the UMAP map,
+    # and similar-narratives, so we embed nothing per cluster (ADR-067).
+    centroids = _cluster_centroids(clusters_df, embeddings, fit_ids)
+    centroid_by_cid = {cid: centroids[i] for i, cid in enumerate(fit_ids)}
     cluster_terms = {cid: _terms_from_topic_info(topic_info, cid)[1] for cid in fit_ids}
-    # Richer JEL representation (ADR-055): terms first (always survive the embedder
-    # sequence cap) then BERTopic representative-doc text. Bare terms are too thin a
-    # signal and pushed core macro clusters (r-star, Basel) to the "Y" catch-all.
-    n_jel_docs = int((cfg["clustering"].get("jel") or {}).get("n_representative_docs", 3))
-    jel_representation = {
-        cid: cluster_terms[cid] + _representative_docs_from_topic_info(topic_info, cid, n_jel_docs)
-        for cid in fit_ids
-    }
-    # Cache each cluster's JEL assignment (ADR-065): reuse when the representation is
-    # unchanged, so a re-bake on the same clusters skips the 8B encode entirely —
-    # the embedder loads only if some cluster's representation actually changed.
-    jel = _jel_with_cache(
-        jel_representation, cfg, Path(out_dir) / ".jel_cache", embedder=embedder
-    )
+
+    # JEL scope is a per-narrative display flag, not a gate (ADR-046): out-of-scope
+    # narratives are shown with their code, not dropped. Nearest-prototype on the
+    # existing centroids (ADR-067) — no 8B re-encode; the embedder loads only if the
+    # fixed JEL prototype vectors aren't cached yet.
+    jel = _jel_scope(centroid_by_cid, cfg, Path(out_dir) / ".jel_cache", embedder=embedder)
 
     # Story cards (extractive) built once here and shared with naming + artifacts,
     # so the panels the reader sees and the excerpts the namer titles from are the
@@ -251,9 +244,8 @@ def run_analysis(
     )
     stages = {sc.cluster_id: sc for sc in classify_all(list(dynamics.values()), cfg)}
 
-    # 4. Centroids → UMAP positions → similar narratives (ADR-044 / ADR-019 §H).
-    # The home map is 3-D; derive the 2-D position from the first two components.
-    centroids = _cluster_centroids(clusters_df, embeddings, fit_ids)
+    # 4. UMAP positions → similar narratives (ADR-044 / ADR-019 §H), from the
+    # centroids computed above. The home map is 3-D; 2-D is its first two components.
     umap_xyz = _umap_positions(centroids, fit_ids, cfg, n_components=3)
     umap_xy = {cid: xyz[:2] for cid, xyz in umap_xyz.items()}
     similar = compute_similar_narratives(
@@ -489,70 +481,63 @@ def _default_embedder() -> Any:
     return Embedder.from_config("primary")
 
 
-def _jel_with_cache(
-    jel_representation: dict[int, list[str]],
+def _jel_scope(
+    centroid_by_cid: dict[int, np.ndarray],
     cfg: dict[str, Any],
     cache_dir: Path,
     embedder: Any | None = None,
 ) -> dict[int, Any]:
-    """Assign JEL scope, reusing cached assignments for unchanged clusters (ADR-065).
+    """Assign JEL scope by nearest-prototype on the cluster centroids (ADR-067).
 
-    JEL assignment is deterministic in (representation text, prototype descriptions,
-    macro scope, embedder). Each cluster's ``ClusterJELAssignment`` is cached under a
-    content hash of those; on a re-bake with an unchanged ``clusters.parquet`` every
-    cluster hits and the 8B embedder is **never loaded** — the ~1 h encode collapses
-    to a cache read. The embedder is built lazily only if at least one cluster misses,
-    and then classifies only the misses (plus the shared prototypes).
+    Clusters are represented by their existing centroids (mean chunk embedding from
+    ``embeddings.npy``) — nothing is re-encoded per cluster. Only the fixed JEL
+    prototype descriptions need embedding, and those vectors are cached on disk
+    keyed on the embedder id, so on any re-run the 8B embedder is **not loaded at
+    all** and scope collapses to a cosine over centroids.
     """
     import hashlib
     import pickle
 
-    # NB: use the module-level ``classify_clusters`` (imported at top) so tests can
-    # monkeypatch it; only the constants are pulled in locally for the cache key.
-    from mnd.clustering.jel_classifier import (
-        DEFAULT_MACRO_JEL_SCOPE,
-        JEL_CODE_DESCRIPTIONS,
-    )
+    from mnd.clustering.jel_classifier import JEL_CODE_DESCRIPTIONS
 
     emb = cfg.get("embedding", {})
-    static_sig = hashlib.sha1(
+    proto_sig = hashlib.sha1(
         (
             repr(sorted(JEL_CODE_DESCRIPTIONS.items()))
-            + repr(sorted(DEFAULT_MACRO_JEL_SCOPE))
             + f"{emb.get('model', '')}@{emb.get('revision', '')}"
         ).encode()
     ).hexdigest()[:12]
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    out: dict[int, Any] = {}
-    misses: dict[int, Path] = {}
-    for cid, rep in jel_representation.items():
-        sig = hashlib.sha1((repr(rep) + static_sig).encode()).hexdigest()[:12]
-        path = cache_dir / f"jel_{cid}_{sig}.pkl"
-        if path.exists():
-            try:
-                out[cid] = pickle.loads(path.read_bytes())
-                continue
-            except Exception as exc:  # partial/corrupt write — recompute
-                log.warning("JEL cache unreadable for %s (%s); recomputing", cid, exc)
-        misses[cid] = path
+    proto_path = cache_dir / f"jel_prototypes_{proto_sig}.npy"
+    prototype_vectors = None
+    if proto_path.exists():
+        try:
+            prototype_vectors = np.load(str(proto_path))
+        except Exception as exc:  # corrupt — re-embed
+            log.warning("JEL prototype cache unreadable (%s); re-embedding", exc)
 
-    if misses:
+    embedded = False
+    if prototype_vectors is None:
         if embedder is None:
             embedder = _default_embedder()
-        fresh = classify_clusters(
-            {cid: jel_representation[cid] for cid in misses}, embedder=embedder
+        codes = sorted(JEL_CODE_DESCRIPTIONS)
+        prototype_vectors = np.asarray(
+            embedder.encode([JEL_CODE_DESCRIPTIONS[c] for c in codes], show_progress=False),
+            dtype=float,
         )
-        for cid, path in misses.items():
-            if cid in fresh:
-                out[cid] = fresh[cid]
-                path.write_bytes(pickle.dumps(fresh[cid]))
+        np.save(str(proto_path), prototype_vectors)
+        embedded = True
 
-    in_scope_n = sum(1 for a in out.values() if getattr(a, "in_scope", False))
-    log.info(
-        "JEL scope (ADR-065): %d/%d loaded from cache, %d encoded; %d in-scope "
-        "(E/F/G/H, out-of-scope flagged not dropped — ADR-046)",
-        len(jel_representation) - len(misses), len(jel_representation),
-        len(misses), in_scope_n,
+    jel = classify_clusters(
+        cluster_terms={},
+        cluster_vectors=centroid_by_cid,
+        prototype_vectors=prototype_vectors,
     )
-    return out
+    in_scope_n = sum(1 for a in jel.values() if getattr(a, "in_scope", False))
+    log.info(
+        "JEL scope (ADR-067): %d/%d in-scope (E/F/G/H) via centroids; prototypes %s "
+        "(out-of-scope flagged not dropped — ADR-046)",
+        in_scope_n, len(jel), "embedded + cached" if embedded else "from cache",
+    )
+    return jel

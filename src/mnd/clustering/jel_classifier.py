@@ -224,9 +224,11 @@ class _Embedder(Protocol):
 def classify_clusters(
     cluster_terms: dict[int, list[str]],
     *,
-    embedder: _Embedder,
+    embedder: _Embedder | None = None,
     macro_scope: frozenset[str] = DEFAULT_MACRO_JEL_SCOPE,
     jel_descriptions: dict[str, str] | None = None,
+    cluster_vectors: dict[int, np.ndarray] | None = None,
+    prototype_vectors: np.ndarray | None = None,
 ) -> dict[int, ClusterJELAssignment]:
     """Assign a primary JEL code to each cluster by nearest-prototype.
 
@@ -260,25 +262,33 @@ def classify_clusters(
     callers typically exclude it from dynamics analysis regardless of
     in_scope (outliers are by construction noise).
     """
-    if not cluster_terms:
-        return {}
     if jel_descriptions is None:
         jel_descriptions = JEL_CODE_DESCRIPTIONS
-
     codes: list[str] = sorted(jel_descriptions.keys())
-    prototype_texts = [jel_descriptions[c] for c in codes]
 
-    # Embed JEL prototypes once.
-    proto_vecs = embedder.encode(prototype_texts, show_progress=False)
-    proto_vecs = _l2_normalize(proto_vecs)
+    # JEL prototypes: use precomputed vectors when given (ADR-067 caches them so the
+    # 8B embedder need not load on a re-run), else embed the AEA descriptions once.
+    if prototype_vectors is not None:
+        proto_vecs = _l2_normalize(np.asarray(prototype_vectors, dtype=float))
+    else:
+        proto_vecs = _l2_normalize(
+            embedder.encode([jel_descriptions[c] for c in codes], show_progress=False)
+        )
 
-    # Embed each cluster's term joinder. Joining terms with " " produces
-    # a short pseudo-document that's representative of the cluster
-    # without over-weighting any single term.
-    cluster_ids = list(cluster_terms.keys())
-    cluster_texts = [" ".join(cluster_terms[cid]) for cid in cluster_ids]
-    cluster_vecs = embedder.encode(cluster_texts, show_progress=False)
-    cluster_vecs = _l2_normalize(cluster_vecs)
+    # Cluster representation: use the precomputed cluster centroids when given
+    # (ADR-067 — the same embeddings.npy centroids used for the map, no re-encode),
+    # else embed the c-TF-IDF term joinder.
+    if cluster_vectors is not None:
+        cluster_ids = list(cluster_vectors.keys())
+        cluster_vecs = _l2_normalize(
+            np.vstack([np.asarray(cluster_vectors[cid], dtype=float) for cid in cluster_ids])
+        )
+    elif cluster_terms:
+        cluster_ids = list(cluster_terms.keys())
+        cluster_texts = [" ".join(cluster_terms[cid]) for cid in cluster_ids]
+        cluster_vecs = _l2_normalize(embedder.encode(cluster_texts, show_progress=False))
+    else:
+        return {}
 
     # Cosine similarity matrix: (n_clusters, n_codes)
     sims = cluster_vecs @ proto_vecs.T

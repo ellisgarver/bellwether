@@ -100,11 +100,11 @@ def test_run_analysis_writes_adjusted_artifacts(tmp_path, monkeypatch):
     ti_path = tmp_path / "topic_info.parquet"
     _topic_info().to_parquet(ti_path, index=False)
 
-    # Stub the JEL classifier: clusters 0/1 in-scope, cluster 2 OUT of scope (J).
-    # ADR-046: out-of-scope is a display flag, not a gate — it must still be analyzed.
-    def _fake_classify(cluster_terms, **_):
+    # Stub JEL scope: clusters 0/1 in-scope, cluster 2 OUT of scope (J). ADR-046:
+    # out-of-scope is a display flag, not a gate — it must still be analyzed.
+    def _fake_jel_scope(centroid_by_cid, *_a, **_k):
         out = {}
-        for cid in cluster_terms:
+        for cid in centroid_by_cid:
             oos = cid == 2
             out[cid] = ClusterJELAssignment(
                 cluster_id=cid, primary_code="J" if oos else "G", in_scope=not oos,
@@ -112,7 +112,7 @@ def test_run_analysis_writes_adjusted_artifacts(tmp_path, monkeypatch):
             )
         return out
 
-    monkeypatch.setattr(driver, "classify_clusters", _fake_classify)
+    monkeypatch.setattr(driver, "_jel_scope", _fake_jel_scope)
 
     out = driver.run_analysis(
         clusters_path=clusters_path,
