@@ -69,8 +69,8 @@ primary literature. The full citation list and rationale lives in
 | Granularity | Single-level HDBSCAN output (no merging tiers) | Bybee/Kelly/Manela/Xiu 2024; Hansen/McMahon/Prat 2018 |
 | Dynamics models | SIR, logistic, Bass, model-free shape facts | Kermack & McKendrick 1927; Verhulst 1838; Bass 1969 |
 | Smoothing window | 7-day centered moving average | Shumway & Stoffer (weekly cycle for daily counts) |
-| Bayesian priors | Weakly informative, anchored to epidemic-modeling conventions | Bjørnstad 2018; Gelman et al. *BDA3* |
-| Stage classification | 3 stages (growth / decay / dormant) keyed to R₀ direction | Kermack & McKendrick 1927 (R₀=1 epidemic threshold) |
+| Lens fitting | Bounded least-squares point fits; shown iff R² clears a fixed floor | scipy; Schlickeiser & Kröger 2020 (closed-form SIR) |
+| Stage classification | Model-free: 4 stages (growth / stable / decay / dormant) from a trend + level test on the volume curve | Mann 1945; Kendall 1948; Hamed & Rao 1998 |
 | Anchor tolerance | ±14 days | Brown & Warner 1985 (event-study convention) |
 | Bootstrap replicates | 1000 | Efron & Tibshirani 1993 |
 | Dedup | MinHash over character 5-grams, 128 permutations, Jaccard 0.85 | Broder 1997; Henzinger 2006 |
@@ -92,8 +92,8 @@ src/mnd/               Python package
   filtering/             Date-range filter + MinHash dedup
   embedding/             Qwen3-Embedding-8B on RCC A100, 0.6B local fallback
   clustering/            BERTopic (UMAP/HDBSCAN/c-TF-IDF) + JEL scope classifier
-  dynamics/              SIR + logistic + Bass + non-parametric shape facts; 7-day MA smoothing
-  stages/                Life-cycle classification keyed to R₀ direction
+  dynamics/              SIR + logistic + Bass least-squares fits + model-free shape facts; 7-day MA smoothing
+  stages/                Model-free life-cycle classification (trend + level test)
   detection/             Press (Media Cloud) and markets (FRED) overlays — display and validation, no text
   validation/            Anchor recovery (reporting only)
   dashboard/             JSON-artifact builder feeding the Astro site
