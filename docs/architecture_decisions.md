@@ -5320,6 +5320,71 @@ overlay; press-heating.
 
 ---
 
+## ADR-068: Overlay efficiency — fetch-once markets, delta-cached Media Cloud, parallel
+
+- **Status**: Accepted
+- **Date**: 2026-07-05
+
+### Context
+
+A full-pipeline efficiency audit (for the weekly-update cadence and publishing)
+found the pipeline already incremental everywhere **except the two analyze display
+overlays**, which are the entire remaining runtime after ADR-067:
+
+- Verified incremental/cached: ingest per-source delta (ADR-063), embedding
+  (ADR-050), cluster merge + model persist (ADR-066), lens fits per-lens (ADR-065),
+  JEL centroid + prototype cache (ADR-067), naming (ADR-056).
+- **Markets overlay re-fetches the *same* VIX series 365×** — `build_overlay` calls
+  FRED once per narrative over that narrative's window, but VIX is one series. A
+  clear redundancy: 365 calls where 1 (sliced) suffices.
+- **Media Cloud overlay makes 365 distinct per-narrative queries, ~12 s each,
+  uncached** (observed: ~73 min sequential on the live re-bake). Each query is the
+  narrative's own terms, so calls are genuinely distinct — but a narrative's
+  historical series is stable and re-fetched in full every run.
+
+Hard constraint (correctness first): the cache must **capture all data changes**.
+Media Cloud indexes with a lag (recent days unreliable; ADR-064), and FRED revises,
+so a naive "cache and skip" would serve stale recent data. The cache must always
+re-fetch the recent window.
+
+### Decision
+
+1. **Markets: fetch each FRED series once, slice per narrative.** `_markets_overlays`
+   fetches the market series across the global span (min start → today) a single
+   time and passes the weekly series into `build_overlay`, which slices/aligns per
+   narrative instead of re-fetching. 365 FRED calls → 1.
+2. **A generic delta-fetch series cache** (`detection/series_cache.py`): a daily
+   time series is cached to JSON keyed on its identity (Media Cloud query hash; FRED
+   series id). On each run it re-fetches only (a) any uncovered head range and (b)
+   the **recent window** — `[min(cached_max, end) − refetch_days, end]` — whenever
+   `end` is near today or the cache doesn't cover the request, then merges by date
+   with the fresh values **overwriting** cached ones. `refetch_days` exceeds the
+   indexing lag (Media Cloud default 28 d; FRED 7 d), so no data change in the
+   updatable window is ever missed. A dead narrative fully covered by cache and
+   ending far in the past triggers no re-fetch (stable → skipped). Cache key includes
+   the query, so a re-cluster (new terms) re-fetches.
+3. **Parallelize the Media Cloud loop** — I/O-bound distinct queries run in a bounded
+   thread pool (`detection.mediacloud.max_workers`, default 6; each call keeps its
+   tenacity backoff, so bursts respect the rate limit). Markets needs no pool (one
+   fetch).
+
+### Consequences
+
+- **Cold analyze re-bake**: markets ~instant (1 fetch); Media Cloud ~365 parallel
+  fetches / a few minutes instead of ~73 min. **Warm re-bake and the weekly
+  `update`**: both overlays hit cache + a small recent-window delta — seconds.
+- **Correctness preserved**: the recent, mutable window is always re-fetched and
+  overwrites cache; only stable history is reused. New dates, indexing corrections,
+  and FRED revisions in the window are captured. A changed query invalidates.
+- **The weekly update is now fast end to end** — every stage incremental/cached,
+  no long jobs. Caches live under the dashboard `out_dir` (git-ignored), safe to
+  delete for a clean refetch.
+- **Relates.** ADR-065 (same content-addressed caching philosophy), ADR-063 (the
+  `update` this makes fast), ADR-064 (press-heating reads the same cached series),
+  ADR-047/042/048 (the overlays), ADR-050 (incremental-delta precedent).
+
+---
+
 ## ADR template (copy for new entries)
 
 ```

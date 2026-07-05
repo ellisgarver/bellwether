@@ -190,12 +190,22 @@ dynamics:
 # fed into embedding, clustering, or dynamics fitting.
 # -----------------------------------------------------------------------------
 detection:
+  markets:
+    # Delta-cache re-fetch window for the FRED series (ADR-068). FRED revises rarely,
+    # so a 7-day recent window suffices; the series is fetched once and sliced.
+    refetch_days: 7
   mediacloud:
     # Per-narrative press query = OR of this many top c-TF-IDF terms. The terms
     # are the data-driven cluster keywords (no hand-picked query string, so the
     # no-tuning rule holds); 6 balances topical specificity against an over-narrow
     # query that returns near-zero press counts.
     query_top_terms: 6
+    # Delta-cache re-fetch window (ADR-068): always re-fetch this many recent days so
+    # new/lagged Media Cloud indexing is captured (exceeds the ~1-week index lag).
+    refetch_days: 28
+    # Bounded parallelism for the per-narrative (I/O-bound) fetches; each keeps its
+    # own tenacity backoff so bursts respect the Media Cloud rate limit.
+    max_workers: 6
     # Premium-press outlet collection id(s) — the Layer-1B financial-press proxy
     # (ADR-016/064). Media Cloud has no single canonical "premium press" id, so the
     # operator supplies collection id(s) for their premium-press outlets here; empty
