@@ -1,35 +1,33 @@
-"""Bayesian dynamics fitting with PyMC.
+"""Least-squares dynamics fitting (ADR-067).
 
 Fits every configured lens (logistic, SIR, Bass) to a cluster's daily
-article-count series and returns them all side by side; AICc is a displayed
-diagnostic on each FitResult, not a selection gate. Model-free shape-facts are
-computed alongside.
+article-count series by bounded nonlinear least-squares (``scipy.least_squares``)
+and returns them side by side; AICc is a displayed diagnostic on each FitResult,
+not a selection gate. Model-free shape-facts are computed alongside.
 
-Stage classification no longer keys off these fits; stage is a model-free trend
-test. The fits are display lenses. Each lens reports self-standing numbers in the
-series' own units (ADR-062): logistic -> doubling time / inflection / plateau;
-SIR -> rise rate / decay rate / asymmetry / peak; Bass -> total reach / innovation
-p / imitation q. R_0 and J_inf are not reported -- neither is identifiable from a
-single attention curve.
+The fits are display lenses reporting self-standing point numbers in the series'
+own units (ADR-062): logistic -> doubling time / inflection / plateau; SIR -> rise
+rate / decay rate / asymmetry / peak; Bass -> total reach / innovation p /
+imitation q. R_0 and J_inf are not reported (neither is identifiable from a single
+curve). Each lens is "converged" (shown) iff the optimizer succeeds and R² clears
+``dynamics.min_fit_r2`` — the fit-quality gate that replaced the former MCMC
+R-hat/ESS gate (ADR-067). Stage classification is model-free and does not key off
+these fits.
 
-SIR model (ADR-062): the mean function is Schlickeiser & Kröger's closed-form
-prevalence (an exponential rise meeting a shifted sech² decay at the peak),
-elementary and differentiable, so NUTS runs at logistic/Bass cost with no ODE
-solver and no scan. This replaced the former Euler scan, the analysis layer's
-compute pole. Priors are data-scaled and weakly informative -- no epidemiology.
+SIR uses Schlickeiser & Kröger's closed-form prevalence (an exponential rise
+meeting a shifted sech² decay; ADR-062), fit in the identifiable coordinates
+(peak_height, peak_time, k0, rise_rate). No PyMC/NUTS, no ODE solver — the whole
+fit layer runs in milliseconds per cluster and is fully testable locally.
 
-Graceful failure: genuine per-cluster convergence failures (low ESS, high R-hat,
-numerical exceptions) are recorded in FitResult.failure_reason and the pipeline
-continues. Programming errors that would break every cluster identically
-(AttributeError, NameError, ImportError, TypeError) are re-raised rather than
-swallowed, so a regression surfaces immediately instead of as silent
-non-convergence across every cluster.
+Graceful failure: a per-cluster fit failure (optimizer error, degenerate series)
+is recorded in FitResult.failure_reason and the pipeline continues. Programming
+errors that would break every cluster identically (AttributeError, NameError,
+ImportError, TypeError) are re-raised so a regression surfaces immediately.
 
-Configuration: config.dynamics.{inference, priors, models_to_fit}.
+Configuration: config.dynamics.{min_fit_r2, models_to_fit}.
 """
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -275,48 +273,37 @@ class DynamicsFitter:
     def _fit_logistic(
         self, cluster_id: int | str, t: np.ndarray, y: np.ndarray
     ) -> FitResult:
-        import pymc as pm
+        """Least-squares logistic fit (ADR-067) — point estimates + curve, no NUTS."""
+        from scipy.optimize import least_squares
 
-        priors = self._cfg["dynamics"]["priors"]["logistic"]
-        inf_cfg = self._cfg["dynamics"]["inference"]
-
-        with pm.Model() as model:
-            L = pm.LogNormal("L", mu=priors["L_log_mean"], sigma=priors["L_log_sd"])
-            k = pm.HalfNormal("k", sigma=priors["k_sd"])
-            t0 = pm.Normal(
-                "t0", mu=float(t.mean()), sigma=float(t.std() + 1.0)
-            )
-            sigma = pm.HalfNormal("sigma", sigma=float(y.std() + 1.0))
-            mu = L / (1.0 + pm.math.exp(-k * (t - t0)))
-            pm.Normal("obs", mu=mu, sigma=sigma, observed=y)
-            trace = self._sample(inf_cfg)
-
-        import arviz as az
-
-        summary = az.summary(trace, var_names=["L", "k", "t0"], hdi_prob=0.94)
-        converged = _check_convergence(trace)
-        k_mean = float(summary.loc["k", "mean"])
-        L_mean = float(summary.loc["L", "mean"])
-        t0_mean = float(summary.loc["t0", "mean"])
-        curve = logistic(t, L_mean, k_mean, t0_mean)
+        L0 = max(float(y.max()), 1.0)
+        x0 = [L0, 0.1, float(t.mean())]
+        lo = [1e-6, 1e-4, float(t.min())]
+        hi = [L0 * 10.0 + 1.0, 5.0, float(t.max())]
+        res = least_squares(
+            lambda p: logistic(t, *p) - y, x0, bounds=(lo, hi),
+            method="trf", max_nfev=2000,
+        )
+        L, k, t0 = (float(v) for v in res.x)
+        curve = logistic(t, L, k, t0)
+        r2 = _r_squared(y, curve)
+        converged = bool(res.success and r2 >= self._min_fit_r2())
         ll = _gaussian_loglik(y, curve)
 
         # Self-standing numbers (ADR-062): growth rate -> doubling time (days),
-        # inflection date, plateau level. No R_0 (that borrowed the SIR disease
-        # gamma and was not identifiable).
-        params = dict(summary.to_dict())
-        params["doubling_time"] = logistic_doubling_time(k_mean)
-        params["inflection_day"] = t0_mean
-        params["plateau"] = L_mean
-
+        # inflection date, plateau level.
+        params = {
+            "L": L, "k": k, "t0": t0, "r2": r2,
+            "doubling_time": logistic_doubling_time(k),
+            "inflection_day": t0,
+            "plateau": L,
+        }
         return FitResult(
             cluster_id=cluster_id,
             model_name="logistic",
             converged=converged,
             aicc=aicc(ll, k=3, n=len(y)),
-            peak_time_mean=t0_mean,
-            peak_time_ci_low=float(summary.loc["t0", "hdi_3%"]),
-            peak_time_ci_high=float(summary.loc["t0", "hdi_97%"]),
+            peak_time_mean=t0,
             param_summary=params,
             curve=[float(v) for v in curve],
         )
@@ -328,108 +315,55 @@ class DynamicsFitter:
     def _fit_sir(
         self, cluster_id: int | str, t: np.ndarray, y: np.ndarray
     ) -> FitResult:
-        """Fit the closed-form SIR prevalence (ADR-062): elementary, no ODE scan.
+        """Least-squares closed-form SIR fit (ADR-062/067) — no ODE, no NUTS.
 
-        The mean function is Schlickeiser & Kröger's analytic prevalence — an
-        exponential rise meeting a shifted sech² decay at the peak — expressed in
-        PyTensor so NUTS runs at logistic/Bass cost. Priors are data-scaled and
-        weakly informative (no disease constants). What the lens reports is the
-        rise and decay rates read off the fitted limbs; R_0 = 1/k0 is fit as a
-        shape scalar but never reported (not identifiable from one curve).
+        Fits Schlickeiser & Kröger's analytic prevalence (exponential rise meeting a
+        shifted sech² decay) in the data-identified coordinates (peak_height,
+        peak_time, k0, rise_rate); timescale = (1-k0)/(k0·rise_rate) is derived. The
+        lens reports the rise/decay rates read off the fitted limbs; R_0 = 1/k0 is a
+        shape scalar, never reported (not identifiable from one curve).
         """
-        import pymc as pm
-        import pytensor.tensor as pt
+        from scipy.optimize import least_squares
 
-        from mnd.dynamics.models import _SIR_ETA
-
-        priors = self._cfg["dynamics"]["priors"]["sir"]
-        inf_cfg = self._cfg["dynamics"]["sir_inference"]
-        eta = _SIR_ETA
         span = float(max(len(y), 2))
         obs_peak = float(max(y.max(), 1.0))
         peak_day_guess = float(np.argmax(y))
 
-        with pm.Model():
-            # Data-scaled, weakly-informative priors (ADR-062) — no epidemiology.
-            # Sampled in the DATA-IDENTIFIED coordinates (rise_rate, k0), not
-            # (timescale, k0): timescale and k0 act on the curve only through their
-            # combination, so sampling them directly is a curved ridge that fails to
-            # mix (0/365 converged). rise_rate is pinned by the rising limb and k0 by
-            # the decaying limb; timescale is derived, collapsing the ridge (ADR-062).
-            peak_height = pm.LogNormal(
-                "peak_height", mu=float(np.log(obs_peak)),
-                sigma=float(priors["peak_height_log_sd"]),
-            )
-            peak_time = pm.Normal(
-                "peak_time", mu=peak_day_guess, sigma=float(span / 4.0 + 1.0)
-            )
-            # k0 = 1/R0 in (0,1); Beta(a,b) is a gentle shape prior (a=b=2 -> centred
-            # on k0=0.5, i.e. R0=2), not tuned to any anchor.
-            k0 = pm.Beta("k0", alpha=float(priors["k0_beta_a"]), beta=float(priors["k0_beta_b"]))
-            # Early exponential growth rate (per day), data-scaled to the window.
-            rise_rate = pm.LogNormal(
-                "rise_rate", mu=float(np.log(6.0 / span)),
-                sigma=float(priors["rise_rate_log_sd"]),
-            )
-            # timescale = (1-k0)/(k0*rise_rate) since rise_rate = (1-k0)/(k0*timescale).
-            timescale = (1.0 - k0) / (k0 * rise_rate)
-            sigma = pm.HalfNormal("sigma", sigma=float(y.std() + 1.0))
+        def curve_of(p):
+            ph, ptime, k0, rr = p
+            ts = (1.0 - k0) / (k0 * max(rr, 1e-9))
+            return sir_kssir_curve(t, ph, ptime, k0, ts)
 
-            # Closed-form prevalence in PyTensor (mirrors models.sir_kssir_curve).
-            Imax = 1.0 - k0 - k0 * pt.log((1.0 - eta) / k0)          # eq 51
-            Umax = pt.log(Imax / eta)                                # eq 37
-            O = Imax / k0                                            # eq 59
-            kappa = 1.0 / (pt.exp(O) - 1.0)                          # eq 62
-            Phi = pt.arctanh(pt.sqrt(pt.clip(1.0 - kappa * O, 0.0, 1.0 - 1e-9)))  # eq 66
-            tauU = Umax * k0 / (1.0 - k0)                            # small-eta peak time
-            tau = tauU + (pt.as_tensor_variable(t) - peak_time) / timescale
-            rise_arg = pt.clip((tau - tauU) * (Umax / tauU), -50.0, 0.0)
-            rise = peak_height * pt.exp(rise_arg)                    # eq 88
-            zeta = k0 * (tau - tauU) / (2.0 * pt.sqrt(1.0 + kappa)) + Phi
-            decay = peak_height * (pt.cosh(Phi) / pt.cosh(zeta)) ** 2  # eq 76
-            mu = pt.switch(tau < tauU, rise, decay)
-
-            pm.Normal("obs", mu=mu, sigma=sigma, observed=y)
-            trace = self._sample(inf_cfg)
-
-        import arviz as az
-
-        summary = az.summary(
-            trace, var_names=["peak_height", "peak_time", "k0", "rise_rate"],
-            hdi_prob=0.94,
+        x0 = [obs_peak, peak_day_guess, 0.5, 6.0 / span]
+        lo = [1e-6, float(t.min()), 0.02, 1e-4]
+        hi = [obs_peak * 10.0 + 1.0, float(t.max()), 0.98, 5.0]
+        res = least_squares(
+            lambda p: curve_of(p) - y, x0, bounds=(lo, hi),
+            method="trf", max_nfev=3000,
         )
-        converged = _check_convergence(trace)
-        ph = float(summary.loc["peak_height", "mean"])
-        pt_mean = float(summary.loc["peak_time", "mean"])
-        k0_mean = float(summary.loc["k0", "mean"])
-        rr_mean = float(summary.loc["rise_rate", "mean"])
-        # timescale derived from the sampled (rise_rate, k0), matching the model.
-        ts_mean = (1.0 - k0_mean) / (k0_mean * max(rr_mean, 1e-9))
-
-        curve = sir_kssir_curve(t, ph, pt_mean, k0_mean, ts_mean)
+        ph, ptime, k0, rr = (float(v) for v in res.x)
+        ts = (1.0 - k0) / (k0 * max(rr, 1e-9))
+        curve = sir_kssir_curve(t, ph, ptime, k0, ts)
+        r2 = _r_squared(y, curve)
+        converged = bool(res.success and r2 >= self._min_fit_r2())
         ll = _gaussian_loglik(y, curve)
 
-        # Self-standing numbers (ADR-062): the identifiable limb rates, in per-day
-        # units. rise_rate and decay_rate are the observed log-slopes; k0 and
-        # timescale individually are not identifiable, but these products are.
-        rise_rate = sir_rise_rate(k0_mean, ts_mean)
-        decay_rate = sir_decay_rate(k0_mean, ts_mean)
-        params = dict(summary.to_dict())
-        params["rise_rate"] = rise_rate
-        params["decay_rate"] = decay_rate
-        params["doubling_time_up"] = float(np.log(2.0) / rise_rate) if rise_rate > 0 else float("inf")
-        params["half_life_down"] = float(np.log(2.0) / decay_rate) if decay_rate > 0 else float("inf")
-        params["asymmetry"] = float(rise_rate / decay_rate) if decay_rate > 0 else float("inf")
-        params["peak_height"] = ph
-
+        rise_rate = sir_rise_rate(k0, ts)
+        decay_rate = sir_decay_rate(k0, ts)
+        params = {
+            "peak_height": ph, "peak_time": ptime, "k0": k0, "r2": r2,
+            "rise_rate": rise_rate,
+            "decay_rate": decay_rate,
+            "doubling_time_up": float(np.log(2.0) / rise_rate) if rise_rate > 0 else float("inf"),
+            "half_life_down": float(np.log(2.0) / decay_rate) if decay_rate > 0 else float("inf"),
+            "asymmetry": float(rise_rate / decay_rate) if decay_rate > 0 else float("inf"),
+        }
         return FitResult(
             cluster_id=cluster_id,
             model_name="sir",
             converged=converged,
             aicc=aicc(ll, k=4, n=len(y)),
-            peak_time_mean=pt_mean,
-            peak_time_ci_low=float(summary.loc["peak_time", "hdi_3%"]),
-            peak_time_ci_high=float(summary.loc["peak_time", "hdi_97%"]),
+            peak_time_mean=ptime,
             param_summary=params,
             curve=[float(v) for v in curve],
         )
@@ -441,35 +375,29 @@ class DynamicsFitter:
     def _fit_bass(
         self, cluster_id: int | str, t: np.ndarray, y: np.ndarray
     ) -> FitResult:
-        import pymc as pm
+        """Least-squares Bass fit (ADR-067) — closed form, no NUTS.
+
+        Priors are retired to init values anchored to the Sultan–Farley–Lehmann 1990
+        meta-analysis means (p≈0.03 innovation, q≈0.38 imitation), which now seed the
+        optimizer rather than regularize a posterior.
+        """
+        from scipy.optimize import least_squares
 
         priors = self._cfg["dynamics"]["priors"]["bass"]
-        inf_cfg = self._cfg["dynamics"]["inference"]
-        m_guess = max(float(y.sum()), 1.0)
-
-        with pm.Model():
-            m = pm.LogNormal(
-                "m", mu=float(np.log(m_guess)), sigma=priors["m_log_sd"]
-            )
-            p = pm.LogNormal("p", mu=priors["p_log_mean"], sigma=priors["p_log_sd"])
-            q = pm.LogNormal("q", mu=priors["q_log_mean"], sigma=priors["q_log_sd"])
-            sigma = pm.HalfNormal("sigma", sigma=float(y.std() + 1.0))
-
-            s = p + q
-            e = pm.math.exp(-s * t)
-            mu = m * (s**2 / p) * e / (1.0 + (q / p) * e) ** 2
-            pm.Normal("obs", mu=mu, sigma=sigma, observed=y)
-            trace = self._sample(inf_cfg)
-
-        import arviz as az
-
-        summary = az.summary(trace, var_names=["m", "p", "q"], hdi_prob=0.94)
-        converged = _check_convergence(trace)
-        m_mean = float(summary.loc["m", "mean"])
-        p_mean = float(summary.loc["p", "mean"])
-        q_mean = float(summary.loc["q", "mean"])
-        y_hat = bass(t, m_mean, p_mean, q_mean)
-        ll = _gaussian_loglik(y, y_hat)
+        m0 = max(float(y.sum()), 1.0)
+        # Init p, q from the Sultan–Farley–Lehmann 1990 meta-analysis means (ADR-067).
+        x0 = [m0, float(np.exp(priors["p_log_mean"])), float(np.exp(priors["q_log_mean"]))]
+        lo = [1e-6, 1e-5, 1e-5]
+        hi = [m0 * 10.0 + 1.0, 2.0, 5.0]
+        res = least_squares(
+            lambda p: bass(t, *p) - y, x0, bounds=(lo, hi),
+            method="trf", max_nfev=3000,
+        )
+        m, p, q = (float(v) for v in res.x)
+        curve = bass(t, m, p, q)
+        r2 = _r_squared(y, curve)
+        converged = bool(res.success and r2 >= self._min_fit_r2())
+        ll = _gaussian_loglik(y, curve)
 
         # Bass headline: total reach + the innovation/imitation balance.
         return FitResult(
@@ -477,51 +405,20 @@ class DynamicsFitter:
             model_name="bass",
             converged=converged,
             aicc=aicc(ll, k=3, n=len(y)),
-            peak_time_mean=bass_peak_time(p_mean, q_mean),
+            peak_time_mean=bass_peak_time(p, q),
             param_summary={
-                **summary.to_dict(),
-                "total_reach": m_mean,
-                "p_innovation": p_mean,
-                "q_imitation": q_mean,
-                "external_vs_internal": p_mean / max(q_mean, 1e-9),
+                "m": m, "p": p, "q": q, "r2": r2,
+                "total_reach": m,
+                "p_innovation": p,
+                "q_imitation": q,
+                "external_vs_internal": p / max(q, 1e-9),
             },
-            curve=[float(v) for v in y_hat],
+            curve=[float(v) for v in curve],
         )
 
-    # ------------------------------------------------------------------
-    # Shared sampling helper
-    # ------------------------------------------------------------------
-
-    def _sample(self, inf_cfg: dict[str, Any]):
-        import os
-
-        import pymc as pm
-
-        cores = inf_cfg.get("cores", "auto")
-        if cores == "auto":
-            cores = min(inf_cfg["chains"], os.cpu_count() or 1)
-
-        max_treedepth = inf_cfg.get("max_treedepth")
-        common = dict(
-            draws=inf_cfg["draws"],
-            tune=inf_cfg["tune"],
-            chains=inf_cfg["chains"],
-            cores=cores,
-            random_seed=inf_cfg["random_seed"],
-            progressbar=False,
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            if max_treedepth is not None:
-                # Bound leapfrog steps per draw (ADR-060 fail-fast): a cluster the
-                # SIR ODE cannot fit hits the cap and is marked non-converged in
-                # seconds rather than grinding at max tree depth on every draw.
-                step = pm.NUTS(
-                    target_accept=inf_cfg["target_accept"],
-                    max_treedepth=int(max_treedepth),
-                )
-                return pm.sample(step=step, **common)
-            return pm.sample(target_accept=inf_cfg["target_accept"], **common)
+    def _min_fit_r2(self) -> float:
+        """Fit-quality floor: a lens is 'converged' (shown) iff its R² clears this."""
+        return float(self._cfg["dynamics"].get("min_fit_r2", 0.3))
 
 
 # ------------------------------------------------------------------
@@ -600,17 +497,14 @@ def _reproject_to_full(fr: FitResult, i0: int, n: int) -> FitResult:
     return fr
 
 
-def _check_convergence(trace) -> bool:
-    """True if all R-hat < 1.05 and all bulk-ESS > 400."""
-    try:
-        import arviz as az
-
-        summary = az.summary(trace)
-        return bool(
-            (summary["r_hat"] < 1.05).all() and (summary["ess_bulk"] > 400).all()
-        )
-    except Exception:
-        return False
+def _r_squared(y_obs: np.ndarray, y_hat: np.ndarray) -> float:
+    """Coefficient of determination — the least-squares fit-quality metric (ADR-067)."""
+    y_obs = np.asarray(y_obs, dtype=float)
+    ss_res = float(np.sum((y_obs - np.asarray(y_hat, dtype=float)) ** 2))
+    ss_tot = float(np.sum((y_obs - y_obs.mean()) ** 2))
+    if ss_tot <= 0.0:
+        return 0.0
+    return 1.0 - ss_res / ss_tot
 
 
 def _gaussian_loglik(y_obs: np.ndarray, y_hat: np.ndarray) -> float:
