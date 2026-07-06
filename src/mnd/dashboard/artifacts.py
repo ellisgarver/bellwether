@@ -2,10 +2,9 @@
 
 This module defines the boundary between the analysis pipeline and the Astro
 static site. The pipeline is heavy (parquet of every chunk, a fitted BERTopic
-model, embedding matrices, PyMC traces); the website does not touch any of it.
-Instead an artifact-builder bakes everything the screen needs into small, plain
-JSON, and the front end only ever reads that JSON — it never imports
-pymc/bertopic/torch.
+model, embedding matrices); the website does not touch any of it. Instead an
+artifact-builder bakes everything the screen needs into small, plain JSON, and
+the front end only ever reads that JSON — it never imports bertopic/torch.
 
 Two file kinds live under ``paths.dashboard_artifacts``:
 

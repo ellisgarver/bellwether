@@ -5,7 +5,7 @@ growth: the embedded corpus has more active sources and higher publishing
 cadence in 2024 than in 2013, so a recent narrative sits on a larger denominator
 of total discourse and its raw count overstates its reach. This is normalized
 away with a single, global, whole-corpus base rate, expressed back in count
-units so the PyMC priors (which are in article-count units) stay valid.
+units so the lens fits keep working in article-count units.
 
 For each day d:
   N(d)   = unique articles published that day across the entire embedded corpus
