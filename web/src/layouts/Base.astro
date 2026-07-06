@@ -23,8 +23,17 @@ const asOf = loadIndex().generated_at?.slice(0, 10) ?? "";
       name="description"
       content="tracking how macro-finance narratives form, spread, and fade across fifteen years of institutional and academic writing — mapped, staged, and charted against the press and the markets."
     />
+    <link rel="icon" type="image/svg+xml" href={href("/favicon.svg")} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="macro narrative dynamics" />
+    <meta property="og:title" content={`${title} · macro narrative dynamics`} />
+    <meta
+      property="og:description"
+      content="how macro narratives rise and fade — fifteen years of institutional macro-finance writing, mapped and charted."
+    />
+    <meta name="twitter:card" content="summary" />
   </head>
-  <body>
+  <body data-base={base.replace(/\/$/, "")}>
     <header class="site-header">
       <div class="wrap">
         <a class="brand" href={href("/")}>

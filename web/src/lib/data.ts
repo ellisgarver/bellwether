@@ -169,6 +169,40 @@ export function loadNarrative(clusterId: number): Narrative {
   return readJson<Narrative>(`narrative_${clusterId}.json`);
 }
 
+// ---- optional artifacts (absent in older bakes; pages degrade gracefully) ----
+
+export interface ValidationSummary {
+  generated_at: string;
+  n_recovered: number;
+  n_total: number;
+  results: { anchor_id: string; recovered: boolean; note: string }[];
+}
+
+export function loadValidation(): ValidationSummary | null {
+  const p = path.join(DATA_DIR, "validation.json");
+  return fs.existsSync(p) ? (JSON.parse(fs.readFileSync(p, "utf-8")) as ValidationSummary) : null;
+}
+
+export interface DirectoryEntry {
+  cluster_id: number;
+  label: string;
+  label_human: string | null;
+  n_articles: number;
+  date_range: [string, string] | null;
+  surfaced: boolean;
+}
+
+export interface ClusterDirectory {
+  generated_at: string;
+  n_clusters: number;
+  clusters: DirectoryEntry[];
+}
+
+export function loadDirectory(): ClusterDirectory | null {
+  const p = path.join(DATA_DIR, "clusters_all.json");
+  return fs.existsSync(p) ? (JSON.parse(fs.readFileSync(p, "utf-8")) as ClusterDirectory) : null;
+}
+
 // Human-readable display name with graceful fallback (ADR-056): the LLM title
 // when present, else BERTopic's c-TF-IDF label. One place so card / detail / map
 // all render the same name.
