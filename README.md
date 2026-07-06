@@ -216,8 +216,10 @@ The build reads `data/processed/dashboard/` by default; set `DASHBOARD_DATA_DIR`
 to point elsewhere. Narrative display names come from the naming layer during the
 bake — a local Ollama serving `llama3.1` by default, or any OpenAI-compatible
 endpoint via `MND_NAMING_BASE_URL` / `MND_NAMING_MODEL` / `MND_NAMING_API_KEY`.
-Generated names are cached and committed (`data/naming_cache/`), so rebuilds are
-deterministic and only new or changed narratives call the model.
+If the artifacts were baked on a machine without an endpoint, run
+`python scripts/run_pipeline.py name` afterward to resolve names into the baked
+JSON in place. Generated names are cached and committed (`data/naming_cache/`),
+so rebuilds are deterministic and only new or changed narratives call the model.
 
 ## Reproducibility
 

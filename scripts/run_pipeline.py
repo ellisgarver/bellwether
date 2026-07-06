@@ -10,6 +10,7 @@ Dispatches pipeline stages:
   validate            — anchor narrative recovery (reported as rate, not gated)
   analyze             — clusters → normalize → JEL → dynamics → stages →
                         similar → dashboard artifacts (the pipeline→front-end seam)
+  name                — resolve display names for baked artifacts in place (ADR-056)
   update              — portable weekly delta: per-source over-fetch + analyze (ADR-063)
   corpus-composition  — report article counts per source per year
 
@@ -908,13 +909,12 @@ def analyze(
     """Recompute the analysis layer from clustering and write dashboard artifacts.
 
     Runs the full downstream chain — corpus-base-rate normalization (ADR-045),
-    JEL scope (ADR-020), four-lens dynamics (ADR-039), stage classification
-    (ADR-019), similar narratives + UMAP map (ADR-044) — and bakes the artifact
-    JSON the static front end reads (ADR-043). No re-embedding: recomputes
-    entirely from the persisted clusters.parquet / embeddings.npy.
-
-    Loads the production Qwen3 embedder (for JEL prototype similarity) and runs
-    PyMC sampling per in-scope cluster — run on RCC, not a laptop.
+    JEL scope on cluster centroids (ADR-067), least-squares lens fits (ADR-067),
+    model-free stage classification (ADR-052), similar narratives + UMAP map
+    (ADR-044), display naming (ADR-056) — and bakes the artifact JSON the static
+    front end reads (ADR-043). No re-embedding: recomputes entirely from the
+    persisted clusters.parquet / embeddings.npy, CPU-only and cache-incremental
+    (ADR-065), so a re-bake is minutes anywhere.
     """
     from mnd.dashboard.run import run_analysis
 
@@ -943,6 +943,77 @@ def analyze(
         cfg=cfg,
     )
     log.info("analyze: wrote dashboard artifacts → %s", out)
+
+
+# ---------------------------------------------------------------------------
+# name  (ADR-056/067 — display naming for already-baked artifacts)
+# ---------------------------------------------------------------------------
+
+@cli.command("name")
+@click.option("--artifacts-dir", default=None,
+              help="Dashboard artifacts dir (default: config paths.dashboard_artifacts)")
+@click.pass_context
+def name_artifacts(ctx: click.Context, artifacts_dir: str | None) -> None:
+    """Resolve display names for baked artifacts and patch them in place.
+
+    Rebuilds each surfaced narrative's naming input from its baked story card —
+    the same terms, central-article excerpts, date span, and source mix the
+    ``analyze`` bake feeds the namer — so the cache signatures are identical and
+    every name written to ``display.naming.cache_dir`` is reused verbatim by the
+    next bake, wherever it runs. Lets naming run on any machine with an
+    OpenAI-compatible endpoint (a local Ollama by default) after the artifacts
+    were baked elsewhere. Display layer only; idempotent and safe to re-run.
+    """
+    from mnd.dashboard.naming import NamingInput, generate_names
+
+    cfg = ctx.obj["cfg"]
+    art_dir = (
+        Path(artifacts_dir) if artifacts_dir
+        else data_root() / cfg["paths"]["dashboard_artifacts"]
+    )
+    index_path = art_dir / "index.json"
+    if not index_path.exists():
+        log.error("No artifacts at %s — run `analyze` first.", art_dir)
+        sys.exit(1)
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+
+    inputs: list[NamingInput] = []
+    narr_files: dict[int, tuple[Path, dict]] = {}
+    for entry in index["narratives"]:
+        cid = int(entry["cluster_id"])
+        path = art_dir / f"narrative_{cid}.json"
+        if not path.exists():
+            log.warning("name: missing %s; skipped", path.name)
+            continue
+        narr = json.loads(path.read_text(encoding="utf-8"))
+        card = narr.get("card") or {}
+        panels = card.get("central_articles") or card.get("representative_articles") or []
+        inputs.append(
+            NamingInput(
+                cluster_id=cid,
+                terms=[str(t) for t in (card.get("top_terms") or [])],
+                excerpts=[a["excerpt"] for a in panels if a.get("excerpt")],
+                date_range=tuple(card["date_range"]) if card.get("date_range") else None,
+                sources=[s for s, _ in (card.get("source_mix") or [])[:4]],
+            )
+        )
+        narr_files[cid] = (path, narr)
+
+    names = generate_names(inputs, cfg)
+    for cid, nm in names.items():
+        path, narr = narr_files[cid]
+        narr["label_human"] = nm.title
+        narr["description"] = nm.description
+        path.write_text(json.dumps(narr, ensure_ascii=False), encoding="utf-8")
+    for entry in index["narratives"]:
+        nm = names.get(int(entry["cluster_id"]))
+        if nm is not None:
+            entry["label_human"] = nm.title
+    index_path.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
+    log.info(
+        "name: %d/%d narratives carry display names; artifacts patched in %s",
+        len(names), len(inputs), art_dir,
+    )
 
 
 # ---------------------------------------------------------------------------
