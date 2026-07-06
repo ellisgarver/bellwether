@@ -132,9 +132,10 @@ export function mountMap3d(
     x: pts.map((p) => xyz(p)[0]),
     y: pts.map((p) => xyz(p)[1]),
     z: pts.map((p) => xyz(p)[2]),
-    customdata: pts.map((p) => p.cluster_id),
+    customdata: pts.map((p) => [p.cluster_id, p.n_articles, p.stage]),
     text: pts.map((p) => p.label_human || p.label),
-    hovertemplate: "%{text}<extra></extra>",
+    hovertemplate:
+      "%{text}<br>%{customdata[1]} articles · %{customdata[2]}<extra></extra>",
     marker: {
       size: pts.map((p) => 4 + Math.sqrt(p.n_articles) * 0.55),
       color: pts.map((p) => STAGE_COLOR[p.stage] ?? COL.dormant),
@@ -177,15 +178,25 @@ export function mountMap3d(
     displayModeBar: false, responsive: true, scrollZoom: true,
   });
 
+  // Navigate only on a deliberate click: gl3d fires plotly_click on any mouseup
+  // over a point, including the release of an orbit drag — gate on the pointer
+  // having barely moved between down and up so a drag never opens a narrative.
+  let downX = 0, downY = 0;
+  el.addEventListener("pointerdown", (ev) => { downX = ev.clientX; downY = ev.clientY; }, true);
+  let upX = 0, upY = 0;
+  el.addEventListener("pointerup", (ev) => { upX = ev.clientX; upY = ev.clientY; }, true);
   el.on("plotly_click", (ev: any) => {
+    if (Math.hypot(upX - downX, upY - downY) > 6) return;
     const cd = ev.points?.[0]?.customdata;
-    if (cd !== undefined) window.location.href = `${base}/narratives/${cd}`;
+    const cid = Array.isArray(cd) ? cd[0] : cd;
+    if (cid !== undefined) window.location.href = `${base}/narratives/${cid}`;
   });
 
   // Light up the hovered node's incident edges; clear on unhover. Edge trace is
   // index 0 in the newPlot call below, so restyle targets [0].
   el.on("plotly_hover", (ev: any) => {
-    const cid = ev.points?.[0]?.customdata;
+    const cd = ev.points?.[0]?.customdata;
+    const cid = Array.isArray(cd) ? cd[0] : cd;
     const src = cid === undefined ? undefined : byId[cid];
     if (!src) return;
     const a = xyz(src);
@@ -237,6 +248,7 @@ export function mountMap3d(
   });
 
   const resume = () => {
+    if (spinning) return; // never stack a second animation loop
     if (lastEye) {
       radius = Math.hypot(lastEye.x, lastEye.y);
       angle = Math.atan2(lastEye.y, lastEye.x);
@@ -252,14 +264,16 @@ export function mountMap3d(
   };
   const scheduleResume = () => {
     if (resumeTimer) clearTimeout(resumeTimer);
-    resumeTimer = setTimeout(resume, 10000);
+    resumeTimer = setTimeout(resume, 6000);
   };
 
-  el.addEventListener("mousedown", pause);
-  el.addEventListener("touchstart", pause, { passive: true });
+  // pause starts on the map, but the release often lands outside it (mid-drag
+  // the pointer leaves the plot) — listen on the window so every interaction
+  // end reliably schedules the resume.
+  el.addEventListener("pointerdown", pause);
   el.addEventListener("wheel", () => { pause(); scheduleResume(); }, { passive: true });
-  el.addEventListener("mouseup", scheduleResume);
-  el.addEventListener("touchend", scheduleResume);
+  window.addEventListener("pointerup", scheduleResume);
+  window.addEventListener("pointercancel", scheduleResume);
 
   requestAnimationFrame(tick);
 }
