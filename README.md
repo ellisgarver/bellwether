@@ -1,6 +1,6 @@
 # bellwether
 
-A tool to examine how macroeconomic narratives form, rise, and fade. This project reads fifteen years of U.S.
+A tool to examine how macroeconomic narratives form, rise, and fade. This project reads years (since 2010) of U.S.
 macro-financial discourse from academic and institutional sources — the Fed, the IMF, the BIS, the NBER and their peers
 — clusters into narratives, and tracks each story.
 
