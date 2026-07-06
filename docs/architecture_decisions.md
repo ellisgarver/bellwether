@@ -84,6 +84,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 064 | **Media Cloud Premium press layer + press-heating emerging signal — add the premium-press outlet collection (ADR-016: WSJ/Bloomberg/FT/Reuters/…) alongside the broad US-National collection, both via the one Media Cloud module. Wire ADR-057 §2: per already-tracked narrative, `detect_anomalies` on the attention-share ratio over a 4-week window vs a 52-week baseline at k=2σ, surfaced as a SEPARATE "heating in the press" signal beside the institutional recency flag in the Emerging view. Recomputes at bake time from live press against the existing narrative set — no re-embed, no re-cluster, never feeds embedding/clustering/scope (ADR-010/020/046). Degrades to absent when unkeyed.** | Live (implements 057 §2; extends 016/042/048; relates 040) |
 | 068 | **Overlay efficiency — VIX fetched once over the corpus span and sliced per narrative; Media Cloud per-narrative series delta-cached (stable history reused, recent window re-fetched) and fetched in a bounded thread pool** | Live (relates 042/047/048/063/065) |
 | 069 | **Anchor recovery scoped to anchor-relevant articles — window rows filtered by the anchor's fixed `key_terms` (registry, Phase 0), chunks folded to articles (majority topic), concentration = largest single non-noise cluster share with outliers kept in the denominator, threshold 0.50 unchanged. Replaces whole-window concentration, which is unsatisfiable on the full-breadth ADR-020 corpus (0/10 with the outlier bucket winning every plurality — a metric artifact)** | Live (amends 019 validation clause; relates 020/040) |
+| 070 | **Name-cache signature excludes the date span — a continuing narrative's weekly-extending span no longer invalidates its title, so weekly merges (066 Part C) keep display names stable; titles regenerate only when terms/excerpts/sources change. One-time full re-name absorbed into the post-rebuild naming pass** | Live (amends 056; relates 066/067) |
 | 059 | **Emerging flag is recency-only — a narrative is emerging iff its onset falls within the 4-week recency window of the corpus frontier, regardless of stage; drops the earlier `stage == growth` gate so a just-arrived narrative whose short history hasn't yet registered a significant trend is still surfaced as newly arrived** | Live (amends 052 emerging clause; relates 016/057) |
 | 058 | **Peak-relative plateau test — `stable` vs `dormant` keyed to the narrative's own high-water window, not its quiet floor; fixes the all-`stable` collapse (342/365) where institutional tails made "above the floor" trivially true. MWU on the zero-heavy daily series was under-powered, so the split is by level: recent-window mean below `dormant_peak_fraction`=0.25 of the peak-window mean → dormant (a definition, not tuned to recovery)** | Live (amends 052 §2/§3 Level test; relates 040) |
 | 057 | **Phase-6 live emerging (design) — two display-only signals: institutional onset (existing) + press heating (4wk vs 52wk baseline, k=2, on Media Cloud attention-share); weekly refresh builds onto the model via BERTopic `merge_models` (ids/URLs/names preserved, new topics appended above τ); manual now → cron later; novel press-only clustering scoped out (ADR-010)** | Live design; press-heating + weekly-refresh implementations each need a follow-up ADR (relates 010/016/020/042/046/048/050/056) |
@@ -5168,9 +5169,23 @@ a genuine change still invalidates cleanly, and both are display-mechanics only
 
 ## ADR-066: Weekly incremental re-cluster via BERTopic `merge_models` (design + model-persistence prereq)
 
-- **Status**: Proposed (prereq accepted + shipped; mechanism validated synthetically,
-  pending real-corpus anchor-id validation + `update` wiring)
-- **Date**: 2026-07-04
+- **Status**: Accepted (wired into `update` behind a default-off flag; awaiting
+  one real-corpus gate validation before the flag flips)
+- **Date**: 2026-07-04 (wiring 2026-07-06)
+
+> **Part C — wiring (2026-07-06).** A `merge-week` command implements the
+> production path: delta chunks (present in `chunks.parquet`, absent from
+> `clusters.parquet`) are fit as a new-week model and merged into the persisted
+> base with `merge_models` at `update.merge_min_similarity` (0.7, the library
+> default). The identity gate is **every** non-noise base topic id surviving the
+> merge — stronger than the ten anchors — and it runs **before anything is
+> written**: on failure the command aborts, `clusters.parquet` and the site are
+> untouched, and the delta stays parked. On pass it rewrites `clusters.parquet`
+> in `chunks.parquet` row order (embedding-matrix alignment preserved; prior file
+> kept as `.bak`), refreshes `topic_info.parquet`, and swaps the persisted model.
+> `update --merge` chains filter → incremental embed → merge-week ahead of the
+> analyze re-bake; the default is **off** (`update.merge_enabled: false`) until
+> the gate has passed once on the real corpus.
 
 > **Validation note (2026-07-04).** `merge_models` was probed on BERTopic 0.16.4:
 > with realistic (angularly-separated) topic embeddings it **preserves base topic
@@ -5395,6 +5410,38 @@ re-fetch the recent window.
 - **Relates.** ADR-065 (same content-addressed caching philosophy), ADR-063 (the
   `update` this makes fast), ADR-064 (press-heating reads the same cached series),
   ADR-047/042/048 (the overlays), ADR-050 (incremental-delta precedent).
+
+---
+
+## ADR-070: Narrative-name cache signature excludes the date span
+
+- **Status**: Accepted
+- **Date**: 2026-07-06
+
+### Context
+
+The ADR-056 name cache keys each title on a content hash of the cluster's
+representation: terms, central-article excerpts, sources, and date span. Under
+the weekly merge (ADR-066 Part C), every narrative that merely *stays active*
+extends its date span each week — which would invalidate its cache entry and
+regenerate its title weekly. Titles would drift in wording for narratives whose
+substance had not changed.
+
+### Decision
+
+Drop the date span from the cache signature. A title regenerates only when the
+narrative's substance changes: its defining terms, its central excerpts, or its
+source mix. The date span still appears in the generation prompt when a title
+is genuinely (re)generated; the impurity (a cache hit reflects the span as of
+generation time) is confined to a prompt line the model is instructed to use
+only for period naming.
+
+### Consequences
+
+- Weekly merges keep every continuing narrative's display name stable.
+- One-time cost: all existing signatures change, so the next bake regenerates
+  every name — absorbed into the post-rebuild naming pass that a full
+  re-cluster forces anyway.
 
 ---
 

@@ -113,16 +113,17 @@ def _signature(
 ) -> str:
     """Content hash of everything that determines the generated title.
 
-    Keyed on the representation (terms, excerpts, sources, dates) plus the model,
-    prompt version, and title-length knob, so any representation change OR any
-    prompt/model change yields a new key and invalidates a stale cache entry.
+    Keyed on the substance of the representation (terms, excerpts, sources) plus
+    the model, prompt version, and title-length knob. The date span is
+    deliberately excluded (ADR-070): a continuing narrative extends its span
+    every weekly merge, and that alone must not regenerate its title — names
+    change only when the substance does.
     """
     payload = json.dumps(
         {
             "t": inp.terms,
             "e": inp.excerpts,
             "s": list(inp.sources),
-            "d": inp.date_range,
             "m": model,
             "v": prompt_version,
             "w": max_title_words,

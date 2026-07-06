@@ -343,6 +343,12 @@ update:
   buffer_days: 14
   # Window start for a source that has no articles yet (matches the corpus window).
   full_start: "2010-01-01"
+  # Weekly incremental re-cluster (ADR-066 Part C). Off until the identity gate
+  # (every existing topic id survives the merge) has passed once on the real
+  # corpus; until then new institutional articles stay parked at ingest.
+  merge_enabled: false
+  # merge_models topic-similarity threshold (BERTopic library default).
+  merge_min_similarity: 0.7
 
 paths:
   raw_articles: "data/raw/articles"
