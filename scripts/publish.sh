@@ -37,4 +37,9 @@ touch dist/.nojekyll
 echo "==> deploying to gh-pages"
 npx --yes gh-pages -d dist --dotfiles -m "deploy: $(date +%Y-%m-%d)"
 
+# leave dist as a root-path build so a local preview isn't stuck with the
+# deployed /bellwether prefix
+echo "==> rebuilding dist for local preview"
+npm run build > /dev/null
+
 echo "==> done: $SITE$BASE/"
