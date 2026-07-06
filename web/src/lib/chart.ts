@@ -307,7 +307,8 @@ export function mountMap3d(
       };
       const dx = eye.x - CENTER.x, dy = eye.y - CENTER.y, dz = eye.z - CENTER.z;
       const dist = Math.hypot(dx, dy, dz) || 1e-6;
-      const next = Math.min(8, Math.max(0.02, dist * Math.exp(ev.deltaY * 0.0016)));
+      // zoom-out is capped so the map can't shrink to a speck; zoom-in is not.
+      const next = Math.min(4, dist * Math.exp(ev.deltaY * 0.0016));
       const s = next / dist;
       const ne = { x: CENTER.x + dx * s, y: CENTER.y + dy * s, z: CENTER.z + dz * s };
       lastEye = ne;

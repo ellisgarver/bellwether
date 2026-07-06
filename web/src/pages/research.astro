@@ -1,9 +1,6 @@
 ---
 import Base from "../layouts/Base.astro";
-import { loadValidation } from "@lib/data";
 const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
-const val = loadValidation();
-const anchorName = (id: string) => id.replace(/^anchor[_-]?/, "").replace(/_/g, " ");
 ---
 
 <Base title="research" active="research">
@@ -84,35 +81,12 @@ const anchorName = (id: string) => id.replace(/^anchor[_-]?/, "").replace(/_/g, 
       every parameter in the pipeline is a published library default or a value
       taken from the primary literature with a citation. all of them live in a
       single configuration file, and every random step flows from one fixed seed.
-      where no field-accepted anchor exists, the parameter is removed. no parameter
-      is adjusted to change how well the system recovers known events.
+      where no field-accepted anchor exists, the parameter is removed, and no
+      parameter is ever adjusted to make the output look better.
     </p>
     <p>
-      those known events are a fixed set of ten documented narratives — the 2023
-      SVB collapse, the 2013 taper tantrum, the 2015 China devaluation scare, the
-      2022 inflation peak, the 2016 Brexit aftermath, among others. whether the
-      pipeline recovers each within a date tolerance is measured as a
-      face-validity diagnostic and never used to select or adjust a parameter.
-    </p>
-    {val && (
-      <div class="val">
-        <p class="val-score">
-          on the current corpus: <strong>{val.n_recovered} of {val.n_total}</strong> anchor
-          narratives recovered.
-        </p>
-        <ul class="anchors">
-          {val.results.map((r) => (
-            <li class={r.recovered ? "ok" : "miss"} title={r.note}>
-              <span class="mark">{r.recovered ? "✓" : "✕"}</span>{anchorName(r.anchor_id)}
-            </li>
-          ))}
-        </ul>
-      </div>
-    )}
-    <p>
-      the press and markets overlays on each narrative are display and validation
-      only. neither is an input to the embedding, the clustering, or the curve
-      fits.
+      the press and markets overlays on each narrative are display layers only.
+      neither is an input to the embedding, the clustering, or the curve fits.
     </p>
     <p class="muted">
       see the full methodology, with citations in
@@ -182,20 +156,6 @@ const anchorName = (id: string) => id.replace(/^anchor[_-]?/, "").replace(/_/g, 
   @media (prefers-reduced-motion: reduce) {
     .node { animation: none; fill: var(--growth); }
   }
-
-  /* anchor-recovery scoreboard: one chip per anchor, recovered in growth green,
-     missed in muted gray — a factual readout, not a grade. */
-  .val { margin: 1.2rem 0 0.4rem; }
-  .val-score { margin: 0 0 0.7rem; }
-  .anchors { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5rem; }
-  .anchors li {
-    display: inline-flex; align-items: center; gap: 0.4rem;
-    font-size: var(--fs-ui); padding: 0.24rem 0.7rem; border-radius: 999px;
-    background: var(--paper-2); border: 1px solid var(--line); color: var(--ink);
-  }
-  .anchors li.ok .mark { color: var(--growth); font-weight: 700; }
-  .anchors li.miss { color: var(--muted); }
-  .anchors li.miss .mark { color: var(--faint); font-weight: 700; }
 
   .reading {
     list-style: none;
