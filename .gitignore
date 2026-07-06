@@ -40,10 +40,6 @@ ENV/
 *.swo
 .DS_Store
 
-# Notebooks — commit cleaned versions only
-.ipynb_checkpoints/
-notebooks/scratch/
-
 # Env files (never commit secrets)
 .env
 .env.local
@@ -54,6 +50,3 @@ models/
 *.bin
 *.safetensors
 *.pkl
-
-# Dashboard build artifacts
-.streamlit/secrets.toml

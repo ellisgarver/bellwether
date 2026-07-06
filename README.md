@@ -69,7 +69,7 @@ primary literature. The full citation list and rationale lives in
 | Granularity | Single-level HDBSCAN output (no merging tiers) | Bybee/Kelly/Manela/Xiu 2024; Hansen/McMahon/Prat 2018 |
 | Dynamics models | SIR, logistic, Bass, model-free shape facts | Kermack & McKendrick 1927; Verhulst 1838; Bass 1969 |
 | Smoothing window | 7-day centered moving average | Shumway & Stoffer (weekly cycle for daily counts) |
-| Lens fitting | Bounded least-squares point fits; shown iff R² clears a fixed floor | scipy; Schlickeiser & Kröger 2020 (closed-form SIR) |
+| Lens fitting | Bounded least-squares point fits, each reported with R²; weak fits shown grayed, never hidden | scipy; Schlickeiser & Kröger 2020 (closed-form SIR) |
 | Stage classification | Model-free: 4 stages (growth / stable / decay / dormant) from a trend + level test on the volume curve | Mann 1945; Kendall 1948; Hamed & Rao 1998 |
 | Anchor tolerance | ±14 days | Brown & Warner 1985 (event-study convention) |
 | Bootstrap replicates | 1000 | Efron & Tibshirani 1993 |
@@ -168,9 +168,10 @@ re-bakes the dashboard artifacts — refreshing the **Media Cloud press layer** 
 the **press-heating** emerging signal against the current narrative set. Because
 the delta is small and embedding is incremental, it is CPU-minutes, not GPU-hours.
 
-> Identity-stable institutional re-clustering (`merge_models`, ADR-057 §3) is not
-> wired yet, so newly-ingested institutional articles are **parked** until the next
-> full rebuild and the narrative *set* is "as of the last full build". The live
+> Identity-stable institutional re-clustering is built and validated (BERTopic
+> `merge_models` with an anchor-id gate, ADR-066) but not yet wired into `update`,
+> so newly-ingested institutional articles are **parked** until the next full
+> rebuild and the narrative *set* is "as of the last full build". The live
 > movement between rebuilds comes from the press layer.
 
 **Data location.** By default all data lives under `data/` in the repo, so a fresh
@@ -197,6 +198,26 @@ runner fits your environment:
 
 Set `MEDIACLOUD_API_KEY` for the press layer; without it, `update` still refreshes
 everything else and simply omits the press sections.
+
+## Building the site
+
+The public site is a static Astro build (`web/`) that reads the baked JSON
+artifacts at build time — the browser never fetches or computes:
+
+```bash
+python scripts/run_pipeline.py analyze   # bake data/processed/dashboard/ (or use `update`)
+cd web
+npm ci
+npm run dev        # local dev server
+npm run build      # static site in web/dist
+```
+
+The build reads `data/processed/dashboard/` by default; set `DASHBOARD_DATA_DIR`
+to point elsewhere. Narrative display names come from the naming layer during the
+bake — a local Ollama serving `llama3.1` by default, or any OpenAI-compatible
+endpoint via `MND_NAMING_BASE_URL` / `MND_NAMING_MODEL` / `MND_NAMING_API_KEY`.
+Generated names are cached and committed (`data/naming_cache/`), so rebuilds are
+deterministic and only new or changed narratives call the model.
 
 ## Reproducibility
 
