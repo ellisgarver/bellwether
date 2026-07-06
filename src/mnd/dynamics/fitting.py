@@ -429,9 +429,10 @@ def _lens_fit_signature(y_full: np.ndarray, model_name: str, cfg: dict[str, Any]
     """Content hash of one lens's fit inputs (ADR-065).
 
     Covers the smoothed series, the shared fit config (smoothing window, fit-window
-    alpha, global seed), and only *this lens's* priors + inference block — so a
-    change to one lens's config invalidates only its cache, while the other lenses
-    reload unchanged. A fixed seed keeps a cache hit identical to a refit.
+    alpha, the R² display floor), and only *this lens's* priors — so a change to
+    one lens's config invalidates only its cache, while the other lenses reload
+    unchanged. The fits are deterministic least squares (ADR-067), so a cache hit
+    is identical to a refit.
     """
     import hashlib
 
@@ -440,9 +441,8 @@ def _lens_fit_signature(y_full: np.ndarray, model_name: str, cfg: dict[str, Any]
         "model": model_name,
         "smoothing": dyn.get("smoothing_window_days"),
         "fit_window_mass_alpha": dyn.get("fit_window_mass_alpha"),
-        "seed": cfg["reproducibility"]["global_random_seed"],
-        "priors": dyn.get("priors", {}).get(model_name),
-        "inference": dyn.get("sir_inference") if model_name == "sir" else dyn.get("inference"),
+        "min_fit_r2": dyn.get("min_fit_r2"),
+        "priors": dyn.get("priors", {}).get(model_name),  # bass init anchors (ADR-067)
     }
     payload = (
         np.ascontiguousarray(np.asarray(y_full, dtype=float)).tobytes()
