@@ -37,8 +37,8 @@ const asOf = loadIndex().generated_at?.slice(0, 10) ?? "";
     <header class="site-header">
       <div class="wrap">
         <a class="brand" href={href("/")}>
+          <img class="brand-icon" src={href("/favicon.svg")} alt="" width="22" height="22" />
           <span class="wordmark">bell<span class="mk">wether</span></span>
-          <span class="brand-tag">macro narratives</span>
         </a>
         <nav class="nav">
           <a href={href("/narratives")} class={active === "narratives" ? "active" : ""}>narratives</a>
@@ -90,9 +90,8 @@ const asOf = loadIndex().generated_at?.slice(0, 10) ?? "";
     </script>
 
     <style>
-      .brand { display: inline-flex; align-items: baseline; gap: 0.55rem; }
-      .brand-tag { color: var(--faint); font-size: var(--fs-meta); font-weight: 400; }
-      @media (max-width: 480px) { .brand-tag { display: none; } }
+      .brand { display: inline-flex; align-items: center; gap: 0.55rem; }
+      .brand-icon { display: block; border-radius: 5px; }
     </style>
   </body>
 </html>
