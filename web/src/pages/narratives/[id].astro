@@ -126,7 +126,7 @@ const direction = (d: any) =>
           <tr><td>recent trend</td><td>{trendWord}</td></tr>
           <tr><td>significance</td><td>{sd.trend_p != null ? `p = ${fmt(sd.trend_p, 3)} (α = ${fmt(sd.alpha, 2)})` : "—"}</td></tr>
           <tr><td>recent log-slope</td><td>{sd.trend_slope != null ? `${fmt(sd.trend_slope, 3)} / day` : "—"}</td></tr>
-          <tr><td>vs own peak</td><td>{sd.recent_peak_ratio == null ? "—" : `${Math.round(sd.recent_peak_ratio * 100)}% of peak level${sd.recent_near_peak ? "" : " — faded"}`}</td></tr>
+          <tr><td>vs own peak</td><td>{sd.recent_peak_ratio == null ? "—" : `${Math.round(sd.recent_peak_ratio * 100)}% of peak level${n.stage === "dormant" ? " — faded" : ""}`}</td></tr>
         </table>
         <p class="caption">
           {num(sirP.doubling_time_up) && num(sirP.half_life_down) ? (
@@ -251,7 +251,26 @@ const direction = (d: any) =>
     const tabsEl = document.getElementById("lens-tabs");
     const dates = n.volume.dates;
     const vol = n.volume.values;
-    const maxVol = Math.max(1, ...vol);
+
+    // Display bars are weekly means of the adjusted daily series. The raw daily
+    // counts are mostly zeros with sub-pixel spikes over a 15-year span, while
+    // the lens curves are fit to the 7-day-smoothed series — weekly means put
+    // bars and curve on the same visual scale, so a good fit sits on the bars.
+    function weeklyMean(ds, vs) {
+      const buckets = new Map();
+      for (let i = 0; i < ds.length; i++) {
+        const d = new Date(ds[i] + "T00:00:00Z");
+        d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); // Monday
+        const k = d.toISOString().slice(0, 10);
+        const b = buckets.get(k) || [0, 0];
+        b[0] += vs[i]; b[1] += 1;
+        buckets.set(k, b);
+      }
+      const ks = [...buckets.keys()].sort();
+      return { dates: ks, values: ks.map((k) => buckets.get(k)[0] / buckets.get(k)[1]) };
+    }
+    const wk = weeklyMean(dates, vol);
+    const maxVol = Math.max(0.001, ...wk.values);
 
     // x bounds in epoch-ms: the full timeline, edge to edge, no margin. this is
     // the default ("most zoomed out") view; the time slider only zooms in.
@@ -273,12 +292,14 @@ const direction = (d: any) =>
 
     const fits = n.fits;
     const r2of = (f) => (f.params && typeof f.params.r2 === "number") ? f.params.r2 : null;
-    // All three lenses are always available; default to the best-fitting one, and
-    // gray the poor fits (still clickable) so the reader can see every lens and its
-    // fit quality rather than have low-fit ones hidden.
+    // All three lenses stay available; the chart opens on the best *converged*
+    // one. When no lens clears the fit floor, it opens on the volume alone — a
+    // weak fit's near-flat line is not a default worth showing — and the grayed
+    // tabs still let the reader pull any lens up for comparison.
     let activeFit = fits
-      .map((f, i) => [i, f.curve ? (r2of(f) ?? -1) : -2])
-      .sort((a, b) => b[1] - a[1])[0]?.[0] ?? 0;
+      .map((f, i) => [i, f.curve && f.converged ? (r2of(f) ?? 0) : -1])
+      .filter(([, s]) => s >= 0)
+      .sort((a, b) => b[1] - a[1])[0]?.[0] ?? -1;
 
     fits.forEach((f, i) => {
       const b = document.createElement("button");
@@ -387,11 +408,11 @@ const direction = (d: any) =>
 
     function render() {
       const traces = [
-        { x: dates, y: vol, type: "bar", name: "adjusted volume",
-          marker: { color: "rgba(47,75,124,0.22)" },
-          hovertemplate: hov("adjusted volume") },
+        { x: wk.dates, y: wk.values, type: "bar", name: "weekly volume",
+          marker: { color: "rgba(58,90,147,0.35)" },
+          hovertemplate: hov("weekly volume") },
       ];
-      const f = fits[activeFit];
+      const f = activeFit >= 0 ? fits[activeFit] : null;
       if (f && f.curve) {
         traces.push({ x: dates, y: f.curve, type: "scatter", mode: "lines",
           name: `${f.model} fit`, line: { color: COL.accent, width: 2.6 },
@@ -454,7 +475,7 @@ const direction = (d: any) =>
         margin: { l: 64, r: 18, t: 8, b: 46 },
         xaxis: { type: "date", gridcolor: "rgba(226,220,207,0.6)", range: vr.x },
         yaxis: {
-          title: { text: "corpus-size-adjusted volume", standoff: 14 },
+          title: { text: "corpus-adjusted weekly volume", standoff: 14 },
           gridcolor: "rgba(226,220,207,0.6)", range: vr.y,
         },
       });

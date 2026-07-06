@@ -18,10 +18,9 @@ const fmt = (n: number) => n.toLocaleString("en-US");
       <p class="eyebrow reveal">macro narrative dynamics</p>
       <h1 class="hero-title reveal">how macro narratives rise and fade.</h1>
       <p class="hero-thesis reveal">
-        U.S. macro-finance discourse runs on recurring stories. this tool reads
-        the institutional record — the Fed, IMF, BIS, NBER and their peers —
-        clusters fifteen years of it into narratives, and maps each one's arc:
-        every point below is one narrative, placed among its nearest neighbors.
+        fifteen years of institutional writing — the Fed, IMF, BIS, NBER and
+        their peers — clustered into narratives and mapped: every point below
+        is one story, placed among its nearest neighbors.
       </p>
     </div>
 
@@ -35,8 +34,8 @@ const fmt = (n: number) => n.toLocaleString("en-US");
           <span style="color:var(--stable)">stable</span>,
           <span style="color:var(--decay)">fading</span>,
           <span style="color:var(--dormant)">dormant</span> —
-          size is the volume written, shape is the JEL field.
-          <span class="map-hint">drag orbits · scroll zooms · click opens the narrative</span>
+          size is the volume written.
+          <span class="map-hint">drag orbits · scroll zooms · click opens</span>
         </p>
       </>
     )}
@@ -67,23 +66,24 @@ const fmt = (n: number) => n.toLocaleString("en-US");
 </Base>
 
 <style>
-  /* one viewport-height column (below the 64px sticky header): title block on
-     top, map filling the remainder, stat strip at the bottom. */
+  /* one viewport-height column (below the 64px sticky header and main's
+     2.4rem top padding): title block on top, map filling the remainder, stat
+     strip closing the first screen. */
   .hero {
     display: flex;
     flex-direction: column;
-    min-height: calc(100svh - 64px);
-    padding: 0.8rem 0 1.6rem;
+    min-height: calc(100svh - 64px - 2.4rem);
+    padding: 0 0 1.2rem;
   }
   .hero .eyebrow { padding-left: 0.1em; }
   .hero-title {
     font-size: clamp(1.9rem, 3.6vw, 2.9rem);
     line-height: 1.06;
     letter-spacing: -0.02em;
-    margin: 0.3rem 0 0.9rem;
+    margin: 0.3rem 0 0.7rem;
   }
   .hero-thesis {
-    max-width: 62ch;
+    max-width: 72ch;
     font-size: var(--fs-lede);
     line-height: 1.5;
     color: var(--ink);
@@ -93,8 +93,8 @@ const fmt = (n: number) => n.toLocaleString("en-US");
   .map3d {
     flex: 1;
     width: 100%;
-    min-height: 380px;
-    margin: 0.8rem 0 0;
+    min-height: 320px;
+    margin: 0.6rem 0 0;
     cursor: grab;
   }
   .map3d:active { cursor: grabbing; }
@@ -116,14 +116,14 @@ const fmt = (n: number) => n.toLocaleString("en-US");
     justify-content: space-between;
     gap: 1.2rem 2.4rem;
     flex-wrap: wrap;
-    margin-top: 1.4rem;
-    padding-top: 1.1rem;
+    margin-top: 1rem;
+    padding-top: 0.9rem;
     border-top: 1px solid var(--line);
   }
   .hero-stats { display: flex; gap: 2.4rem; flex-wrap: wrap; }
   .hero-stats .num {
     display: block;
-    font-size: clamp(1.5rem, 2.4vw, 1.9rem);
+    font-size: clamp(1.35rem, 2vw, 1.7rem);
     font-weight: 600;
     line-height: 1.1;
     font-variant-numeric: tabular-nums;

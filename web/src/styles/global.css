@@ -234,7 +234,7 @@ table.facts td:last-child { text-align: right; }
   .brand { flex-basis: 100%; }
   .nav { gap: 1.1rem; flex-wrap: wrap; }
   .nav a { font-size: var(--fs-meta); }
-  .site-footer .wrap { height: auto; padding: 1.1rem 0; gap: 0.3rem 1rem; }
+  .site-footer .wrap { height: auto; padding-top: 1.1rem; padding-bottom: 1.1rem; gap: 0.3rem 1rem; }
 }
 
 /* ---- scroll-reveal motion ---- */

@@ -136,7 +136,7 @@ export function mountMap3d(
     text: pts.map((p) => p.label_human || p.label),
     hovertemplate: "%{text}<extra></extra>",
     marker: {
-      size: pts.map((p) => 3 + Math.sqrt(p.n_articles) * 0.5),
+      size: pts.map((p) => 4 + Math.sqrt(p.n_articles) * 0.55),
       color: pts.map((p) => STAGE_COLOR[p.stage] ?? COL.dormant),
       symbol: pts.map((p) => JEL_SYMBOL[p.jel_code] ?? "circle"),
       opacity: 0.95,
@@ -150,7 +150,7 @@ export function mountMap3d(
 
   const axis = {
     showgrid: true,
-    gridcolor: "rgba(226,220,207,0.55)",
+    gridcolor: "#dcd7ca",
     zeroline: false,
     showticklabels: false,
     title: "",
@@ -166,7 +166,7 @@ export function mountMap3d(
     scene: {
       xaxis: axis, yaxis: axis, zaxis: axis,
       aspectmode: "cube",
-      camera: { eye: { x: 1.2, y: 1.2, z: 0.8 }, center: { x: 0, y: 0, z: -0.12 } },
+      camera: { eye: { x: 0.95, y: 0.95, z: 0.62 }, center: { x: 0, y: 0, z: -0.12 } },
     },
   });
 
@@ -209,9 +209,9 @@ export function mountMap3d(
   // ~10s after the last interaction, picking up from wherever the user left the
   // camera — so their zoom (radius) and tilt (eye.z) are preserved, only motion
   // is restored.
-  let angle = Math.atan2(1.2, 1.2);
-  let radius = Math.hypot(1.2, 1.2);
-  let z = 0.8;
+  let angle = Math.atan2(0.95, 0.95);
+  let radius = Math.hypot(0.95, 0.95);
+  let z = 0.62;
   let spinning = true;
   let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 
