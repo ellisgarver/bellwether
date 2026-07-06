@@ -44,7 +44,7 @@ citation behind each choice, can be found in
 
 | | |
 |---|---|
-| `src/mnd/` | pipeline: ingestion, filtering, embedding, clustering, dynamics, staging, overlays, artifact baking |
+| `src/mnd/` | the full pipeline: ingestion, filtering, embedding, clustering, dynamics, staging, overlays, artifact baking |
 | `scripts/run_pipeline.py` | one CLI for every stage |
 | `config/config.yaml` | every threshold and seed |
 | `web/` | the static Astro site, built from baked JSON artifacts |
