@@ -171,7 +171,7 @@ export function mountMap3d(
       xaxis: axis, yaxis: axis, zaxis: axis,
       aspectmode: "manual",
       aspectratio: { x: 1.5, y: 1.5, z: 0.85 },
-      camera: { eye: { x: 0.85, y: 0.85, z: 0.5 }, center: { x: 0, y: 0, z: -0.12 } },
+      camera: { eye: { x: 0.95, y: 0.95, z: 0.55 }, center: { x: 0, y: 0, z: -0.12 } },
     },
   });
 
@@ -240,7 +240,7 @@ export function mountMap3d(
   // flag, so the loop can neither die nor double up. Interacting (drag, wheel,
   // hover) pauses it; it resumes a few seconds after the last interaction from
   // wherever the camera was left, preserving the user's zoom and tilt.
-  const DEFAULT_EYE = { x: 0.85, y: 0.85, z: 0.5 };
+  const DEFAULT_EYE = { x: 0.95, y: 0.95, z: 0.55 };
   const DEFAULT_CENTER = { x: 0, y: 0, z: -0.12 };
   // the orbit + zoom share one camera state: the point the camera looks at
   // (which zoom-to-cursor moves) and the eye's polar offset around it.

@@ -115,12 +115,13 @@ const fmt = (n: number) => n.toLocaleString("en-US");
     font-weight: 600;
   }
 
-  /* the map breaks out of the text column to the full viewport width, so the
-     landscape spans edge to edge while the copy above stays in the wrap. */
+  /* the map keeps the text column's width but gets a tall stage of its own;
+     the hero may run past the first viewport to give it room. */
   .map3d {
     flex: 1;
-    margin: 1.8rem calc(50% - 50vw) 1rem;
-    min-height: 360px;
+    width: 100%;
+    min-height: clamp(460px, 62vh, 720px);
+    margin: 1.8rem 0 1rem;
     cursor: grab;
   }
   .map3d:active { cursor: grabbing; }
