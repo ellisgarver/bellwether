@@ -12,7 +12,7 @@ or any hosted OpenAI-compatible URL. A paid Anthropic backend and an in-process
 transformers backend remain selectable via ``display.naming.backend``.
 
 The name never feeds embedding, clustering, JEL scope, fitting, staging, or
-anchor recovery (display layer only; CLAUDE.md). Reproducibility is preserved by
+anchor recovery (display layer only; ADR-056). Reproducibility is preserved by
 caching each title under a content hash of its representation and committing the
 cache (``display.naming.cache_dir``, a tracked path): a bake reuses every unchanged
 cluster's title and only calls the model for new or changed clusters, so the static

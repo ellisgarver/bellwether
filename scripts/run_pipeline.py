@@ -460,7 +460,7 @@ def filter_cmd(
 ) -> None:
     """Date-range filter and near-duplicate removal.
 
-    Per MND_PROJECT_SPEC rev3 Stage 2: no topic filter is applied — all Layer 1A
+    Per ADR-020: no topic filter is applied — all Layer 1A
     sources are macro-relevant by construction. Only two operations run:
       1. Date range filter: retain documents with publication_date in [2010-01-01, present]
       2. Near-duplicate removal: MinHash-based dedup across the full corpus

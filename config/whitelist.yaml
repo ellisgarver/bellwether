@@ -196,7 +196,7 @@ tier_1_institutional_policy:
   # NOTE: Jackson Hole speeches are Fed Chair and governor speeches published on
   # federalreserve.gov — captured by the fed_board ingestor above. No separate
   # jackson_hole entry is needed. A separate ingestor was removed in ADR-012 to
-  # avoid duplicates. (MND_PROJECT_SPEC rev3, 2026-05-13)
+  # avoid duplicates. (ADR-010)
 
   - id: congressional
     name: "Congressional Testimony — Treasury Secretary"
@@ -240,7 +240,7 @@ tier_2_academic_analytical:
       premised on a search-API restriction that does not apply to
       paper detail pages. Body = abstract via trafilatura.
 
-  # arXiv removed in ADR-012 / MND_PROJECT_SPEC rev3 (2026-05-13):
+  # arXiv removed in ADR-012:
   # 2017-only coverage, low macro volume, not in spec.
   # Ingestor removed in the ADR-024 cleanse (recoverable from git history).
 
@@ -268,7 +268,7 @@ tier_2_academic_analytical:
 
 # -----------------------------------------------------------------------------
 # Tier 2 — Academic-analytical (continued): Policy-journalism bridge
-# (Formerly Tier 3 — merged with Tier 2 per ADR-010 / MND_PROJECT_SPEC.md)
+# (Formerly Tier 3 — merged with Tier 2 per ADR-010)
 # -----------------------------------------------------------------------------
 tier_2_policy_analytical:
 

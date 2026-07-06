@@ -1,4 +1,4 @@
-"""dashboard stage (Phase 5). See MND_PROJECT_SPEC.md for module-level responsibilities."""
+"""Dashboard stage: bakes the analysis layer into the JSON artifacts the site reads (ADR-043)."""
 
 from mnd.dashboard.build_artifacts import (
     build_dashboard_artifacts,
