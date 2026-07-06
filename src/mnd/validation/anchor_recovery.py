@@ -1,13 +1,14 @@
-"""Anchor narrative recovery validation.
+"""Anchor narrative recovery validation (ADR-019, criterion per ADR-069).
 
-For each anchor, locates articles published within its reference window in the
-clustered DataFrame and checks whether >=50% fall in a single cluster. The
-dominant cluster is reported alongside the concentration; an anchor is marked
-"recovered" when concentration >= 0.50 and the dominant cluster is not the
-BERTopic outlier bucket (-1).
+For each anchor, collects the articles published within its reference window
+whose title or body matches any of the anchor's fixed ``key_terms`` (from the
+Phase-0 anchor registry), folds chunks to articles (majority topic per
+``article_id``), and checks whether >=50% of those articles fall in a single
+non-noise cluster. Outlier-assigned articles stay in the denominator, so heavy
+outlier assignment still costs recovery.
 
 Recovery is reported as a rate, not as a pass/fail gate. Anchor recovery is a
-diagnostic quality signal, and no parameter is tuned toward it.
+diagnostic quality signal, and no parameter is tuned toward it (ADR-040).
 
 Configuration: config.validation.anchor_tolerance_days.
 """
@@ -44,7 +45,13 @@ def _find_anchor_articles(
     anchor: dict[str, Any],
     tolerance_days: int,
 ) -> pd.DataFrame:
-    """Return rows from df whose published_at falls within the anchor window."""
+    """Rows in the anchor window whose text matches the anchor's key terms.
+
+    The window alone is not a relevance filter on the full-breadth corpus
+    (ADR-020) — the basis set publishes across all of macro every week — so the
+    rows are additionally restricted to those whose title or body contains any
+    of the anchor's fixed ``key_terms`` (case-insensitive substring, ADR-069).
+    """
     if "published_at" not in df.columns:
         return df.iloc[0:0]
 
@@ -52,27 +59,27 @@ def _find_anchor_articles(
     ref_start = pd.Timestamp(anchor["reference_window_start"], tz="UTC")
     ref_end = pd.Timestamp(anchor["reference_window_end"], tz="UTC")
     tol = pd.Timedelta(days=tolerance_days)
+    window = df[(dates >= ref_start - tol) & (dates <= ref_end + tol)]
 
-    mask = (dates >= ref_start - tol) & (dates <= ref_end + tol)
-    return df[mask]
+    terms = [str(t).lower() for t in anchor.get("key_terms", []) if str(t).strip()]
+    if not terms or window.empty:
+        return window
+
+    text = pd.Series("", index=window.index)
+    for col in ("title", "body"):
+        if col in window.columns:
+            text = text + " " + window[col].fillna("").astype(str).str.lower()
+    mask = pd.Series(False, index=window.index)
+    for t in terms:
+        mask |= text.str.contains(t, regex=False)
+    return window[mask]
 
 
 def _check_recovery(
     anchor_df: pd.DataFrame,
     anchor: dict[str, Any],
 ) -> dict[str, Any]:
-    """Compute recovery metrics for one anchor."""
-    n = len(anchor_df)
-    if n == 0:
-        return {
-            "anchor_id": anchor["id"],
-            "recovered": False,
-            "n_articles": 0,
-            "dominant_cluster": None,
-            "concentration": 0.0,
-            "note": "no articles found in reference window",
-        }
-
+    """Compute recovery metrics for one anchor (article-level, ADR-069)."""
     if "topic" in anchor_df.columns:
         cluster_col = "topic"
     elif "topic_medium" in anchor_df.columns:
@@ -84,15 +91,48 @@ def _check_recovery(
             "anchor recovery: clustered DataFrame has no 'topic' column "
             "(expected ADR-019 single-granularity column)"
         )
-    counts = anchor_df[cluster_col].value_counts()
-    dominant = int(counts.index[0])
-    concentration = float(counts.iloc[0] / n)
-    recovered = dominant >= 0 and concentration >= _RECOVERY_CONCENTRATION
+
+    # Chunks fold to articles: an article's cluster is the majority topic among
+    # its chunks (ties break to the lowest topic id, deterministic).
+    if "article_id" in anchor_df.columns and not anchor_df.empty:
+        article_topics = (
+            anchor_df.groupby("article_id")[cluster_col]
+            .agg(lambda s: int(s.value_counts().index[0]))
+        )
+    else:
+        article_topics = anchor_df[cluster_col].astype(int)
+
+    n = len(article_topics)
+    if n == 0:
+        return {
+            "anchor_id": anchor["id"],
+            "recovered": False,
+            "n_articles": 0,
+            "dominant_cluster": None,
+            "concentration": 0.0,
+            "note": "no matching articles in the reference window",
+        }
+
+    # Largest single non-noise cluster share; outlier-assigned articles stay in
+    # the denominator, so heavy outlier assignment still costs recovery.
+    counts = article_topics[article_topics >= 0].value_counts()
+    if counts.empty:
+        dominant: int | None = None
+        concentration = 0.0
+    else:
+        dominant = int(counts.index[0])
+        concentration = float(counts.iloc[0] / n)
+    recovered = dominant is not None and concentration >= _RECOVERY_CONCENTRATION
 
     note = (
-        f"cluster {dominant}, {concentration:.0%} concentration"
+        f"cluster {dominant}, {concentration:.0%} of {n} matching articles"
         if recovered
-        else f"best cluster {dominant} only {concentration:.0%} (need {_RECOVERY_CONCENTRATION:.0%})"
+        else (
+            f"best cluster {dominant} holds {concentration:.0%} of {n} matching "
+            f"articles (need {_RECOVERY_CONCENTRATION:.0%})"
+            if dominant is not None
+            else f"all {n} matching articles are outliers"
+        )
     )
     return {
         "anchor_id": anchor["id"],

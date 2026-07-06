@@ -82,6 +82,8 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 066 | **Weekly incremental re-cluster via BERTopic `merge_models` (design + prereq). Prereq (accepted): the `cluster` stage now persists the fitted BERTopic model (safetensors → `topic_model/`) — it was discarded, and `merge_models` needs the model object, not just `clusters.parquet`. Mechanism (proposed, pending validation): `update` fits a new-week model and `merge_models([base,new], min_similarity=τ)` to keep existing topic ids/URLs/names and append only genuinely-new topics; gated on an anchor-id-stability test (a synthetic weekly merge must not renumber any of the 10 anchors). τ + split/merge back-test + cron cadence deferred until that passes.** | Proposed (implements 057 §3; relates 050/056/063/065) |
 | 065 | **Incremental `analyze` re-bake — per-lens fit cache + JEL-encode cache. The fit cache keyed the whole `cfg["dynamics"]` and stored one pickle per cluster (all 3 lenses), so a one-lens prior change refit logistic+Bass identically; now each lens's `FitResult` is cached under a sig hashing only that lens's priors+inference (+series, window, seed). JEL re-encoded all ~365 reps with the 8B model every run even on unchanged clusters (~1h); now each `ClusterJELAssignment` is cached by representation+prototypes+embedder-id, the embedder loads only if a cluster misses, and an unchanged `clusters.parquet` ⇒ zero encodes. Display-mechanics only, results identical (ADR-040).** | Live (relates 050/055/062/063) |
 | 064 | **Media Cloud Premium press layer + press-heating emerging signal — add the premium-press outlet collection (ADR-016: WSJ/Bloomberg/FT/Reuters/…) alongside the broad US-National collection, both via the one Media Cloud module. Wire ADR-057 §2: per already-tracked narrative, `detect_anomalies` on the attention-share ratio over a 4-week window vs a 52-week baseline at k=2σ, surfaced as a SEPARATE "heating in the press" signal beside the institutional recency flag in the Emerging view. Recomputes at bake time from live press against the existing narrative set — no re-embed, no re-cluster, never feeds embedding/clustering/scope (ADR-010/020/046). Degrades to absent when unkeyed.** | Live (implements 057 §2; extends 016/042/048; relates 040) |
+| 068 | **Overlay efficiency — VIX fetched once over the corpus span and sliced per narrative; Media Cloud per-narrative series delta-cached (stable history reused, recent window re-fetched) and fetched in a bounded thread pool** | Live (relates 042/047/048/063/065) |
+| 069 | **Anchor recovery scoped to anchor-relevant articles — window rows filtered by the anchor's fixed `key_terms` (registry, Phase 0), chunks folded to articles (majority topic), concentration = largest single non-noise cluster share with outliers kept in the denominator, threshold 0.50 unchanged. Replaces whole-window concentration, which is unsatisfiable on the full-breadth ADR-020 corpus (0/10 with the outlier bucket winning every plurality — a metric artifact)** | Live (amends 019 validation clause; relates 020/040) |
 | 059 | **Emerging flag is recency-only — a narrative is emerging iff its onset falls within the 4-week recency window of the corpus frontier, regardless of stage; drops the earlier `stage == growth` gate so a just-arrived narrative whose short history hasn't yet registered a significant trend is still surfaced as newly arrived** | Live (amends 052 emerging clause; relates 016/057) |
 | 058 | **Peak-relative plateau test — `stable` vs `dormant` keyed to the narrative's own high-water window, not its quiet floor; fixes the all-`stable` collapse (342/365) where institutional tails made "above the floor" trivially true. MWU on the zero-heavy daily series was under-powered, so the split is by level: recent-window mean below `dormant_peak_fraction`=0.25 of the peak-window mean → dormant (a definition, not tuned to recovery)** | Live (amends 052 §2/§3 Level test; relates 040) |
 | 057 | **Phase-6 live emerging (design) — two display-only signals: institutional onset (existing) + press heating (4wk vs 52wk baseline, k=2, on Media Cloud attention-share); weekly refresh builds onto the model via BERTopic `merge_models` (ids/URLs/names preserved, new topics appended above τ); manual now → cron later; novel press-only clustering scoped out (ADR-010)** | Live design; press-heating + weekly-refresh implementations each need a follow-up ADR (relates 010/016/020/042/046/048/050/056) |
@@ -5393,6 +5395,55 @@ re-fetch the recent window.
 - **Relates.** ADR-065 (same content-addressed caching philosophy), ADR-063 (the
   `update` this makes fast), ADR-064 (press-heating reads the same cached series),
   ADR-047/042/048 (the overlays), ADR-050 (incremental-delta precedent).
+
+---
+
+## ADR-069: Anchor recovery scoped to anchor-relevant articles
+
+- **Status**: Accepted
+- **Date**: 2026-07-06
+
+### Context
+
+Anchor recovery (ADR-019) measured cluster concentration over **every article the
+corpus published inside the anchor window**. That criterion dates from the
+pre-ADR-020 world, where the corpus was topically filtered and a window's
+articles were mostly about the event. On the full-breadth basis set it is
+mechanically unsatisfiable: the corpus publishes across all of macro (and, per
+ADR-020, beyond) every week, so no single cluster can hold 50% of a month's
+output, and the BERTopic outlier bucket wins every plurality. The first run on
+the finished corpus scored 0/10 with `best cluster -1` on all ten anchors — a
+property of the metric, not of the clustering.
+
+The anchor registry (`data/anchors/anchor_narratives.jsonl`) has carried a fixed
+`key_terms` list per anchor since Phase 0, chosen from the documentary record
+when each anchor was specified — before any clustering existed.
+
+### Decision
+
+Recovery for an anchor is computed over the **anchor-relevant articles** in its
+window, at the **article** level:
+
+1. Window rows (reference window ± `tolerance_days`) are filtered to those whose
+   title or body contains any of the anchor's `key_terms`
+   (case-insensitive substring).
+2. Chunks fold to articles on `article_id`; an article's cluster is the majority
+   topic among its chunks.
+3. Concentration is the largest share of those articles held by a single
+   **non-noise** cluster; outlier-assigned articles stay in the denominator.
+4. Recovered iff concentration ≥ 0.50 (threshold unchanged).
+
+### Consequences
+
+- The metric now tests what it was always meant to test: whether the writing
+  about a documented event coheres into one cluster.
+- No-tuning holds (ADR-040): `key_terms` were fixed in the registry before any
+  clustering ran, the threshold is unchanged, and nothing is swept. Recovery
+  stays reported, never gated (ADR-019).
+- Keeping outliers in the denominator means heavy outlier assignment still
+  costs recovery — the metric cannot be satisfied by discarding hard articles.
+- The validation summary (`validate --output`) ships with the dashboard
+  artifacts, and the research page reports the per-anchor result.
 
 ---
 
