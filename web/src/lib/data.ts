@@ -149,6 +149,9 @@ export interface DashboardIndex {
   // (those with >= min_articles_to_fit articles). Optional — absent in sample data.
   n_clusters_total?: number | null;
   min_articles_to_fit?: number | null;
+  // Unique articles in the full clustered corpus (including sub-floor clusters),
+  // so the data page can report the whole corpus next to what is surfaced.
+  n_articles_corpus?: number | null;
   schema_version: string;
 }
 

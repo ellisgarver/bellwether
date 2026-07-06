@@ -210,6 +210,10 @@ class DashboardIndex:
     # (>= min_articles_to_fit articles)". None for sample/partial artifacts.
     n_clusters_total: int | None = None
     min_articles_to_fit: int | None = None
+    # Unique articles in the full clustered corpus (including noise chunks and
+    # sub-floor clusters), so the data page can report the whole corpus next to
+    # the article count of the surfaced narratives. None for sample artifacts.
+    n_articles_corpus: int | None = None
     schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
