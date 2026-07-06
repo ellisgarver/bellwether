@@ -2,11 +2,11 @@
 
 This is the *only* place the heavy analysis outputs (fitted dynamics, JEL
 assignments, embeddings, overlays) are baked into the small plain JSON the static
-Astro site reads (ADR-043). The front end never imports pymc/bertopic/torch and
+Astro site reads (ADR-043). The front end never imports bertopic/torch and
 makes no API calls at view time — everything it needs is precomputed here.
 
-The builder is deliberately a pure assembler: it does **not** run PyMC, FRED, or
-Media Cloud. It consumes already-computed pipeline objects
+The builder is deliberately a pure assembler: it does **not** run the lens
+fits, FRED, or Media Cloud. It consumes already-computed pipeline objects
 (``ClusterDynamics``, ``StageClassification``, ``ClusterJELAssignment``, the
 ``MarketsArtifact`` / ``MediaCloudArtifact`` overlays) plus the cluster frame, and
 emits the ``DashboardIndex`` + per-narrative ``NarrativeArtifact`` objects defined

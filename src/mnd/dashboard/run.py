@@ -15,8 +15,8 @@ Pipeline assembled here, in order:
      per-narrative flag, not a gate — every non-noise cluster is carried into
      dynamics and out-of-scope ones (JEL ∉ {E,F,G,H}) are shown flagged with
      their code, not dropped (ADR-046).
-  3. four-lens Bayesian dynamics fit per cluster (ADR-039) on the adjusted
-     series, and R₀→stage classification (ADR-019).
+  3. per-cluster lens fits (least squares, ADR-067) on the adjusted series,
+     and model-free stage classification from the volume trajectory (ADR-052).
   4. cluster centroids + 2-D UMAP positions + semantic/lexical/morphological
      similar-narratives (ADR-019 §H, ADR-044).
   5. assembly into the artifact contract via ``build_dashboard_artifacts`` and
@@ -30,7 +30,7 @@ press-vs-discourse Granger readout (ADR-042/048) with a MEDIACLOUD key. Both are
 display/validation only — neither ever feeds embedding, clustering, or the fit.
 
 ``embedder`` and ``fitter`` are injectable so the assembly path is unit-testable
-without loading Qwen3-8B or running PyMC; the CLI passes the real ones.
+without loading Qwen3-8B or running the lens fits; the CLI passes the real ones.
 """
 from __future__ import annotations
 
