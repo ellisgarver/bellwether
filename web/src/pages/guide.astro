@@ -114,8 +114,8 @@ for (const e of (pool.length ? pool : index.narratives)) {
       standard JEL economics
       taxonomy published by the American Economic Association. this is done by comparing the
       cluster's center to a prototype vector for each JEL field and taking the
-      nearest one. clusters in the macro-finance fields — JEL E (macroeconomics and
-      monetary), F (international), G (financial) and H (public and fiscal) — are
+      nearest one. clusters in the macro-finance fields, JEL E (macroeconomics and
+      monetary), F (international), G (financial), and H (public and fiscal), are
       the core scope; clusters that fall outside those fields are still fit and
       shown, just flagged with the external JEL field they landed in.
     </p>
@@ -125,7 +125,7 @@ for (const e of (pool.length ? pool : index.narratives)) {
     <p class="eyebrow">the model</p>
     <h2>four lenses on one curve</h2>
     <p>
-      counting a narrative's articles per week gives a volume curve — a time series
+      counting a narrative's articles per week gives a volume curve: a time series
       of how loud the story is. that count is then normalized for how much the whole
       corpus published that day, so a story doesn't look like it's growing just because
       coverage overall grew. four lenses are applied to the adjusted curve and shown
@@ -147,7 +147,7 @@ for (const e of (pool.length ? pool : index.narratives)) {
         </svg>
         <div>
           <strong>SIR epidemic</strong> <span class="cite">(Kermack &amp; McKendrick, 1927)</span>
-          <p>treats attention as an outbreak — a wave that spreads, peaks, and burns out — measured by how fast it doubled on the way up and halved on the way down.</p>
+          <p>treats attention as an outbreak that spreads, peaks, and burns out, measured by how fast it doubled on the way up and halved on the way down.</p>
         </div>
       </div>
       <div class="lens-card">
@@ -179,17 +179,17 @@ for (const e of (pool.length ? pool : index.narratives)) {
     </p>
     <p>
       the lenses describe shape; they do not assign the stage. the stage is read
-      directly from the recent curve with a model-free trend test — a modified
+      directly from the recent curve with a model-free trend test: a modified
       Mann–Kendall test <span class="cite">(Mann, 1945; Kendall, 1948)</span> over
       the most recent four weeks, its variance corrected for the autocorrelation
       that smoothing introduces <span class="cite">(Hamed &amp; Rao, 1998)</span>.
       four states result:
     </p>
     <ul class="r0">
-      <li class="g"><span class="k">growth</span><span>attention is rising — a significant upward trend</span></li>
-      <li class="s"><span class="k">stable</span><span>no trend, and recent volume is still near the narrative's own peak — a high plateau</span></li>
-      <li class="d"><span class="k">decay</span><span>attention is falling — a significant downward trend</span></li>
-      <li class="z"><span class="k">dormant</span><span>no trend, and recent volume has fallen well below the narrative's own peak — faded out</span></li>
+      <li class="g"><span class="k">growth</span><span>attention is rising: a significant upward trend</span></li>
+      <li class="s"><span class="k">stable</span><span>no trend, and recent volume is still near the narrative's own peak: a high plateau</span></li>
+      <li class="d"><span class="k">decay</span><span>attention is falling: a significant downward trend</span></li>
+      <li class="z"><span class="k">dormant</span><span>no trend, and recent volume has fallen well below the narrative's own peak: faded out</span></li>
     </ul>
   </section>
 
@@ -200,8 +200,8 @@ for (const e of (pool.length ? pool : index.narratives)) {
       take <a href={`${base}/narratives/${example.cluster_id}`}>{displayName(example)}</a> for
       example. the bars are its weekly volume, adjusted for how much the whole
       corpus published; the line is the selected lens. each tab carries its
-      lens's R², and the chart opens on the best-fitting one — when no lens
-      describes the narrative well, it opens on the volume alone, and the grayed
+      lens's R², and the chart opens on the best-fitting one. when no lens
+      describes the narrative well it opens on the volume alone, and the grayed
       tabs still pull any lens up for comparison. drag pans the view; the two
       sliders zoom time and volume independently.
     </p>
@@ -215,8 +215,8 @@ for (const e of (pool.length ? pool : index.narratives)) {
       before or after the market. Granger precedence measures timing, not cause.
     </p>
     <p>
-      below the numbers sits the reading list: three stacked lists linking to
-      the source documents — the narrative's core pieces, its earliest writing,
+      below the numbers sits the reading list, three stacked lists linking to
+      the source documents: the narrative's core pieces, its earliest writing,
       and its most recent. related narratives close the page, ranked three ways:
       by meaning (closeness of the cluster centers in embedding space), by terms
       (shared distinctive vocabulary), and by curve shape (correlation of the

@@ -65,19 +65,19 @@ const jelBars = [...jelTotals.entries()]
 const sources: [string, string][] = [
   [
     "U.S. monetary authority",
-    "Federal Reserve Board — FOMC statements and minutes, speeches (including Jackson Hole), the Beige Book, FEDS Notes, the Monetary Policy Report, and the Financial Stability Report.",
+    "Federal Reserve Board: FOMC statements and minutes, speeches (including Jackson Hole), the Beige Book, FEDS Notes, the Monetary Policy Report, and the Financial Stability Report.",
   ],
   [
     "U.S. monetary research",
-    "the regional Federal Reserve banks — New York (Liberty Street Economics, Staff Reports), San Francisco (Economic Letter, Working Papers, FedViews, Beige Book, Community Development), Chicago (research series, the president's speeches, business and economic-conditions surveys), and Atlanta (macroblog, working papers).",
+    "the regional Federal Reserve banks: New York (Liberty Street Economics, Staff Reports), San Francisco (Economic Letter, Working Papers, FedViews, Beige Book, Community Development), Chicago (research series, the president's speeches, business and economic-conditions surveys), and Atlanta (macroblog, working papers).",
   ],
   [
     "international macro authority",
-    "the IMF — the World Economic Outlook, the Global Financial Stability Report, Finance & Development, working papers, and the IMF blog.",
+    "the IMF: the World Economic Outlook, the Global Financial Stability Report, Finance & Development, working papers, and the IMF blog.",
   ],
   [
     "international central-bank network",
-    "the BIS — the Quarterly Review, working papers, bulletins, and a curated set of central-bank speeches.",
+    "the BIS: the Quarterly Review, working papers, bulletins, and a curated set of central-bank speeches.",
   ],
   [
     "U.S. fiscal authority",
@@ -85,7 +85,7 @@ const sources: [string, string][] = [
   ],
   [
     "U.S. financial-stability research",
-    "the Treasury's Office of Financial Research — working papers and FSOC reports.",
+    "the Treasury's Office of Financial Research: working papers and FSOC reports.",
   ],
   [
     "U.S. policy think tanks",
@@ -150,7 +150,7 @@ const shownStats: [string, string][] = [
   {floor && (
     <p class="caption reveal">
       clustering keeps every topic the corpus contains; the site charts the
-      narratives with at least {floor} articles — enough history to fit and
+      narratives with at least {floor} articles, enough history to fit and
       stage a life-cycle. the rest are browsable in
       <a href={`${base}/directory`}>the full directory</a>.
     </p>
@@ -161,7 +161,7 @@ const shownStats: [string, string][] = [
     <h2>where the words come from</h2>
     <p>
       the source set is fixed: a basis set covering every independent dimension of
-      U.S. macro discourse — the upstream writing of policymakers, researchers, and
+      U.S. macro discourse, the upstream writing of policymakers, researchers, and
       analysts. eight discourse dimensions plus a cross-cutting Q&A register, across
       twelve active feeds, each carrying several document types. open a row for the
       underlying series:
@@ -181,7 +181,7 @@ const shownStats: [string, string][] = [
     <p>
       every article from every source enters the corpus; nothing is filtered by
       topic on the way in. the only ingest filters are the date window (2010
-      onward) and near-duplicate removal — MinHash over character 5-grams,
+      onward) and near-duplicate removal: MinHash over character 5-grams,
       dropping documents above 0.85 Jaccard similarity (Broder 1997; Henzinger
       2006), keyed on both article URL and content. within-macro topical scope is
       decided later, in clustering.
