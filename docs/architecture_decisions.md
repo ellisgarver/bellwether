@@ -5442,8 +5442,28 @@ window, at the **article** level:
   stays reported, never gated (ADR-019).
 - Keeping outliers in the denominator means heavy outlier assignment still
   costs recovery — the metric cannot be satisfied by discarding hard articles.
-- The validation summary (`validate --output`) ships with the dashboard
-  artifacts, and the research page reports the per-anchor result.
+- The validation summary (`validate --output`) can ship with the dashboard
+  artifacts, in which case the research page reports the per-anchor result.
+
+### Outcome (first full-corpus run, 2026-07-06)
+
+0/10 recovered (`data/validation/validation_2026-07-06.json`). The per-anchor
+destinations show two distinct causes, neither of them cluster incoherence:
+
+1. **Granularity split.** Entity-rich anchors resolve to the right material but
+   spread across several fine clusters — Brexit's best cluster IS a Brexit
+   cluster (5% of 235 matching articles); SVB and regional-banking both point
+   at the same bank-liquidity cluster. BERTopic at library-default granularity
+   yields 7,242 clusters, so one event's writing rarely concentrates 50% in one.
+2. **Term breadth.** Anchors whose `key_terms` include generic words
+   ("inflation", "expectations", "FOMC", "liquidity") match the entire macro
+   discussion of their window (transitory-inflation: 1,369 articles), making
+   concentration meaningless for them.
+
+Per ADR-040 the criterion is **not** iterated further toward a passing score.
+The binary scoreboard is not shipped on the site; the summary stays in the repo
+as the recorded diagnostic. Any future criterion change requires its own ADR
+justified on measurement grounds, not on the score it produces.
 
 ---
 
