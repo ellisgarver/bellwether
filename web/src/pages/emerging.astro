@@ -1,7 +1,7 @@
 ---
 import Base from "../layouts/Base.astro";
 import NarrativeCard from "@components/NarrativeCard.astro";
-import { loadIndex, loadNarrative } from "@lib/data";
+import { loadIndex, loadNarrative, displayName } from "@lib/data";
 
 const index = loadIndex();
 
@@ -43,6 +43,10 @@ const heating = index.narratives
 const sparks: Record<number, number[]> = Object.fromEntries(
   narrs.map((n) => [n.cluster_id, spark(n.volume.values)]),
 );
+// heating threshold shown in the lede (same k for every narrative in a build).
+const kSigma = heating.length
+  ? (byId(heating[0].cluster_id).mediacloud?.press_heating?.k ?? 2)
+  : 2;
 ---
 
 <Base title="emerging" active="emerging">
@@ -61,16 +65,20 @@ const sparks: Record<number, number[]> = Object.fromEntries(
 
       <div class="grid reveal" id="gallery">
         {emerging.map((e) => (
-          <div class="card-wrap" data-label={e.label.toLowerCase()}
+          <div class="card-wrap" data-label={(displayName(e) + " " + e.label).toLowerCase()}
             data-terms={e.top_terms.join(" ").toLowerCase()}>
             <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
           </div>
         ))}
       </div>
       <p id="empty" class="muted hidden">no narratives match that filter.</p>
+      <nav id="pager" class="pager" aria-label="catalog pages"></nav>
     </>
   ) : (
-    <p class="muted reveal">no narratives fall within the emerging window.</p>
+    <p class="muted reveal">
+      no new narratives have entered the record in the last four weeks — new
+      arrivals appear here as soon as the sources start writing about them.
+    </p>
   )}
 
   {heating.length > 0 && (
@@ -78,37 +86,44 @@ const sparks: Record<number, number[]> = Object.fromEntries(
       <p class="eyebrow">a separate signal</p>
       <h2>heating in the press</h2>
       <p class="lede">
-        narratives we already track whose recent press attention sits more than
-        {" "}{heating[0]?.is_press_heating ? (byId(heating[0].cluster_id).mediacloud?.press_heating?.k ?? 2) : 2}σ
-        above their own yearly baseline (Media Cloud). this is a press-led signal,
-        distinct from when our institutional sources first pick a story up.
+        tracked narratives whose recent press attention sits more than {kSigma}σ
+        above their own yearly baseline (Media Cloud) — a press-led signal,
+        distinct from when the institutional sources first pick a story up.
       </p>
-      <div class="grid">
+      <div class="grid" id="heat-gallery">
         {heating.map((e) => (
           <div class="card-wrap">
             <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
           </div>
         ))}
       </div>
+      <nav id="heat-pager" class="pager" aria-label="press-heating pages"></nav>
     </section>
   )}
 
   <script>
+    import { setupCatalog } from "@lib/catalog";
     const search = document.getElementById("search");
     if (search) {
-      const cards = [...document.querySelectorAll(".card-wrap")];
-      const empty = document.getElementById("empty");
-      function applyFilter() {
-        const q = (search.value || "").trim().toLowerCase();
-        let shown = 0;
-        for (const c of cards) {
-          const vis = !q || c.dataset.label.includes(q) || c.dataset.terms.includes(q);
-          c.classList.toggle("hidden", !vis);
-          if (vis) shown++;
-        }
-        empty.classList.toggle("hidden", shown !== 0);
-      }
-      search.addEventListener("input", applyFilter);
+      const catalog = setupCatalog({
+        cards: [...document.querySelectorAll("#gallery .card-wrap")],
+        empty: document.getElementById("empty"),
+        pager: document.getElementById("pager"),
+        scrollTo: document.getElementById("gallery"),
+        matches(c) {
+          const q = (search.value || "").trim().toLowerCase();
+          return !q || c.dataset.label.includes(q) || c.dataset.terms.includes(q);
+        },
+      });
+      search.addEventListener("input", () => catalog.refresh());
+    }
+    const heatGallery = document.getElementById("heat-gallery");
+    if (heatGallery) {
+      setupCatalog({
+        cards: [...heatGallery.querySelectorAll(".card-wrap")],
+        pager: document.getElementById("heat-pager"),
+        scrollTo: heatGallery,
+      });
     }
   </script>
 </Base>

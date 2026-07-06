@@ -61,8 +61,10 @@ const sparks: Record<number, number[]> = Object.fromEntries(
     ))}
   </div>
   <p id="empty" class="muted hidden">no narratives match that filter.</p>
+  <nav id="pager" class="pager" aria-label="catalog pages"></nav>
 
   <script>
+    import { setupCatalog } from "@lib/catalog";
     const search = document.getElementById("search");
     const flags = {
       growth: document.getElementById("f-growth"),
@@ -72,29 +74,25 @@ const sparks: Record<number, number[]> = Object.fromEntries(
     };
     // scope facet is rendered only when the data carries a scope distinction.
     const scope = document.getElementById("f-scope");
-    const cards = [...document.querySelectorAll(".card-wrap")];
-    const empty = document.getElementById("empty");
-    function applyFilter() {
-      const q = (search.value || "").trim().toLowerCase();
-      // each stage checkbox is an independent facet, unioned together. with
-      // nothing checked we treat it as no filter rather than hiding all.
-      const anyChecked = Object.values(flags).some((f) => f.checked);
-      const scopeOnly = scope?.checked;
-      let shown = 0;
-      for (const c of cards) {
+    const catalog = setupCatalog({
+      cards: [...document.querySelectorAll(".card-wrap")],
+      empty: document.getElementById("empty"),
+      pager: document.getElementById("pager"),
+      scrollTo: document.getElementById("gallery"),
+      matches(c) {
+        const q = (search.value || "").trim().toLowerCase();
+        // each stage checkbox is an independent facet, unioned together. with
+        // nothing checked we treat it as no filter rather than hiding all.
+        const anyChecked = Object.values(flags).some((f) => f.checked);
         const okText = !q || c.dataset.label.includes(q) || c.dataset.terms.includes(q);
         const okCat = !anyChecked || flags[c.dataset.stage]?.checked;
-        const okScope = !scopeOnly || c.dataset.scope === "in";
-        const vis = okText && okCat && okScope;
-        c.classList.toggle("hidden", !vis);
-        if (vis) shown++;
-      }
-      empty.classList.toggle("hidden", shown !== 0);
-    }
+        const okScope = !scope?.checked || c.dataset.scope === "in";
+        return okText && okCat && okScope;
+      },
+    });
     [search, ...Object.values(flags), scope].forEach((el) =>
-      el?.addEventListener("input", applyFilter),
+      el?.addEventListener("input", () => catalog.refresh()),
     );
-    applyFilter();
   </script>
 </Base>
 
