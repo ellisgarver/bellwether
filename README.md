@@ -37,9 +37,8 @@ measured and incorporates other models and lenses of analysis.
 Every threshold is a published library default or a value cited from primary
 literature, every random step flows from the one fixed seed, and parameters aren't
 ever tuned toward recovering known events. The full methodology, with the
-citation behind each choice, is in
-[`docs/METHODOLOGY.md`](docs/METHODOLOGY.md); every decision is logged in
-[`docs/architecture_decisions.md`](docs/architecture_decisions.md).
+citation behind each choice, can be found in
+[`docs/METHODOLOGY.md`](docs/METHODOLOGY.md).
 
 ## Repository
 
