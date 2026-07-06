@@ -190,6 +190,10 @@ export interface DirectoryEntry {
   n_articles: number;
   date_range: [string, string] | null;
   surfaced: boolean;
+  // Forming (ADR-071): sub-floor cluster with a recent onset — listed on the
+  // emerging page. Forming entries carry their c-TF-IDF terms for naming.
+  forming?: boolean;
+  terms?: string[];
 }
 
 export interface ClusterDirectory {

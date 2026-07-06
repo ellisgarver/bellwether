@@ -30,7 +30,7 @@ for (const e of (pool.length ? pool : index.narratives)) {
 
 <Base title="guide" active="guide">
   <p class="eyebrow reveal">the guide</p>
-  <h1 class="reveal">how the tool works</h1>
+  <h1 class="reveal">how bellwether works</h1>
   <p class="lede reveal">
     how the pipeline turns institutional writing into clustered narratives and
     lifecycle analysis.
@@ -147,7 +147,7 @@ for (const e of (pool.length ? pool : index.narratives)) {
         </svg>
         <div>
           <strong>SIR epidemic</strong> <span class="cite">(Kermack &amp; McKendrick, 1927)</span>
-          <p>treats attention as an outbreak that spreads, peaks, and burns out, measured by how fast it doubled on the way up and halved on the way down.</p>
+          <p>treats attention as an outbreak that spreads, peaks, and burns out, measured by doubling and halving speed.</p>
         </div>
       </div>
       <div class="lens-card">
@@ -174,16 +174,18 @@ for (const e of (pool.length ? pool : index.narratives)) {
     <p>
       each curve is fit by bounded least squares and scored with R², the share of
       the volume's variation the curve explains. every lens stays available on
-      every narrative: the chart opens on the best-scoring one, weaker lenses are
-      grayed rather than hidden, and the score sits right on the tab.
+      every narrative, opening on the best-scoring one. weaker lenses are
+      grayed not hidden, and the score sits on the tab. when no lens
+      describes the narrative well it opens on the volume alone, and the grayed
+      tabs still pull any lens up for comparison.
     </p>
     <p>
-      the lenses describe shape; they do not assign the stage. the stage is read
+      the lenses describe shape but don't assign stage. instead, the stage is read
       directly from the recent curve with a model-free trend test: a modified
       Mann–Kendall test <span class="cite">(Mann, 1945; Kendall, 1948)</span> over
       the most recent four weeks, its variance corrected for the autocorrelation
       that smoothing introduces <span class="cite">(Hamed &amp; Rao, 1998)</span>.
-      four states result:
+      see more on the four possible states below:
     </p>
     <ul class="r0">
       <li class="g"><span class="k">growth</span><span>attention is rising: a significant upward trend</span></li>
@@ -198,30 +200,27 @@ for (const e of (pool.length ? pool : index.narratives)) {
     <h2>reading a narrative</h2>
     <p>
       take <a href={`${base}/narratives/${example.cluster_id}`}>{displayName(example)}</a> for
-      example. the bars are its weekly volume, adjusted for how much the whole
-      corpus published; the line is the selected lens. each tab carries its
-      lens's R², and the chart opens on the best-fitting one. when no lens
-      describes the narrative well it opens on the volume alone, and the grayed
-      tabs still pull any lens up for comparison. drag pans the view; the two
-      sliders zoom time and volume independently.
+      example. the bars on the chart are its weekly volume, adjusted for how much the whole
+      corpus published, and the line is the selected lens. each tab carries its
+      lens's R², and the chart opens on the best-fitting one. drag pans the view; the two
+      sliders zoom time and volume independently. also see shape facts and standing quantifications below the chart.
     </p>
     <p>
       the checkboxes overlay two external series, rescaled onto the same axis to
       compare direction and timing: broad-press story counts (Media Cloud) and a
-      market series such as the VIX. underneath sit two bidirectional Granger
+      market series (VIX). underneath sit two bidirectional Granger
       tests. each sweeps lags of one to four weeks in both directions, asks
       whether past values of one series help predict the other, and reports the
       strongest lag: whether discourse moved before or after the press, and
-      before or after the market. Granger precedence measures timing, not cause.
+      before or after the market. note that Granger precedence measures timing, not cause.
     </p>
     <p>
-      below the numbers sits the reading list, three stacked lists linking to
+      further down sits a reading list, three stacked lists linking to
       the source documents: the narrative's core pieces, its earliest writing,
       and its most recent. related narratives close the page, ranked three ways:
-      by meaning (closeness of the cluster centers in embedding space), by terms
+      by meaning (closeness of cluster centers in embedding space), by terms
       (shared distinctive vocabulary), and by curve shape (correlation of the
-      two volume curves). a narrative that scores high on all three is a close
-      neighbor.
+      two volume curves). close neighbors score high on all three.
     </p>
   </section>
 </Base>

@@ -284,8 +284,9 @@ def run_analysis(
     )
     out_path = write_dashboard_artifacts(index, narratives, out_dir)
     # Full-corpus directory (every non-noise cluster, incl. sub-floor ones) so
-    # the site can offer a searchable index of the whole corpus.
-    write_cluster_directory(clusters_df, topic_info, fit_ids, names, out_dir)
+    # the site can offer a searchable index of the whole corpus, with forming
+    # clusters flagged for the emerging page (ADR-071).
+    write_cluster_directory(clusters_df, topic_info, fit_ids, names, out_dir, cfg=cfg)
     return out_path
 
 

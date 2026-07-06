@@ -43,6 +43,18 @@ const repPanels = [
   { label: "earliest", items: n.card.earliest_articles ?? [] },
   { label: "most recent", items: n.card.newest_articles ?? [] },
 ].filter((p) => p.items.length > 0);
+// Plain-language reading of the stage table: what the trailing-four-week trend
+// and the peak comparison say, and the stage they add up to.
+const pct = sd.recent_peak_ratio == null ? null : Math.round(sd.recent_peak_ratio * 100);
+const pWord = sd.trend_p != null ? ` (p = ${fmt(sd.trend_p, 3)})` : "";
+const stageReading =
+  n.stage === "growth"
+    ? `attention has risen significantly over the trailing four weeks${pWord}, which reads as growth.`
+    : n.stage === "decay"
+      ? `attention has fallen significantly over the trailing four weeks${pWord}, which reads as decay.`
+      : n.stage === "stable"
+        ? `no significant trend over the trailing four weeks, with recent volume${pct != null ? ` at ${pct}% of` : " near"} the narrative's own peak: a high plateau, which reads as stable.`
+        : `no significant trend over the trailing four weeks, with recent volume${pct != null ? ` at ${pct}% of` : " well below"} the narrative's own peak: faded, which reads as dormant.`;
 const factOrder: [string, string][] = [
   ["total_volume", "total volume"],
   ["peak_volume", "peak volume"],
@@ -140,10 +152,9 @@ const direction = (d: any) =>
       </div>
     </div>
     <p class="caption sir-note">
-      {sirGoodFit && num(sirP.doubling_time_up) && num(sirP.half_life_down) ? (
-        <>as an epidemic wave, attention doubled every {num(sirP.doubling_time_up, 1)} days on the rise and halved every {num(sirP.half_life_down, 1)} days on the fall (asymmetry {num(sirP.asymmetry, 1)}×). the stage above is read from the recent trend.</>
-      ) : (
-        <>the stage is read from the recent trend above.</>
+      {stageReading}
+      {sirGoodFit && num(sirP.doubling_time_up) && num(sirP.half_life_down) && (
+        <> as an epidemic wave, attention doubled every {num(sirP.doubling_time_up, 1)} days on the rise and halved every {num(sirP.half_life_down, 1)} days on the fall (asymmetry {num(sirP.asymmetry, 1)}×).</>
       )}
     </p>
   </section>
@@ -168,11 +179,6 @@ const direction = (d: any) =>
           <div>
             <p class="eyebrow">broad-press</p>
             <h2>did discourse lead or lag press?</h2>
-            {n.mediacloud.press_heating?.is_heating && (
-              <p class="note heat-note">
-                <span class="heat">press heating</span> {n.mediacloud.press_heating.caption} — a press-led spike, separate from when our institutional sources picked it up.
-              </p>
-            )}
             {mcg ? (
               <>
                 <p class="note">{mcg.verdict}</p>
@@ -189,6 +195,11 @@ const direction = (d: any) =>
           </div>
         )}
       </div>
+      {n.mediacloud?.press_heating?.is_heating && (
+        <p class="caption heat-note">
+          <span class="heat">press heating</span> {n.mediacloud.press_heating.caption} — a press-led spike, separate from when the institutional sources picked the story up.
+        </p>
+      )}
     </section>
   )}
 
@@ -487,7 +498,7 @@ const direction = (d: any) =>
 </Base>
 
 <style>
-  .heat-note { margin-top: 0.6rem; }
+  .heat-note { margin-top: 1.2rem; }
   .sir-note { margin-top: 1.2rem; }
   .heat-note .heat {
     font-size: 0.72rem; padding: 0.1rem 0.45rem; border-radius: 999px;

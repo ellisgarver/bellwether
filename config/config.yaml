@@ -330,6 +330,12 @@ display:
     max_title_words: 7          # soft target for the title (not a hard cap)
     prompt_version: 2           # bump to invalidate the cache when the prompt changes
     cache_dir: "data/naming_cache"   # tracked path (data/ is not gitignored)
+  forming:
+    # Sub-floor clusters surface as "forming" on the emerging page when their
+    # onset falls within stages.newly_emerging_recency_weeks and they span at
+    # least this many distinct articles (excludes single-document clusters;
+    # ADR-071). Display-only.
+    min_articles: 3
 
 # -----------------------------------------------------------------------------
 # Storage paths
@@ -349,6 +355,7 @@ update:
   merge_enabled: false
   # merge_models topic-similarity threshold (BERTopic library default).
   merge_min_similarity: 0.7
+
 
 paths:
   raw_articles: "data/raw/articles"

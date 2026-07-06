@@ -266,3 +266,41 @@ class TestWrite:
         for f in out.glob("*.json"):
             text = f.read_text()
             assert "NaN" not in text and "Infinity" not in text
+
+
+def test_cluster_directory_flags_forming(tmp_path):
+    """ADR-071: sub-floor clusters with recent onsets and enough articles are
+    flagged forming (with terms); surfaced and single-document clusters are not."""
+    import json
+
+    import pandas as pd
+
+    from mnd.dashboard.build_artifacts import write_cluster_directory
+
+    rows = []
+    # surfaced cluster (id 1), old onset
+    for i in range(5):
+        rows.append({"topic": 1, "article_id": f"s{i}", "published_at": "2020-01-01"})
+    rows.append({"topic": 1, "article_id": "s_last", "published_at": "2026-07-01"})
+    # forming candidate (id 2): 3 articles, onset inside the window
+    for i in range(3):
+        rows.append({"topic": 2, "article_id": f"f{i}", "published_at": "2026-06-25"})
+    # single-document cluster (id 3), recent onset — excluded
+    rows.append({"topic": 3, "article_id": "solo", "published_at": "2026-06-28"})
+    df = pd.DataFrame(rows)
+    ti = pd.DataFrame(
+        {
+            "Topic": [1, 2, 3],
+            "Name": ["1_a_b", "2_c_d", "3_e_f"],
+            "Representation": [["a", "b"], ["c", "d"], ["e", "f"]],
+        }
+    )
+    cfg = {
+        "stages": {"newly_emerging_recency_weeks": 4},
+        "display": {"forming": {"min_articles": 3}},
+    }
+    path = write_cluster_directory(df, ti, fit_ids=[1], names={}, out_dir=tmp_path, cfg=cfg)
+    by_id = {c["cluster_id"]: c for c in json.loads(path.read_text())["clusters"]}
+    assert by_id[1]["surfaced"] and not by_id[1]["forming"]
+    assert by_id[2]["forming"] and by_id[2]["terms"] == ["c", "d"]
+    assert not by_id[3]["forming"]  # single document

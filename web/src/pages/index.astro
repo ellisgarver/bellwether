@@ -15,12 +15,12 @@ const fmt = (n: number) => n.toLocaleString("en-US");
        entry points, then the 3-D map filling the rest of the first viewport. -->
   <section class="hero">
     <div class="hero-top">
-      <p class="eyebrow reveal">macro narratives, measured</p>
-      <h1 class="hero-title reveal">how macro narratives rise and fade.</h1>
+      <p class="eyebrow reveal">macroeconomic narratives, mapped</p>
+      <h1 class="hero-title reveal">how macro narratives form, rise, and fade.</h1>
       <p class="hero-thesis reveal">
-        fifteen years of institutional writing from the Fed, IMF, BIS, NBER and
-        their peers, clustered into narratives and mapped. every point below is
-        one of the {index.n_narratives} charted narratives, placed among its
+        years of institutional and academic writing from the Fed, IMF, BIS, NBER and
+        their peers, clustered into narratives then analyzed and mapped. every point is
+        one of the {index.n_narratives} charted economic stories, placed among its
         nearest neighbors.
       </p>
     </div>
@@ -30,7 +30,7 @@ const fmt = (n: number) => n.toLocaleString("en-US");
         <div><span class="num">{fmt(index.n_narratives)}</span><span class="lbl">narratives</span></div>
         <div><span class="num">{fmt(totalArticles)}</span><span class="lbl">articles</span></div>
         <div><span class="num">12</span><span class="lbl">feeds</span></div>
-        <div><span class="num">2010</span><span class="lbl">tracked since</span></div>
+        <div><span class="num">2010</span><span class="lbl">since</span></div>
       </div>
       <div class="hero-cta">
         <a href={`${base}/narratives`}>browse all narratives →</a>
@@ -47,8 +47,8 @@ const fmt = (n: number) => n.toLocaleString("en-US");
           (<span style="color:var(--growth)">growing</span>,
           <span style="color:var(--stable)">stable</span>,
           <span style="color:var(--decay)">fading</span>,
-          <span style="color:var(--dormant)">dormant</span>);
-          size is the volume written; shape is the JEL economics field.
+          <span style="color:var(--dormant)">dormant</span>).
+          size is the volume written. shape is the JEL economics field.
         </p>
       </>
     )}
