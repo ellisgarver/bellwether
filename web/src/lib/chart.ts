@@ -343,15 +343,17 @@ export function mountMap3d(
       // A proportional dolly stalls once the camera is close: each tick moves a
       // fraction of an already-tiny distance. Below a floor of absolute travel,
       // switch to flight — translate eye and center together along the cursor
-      // ray at a constant pace, so the camera moves through the cloud instead
-      // of creeping toward a point it never reaches.
-      const MIN_STEP = 0.05;
+      // ray, so the camera moves through the cloud instead of creeping toward a
+      // point it never reaches. The flight step scales with the gesture (a
+      // mouse-wheel notch is ~one deltaY of 100-240; a trackpad swipe is many
+      // small deltas), so both inputs fly at the same overall pace.
+      const flyStep = Math.min(0.12, Math.abs(ev.deltaY) * 0.00022);
       const travel = Math.hypot(ne.x - eye.x, ne.y - eye.y, ne.z - eye.z);
       const zoomingIn = ev.deltaY < 0;
-      if (travel < MIN_STEP && (zoomingIn || dist < 0.5)) {
+      if (travel < flyStep && (zoomingIn || dist < 0.5)) {
         let fx = T.x - eye.x, fy = T.y - eye.y, fz = T.z - eye.z;
         const flen = Math.hypot(fx, fy, fz) || 1e-6;
-        const step = (zoomingIn ? MIN_STEP : -MIN_STEP);
+        const step = zoomingIn ? flyStep : -flyStep;
         fx = (fx / flen) * step; fy = (fy / flen) * step; fz = (fz / flen) * step;
         ne = { x: eye.x + fx, y: eye.y + fy, z: eye.z + fz };
         nc = { x: C.x + fx, y: C.y + fy, z: C.z + fz };
