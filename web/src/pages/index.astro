@@ -35,8 +35,7 @@ const fmt = (n: number) => n.toLocaleString("en-US");
           <span style="color:var(--stable)">stable</span>,
           <span style="color:var(--decay)">fading</span>,
           <span style="color:var(--dormant)">dormant</span>);
-          size is the volume written.
-          <span class="map-hint">drag orbits · scroll zooms · click selects a narrative</span>
+          size is the volume written; shape is the JEL economics field.
         </p>
       </>
     )}
@@ -102,12 +101,6 @@ const fmt = (n: number) => n.toLocaleString("en-US");
     margin: 0.2rem 0 0;
     color: var(--muted);
     font-size: var(--fs-ui);
-  }
-  .map-key .map-hint {
-    color: var(--faint);
-    font-size: var(--fs-meta);
-    display: inline-block;
-    margin-left: 0.6rem;
   }
 
   .hero-foot {
