@@ -115,11 +115,12 @@ const fmt = (n: number) => n.toLocaleString("en-US");
     font-weight: 600;
   }
 
+  /* the map breaks out of the text column to the full viewport width, so the
+     landscape spans edge to edge while the copy above stays in the wrap. */
   .map3d {
     flex: 1;
-    width: 100%;
-    min-height: 320px;
-    margin: 2rem 0 1rem;
+    margin: 1.8rem calc(50% - 50vw) 1rem;
+    min-height: 360px;
     cursor: grab;
   }
   .map3d:active { cursor: grabbing; }
