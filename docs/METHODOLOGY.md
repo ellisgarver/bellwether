@@ -85,14 +85,13 @@ Each cluster carries an algorithmic name — its top 5–10 c-TF-IDF terms, e.g.
 
 Each cluster is assigned a primary JEL code from the American Economic Association's Journal of Economic Literature classification (https://www.aeaweb.org/econlit/jelCodes.php):
 
-1. Take the cluster's top c-TF-IDF terms.
-2. For each top-level JEL code (A–Z), take the AEA's verbatim published description.
-3. Embed the cluster terms and the JEL descriptions in the same Qwen3 space used for clustering.
-4. Assign the JEL code whose description is the nearest cosine neighbor.
+1. Represent the cluster by its centroid — the mean of its chunk embeddings in the Qwen3 space used for clustering.
+2. For each top-level JEL code (A–Z), take the AEA's verbatim published description and embed it in the same space.
+3. Assign the JEL code whose description is the nearest cosine neighbor of the centroid.
 
 Every non-noise cluster proceeds to dynamics fitting (Stages 6–8); the JEL code is a per-narrative display flag, not a gate. Clusters whose primary code falls in the macro-finance scope — E (macroeconomics and monetary), F (international), G (financial), H (public economics, including fiscal H6) — are marked in-scope. Clusters outside that scope carry their JEL label rather than being dropped, and are fit, staged, and shown alongside the rest.
 
-The taxonomy is external and unedited: the AEA maintains it and uses it to classify journal submissions. The classifier embeds the AEA's own descriptions and assigns by cosine similarity — the operation that produced the clusters — with no intermediate keyword choices. The {E, F, G, H} scope is the standard macro-finance mapping. Running the classifier after clustering uses cluster-level content (typically 100–1,000 documents and their c-TF-IDF terms), which carries more signal than a single article's title and body, and keeps the embedding and clustering steps independent of any topic taxonomy.
+The taxonomy is external and unedited: the AEA maintains it and uses it to classify journal submissions. The classifier embeds the AEA's own descriptions and assigns by cosine similarity — the operation that produced the clusters — with no intermediate keyword choices. The {E, F, G, H} scope is the standard macro-finance mapping. Running the classifier after clustering uses cluster-level content (typically 100–1,000 documents averaged into the centroid), which carries more signal than a single article's title and body, and keeps the embedding and clustering steps independent of any topic taxonomy.
 
 The classifier reports a `runner_up_gap` per cluster — the cosine-similarity difference between its primary and second-best JEL code; a median below 0.05 across clusters would indicate ambiguous assignment. The diagnostic ships with the classifier output.
 

@@ -6,8 +6,8 @@
 SHELL := /bin/bash
 PYTHON ?= python
 
-.PHONY: help install install-dev preflight test lint format clean \
-        ingest filter embed cluster validate dashboard
+.PHONY: help install install-dev preflight preflight-full test lint format clean \
+        ingest filter-pre-embed filter embed cluster validate update dashboard site
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -63,5 +63,11 @@ cluster:  ## Run clustering on embeddings
 validate:  ## Run anchor-narrative recovery validation
 	$(PYTHON) scripts/run_pipeline.py validate
 
+update:  ## Portable weekly refresh: per-source delta ingest + artifact re-bake
+	$(PYTHON) scripts/run_pipeline.py update
+
 dashboard:  ## Run the Astro dashboard dev server (web/)
 	cd web && npm run dev
+
+site:  ## Build the static site (web/dist)
+	cd web && npm run build
