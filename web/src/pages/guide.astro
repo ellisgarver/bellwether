@@ -1,11 +1,31 @@
 ---
 import Base from "../layouts/Base.astro";
-import { loadIndex } from "@lib/data";
+import { loadIndex, loadNarrative, displayName } from "@lib/data";
 const index = loadIndex();
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
-const example =
-  index.narratives.find((e) => e.label.toLowerCase().includes("inflation")) ??
-  index.narratives[0];
+
+// Walkthrough example: the in-scope narrative whose best converged lens has
+// the highest R², so the reader's first chart shows a curve that clearly
+// tracks the volume.
+const bestR2 = (cid: number): number => {
+  const fits = loadNarrative(cid).fits ?? [];
+  return Math.max(
+    0,
+    ...fits
+      .filter((f) => f.converged && f.curve)
+      .map((f) => (typeof f.params?.r2 === "number" ? (f.params.r2 as number) : 0)),
+  );
+};
+const pool = index.narratives.filter((e) => e.in_scope);
+let example = index.narratives[0];
+let exampleScore = -1;
+for (const e of (pool.length ? pool : index.narratives)) {
+  const s = bestR2(e.cluster_id);
+  if (s > exampleScore) {
+    exampleScore = s;
+    example = e;
+  }
+}
 ---
 
 <Base title="guide" active="guide">
@@ -76,12 +96,11 @@ const example =
     </figure>
 
     <p>
-      each article is split into passages of roughly 512 tokens or less — the
-      retrieval unit from the BEIR benchmark — so long reports are read in
-      coherent pieces. each passage is transformed into
-      a vector by a sentence-embedding model — Qwen3-Embedding-8B, 4,096 numbers
-      per passage — where geometric closeness mimics semantic closeness: two
-      passages with the same argument land near each other.
+      each article is split into passages of roughly 512 tokens, the retrieval
+      unit from the BEIR benchmark, so long reports are read in coherent pieces.
+      each passage becomes a vector from a sentence-embedding model
+      (Qwen3-Embedding-8B, 4,096 numbers per passage) in a space where closeness
+      tracks meaning: two passages making the same argument land near each other.
     </p>
     <p>
       those vectors are clustered with BERTopic, which reduces them to a lower
@@ -155,9 +174,8 @@ const example =
     <p>
       each curve is fit by bounded least squares and scored with R², the share of
       the volume's variation the curve explains. every lens stays available on
-      every narrative — the chart opens on the best-scoring one, and lenses whose
-      shape doesn't match the story are grayed rather than hidden, so the fit
-      quality is always visible alongside the fit.
+      every narrative: the chart opens on the best-scoring one, weaker lenses are
+      grayed rather than hidden, and the score sits right on the tab.
     </p>
     <p>
       the lenses describe shape; they do not assign the stage. the stage is read
@@ -173,20 +191,13 @@ const example =
       <li class="d"><span class="k">decay</span><span>attention is falling — a significant downward trend</span></li>
       <li class="z"><span class="k">dormant</span><span>no trend, and recent volume has fallen well below the narrative's own peak — faded out</span></li>
     </ul>
-    <p>
-      the SIR lens answers &ldquo;how did it spread and fade?&rdquo; with two
-      measured rates: how fast the wave doubled on the way up, how fast it halved
-      on the way down, and their ratio — its asymmetry. none of these set the
-      stage: a story that spread sharply and has since faded reads as decay today,
-      whatever its rise was.
-    </p>
   </section>
 
   <section class="section reveal">
     <p class="eyebrow">the page</p>
     <h2>reading a narrative</h2>
     <p>
-      take <a href={`${base}/narratives/${example.cluster_id}`}>{example.label_human ?? example.label}</a> for
+      take <a href={`${base}/narratives/${example.cluster_id}`}>{displayName(example)}</a> for
       example. the bars are its weekly volume, adjusted for how much the whole
       corpus published; the line is the selected lens. each tab carries its
       lens's R², and the chart opens on the best-fitting one — when no lens
@@ -198,21 +209,19 @@ const example =
       the checkboxes overlay two external series, rescaled onto the same axis to
       compare direction and timing: broad-press story counts (Media Cloud) and a
       market series such as the VIX. underneath sit two bidirectional Granger
-      tests — each sweeps lags of one to four weeks in both directions and asks
-      whether past values of one series help predict the other, reporting the
-      strongest lag. that is a statement about temporal precedence: whether
-      discourse moved before or after the press, and before or after the market.
-      Granger precedence measures timing, not cause; narratives with too few
-      weeks of overlap report &ldquo;insufficient data&rdquo;.
+      tests. each sweeps lags of one to four weeks in both directions, asks
+      whether past values of one series help predict the other, and reports the
+      strongest lag: whether discourse moved before or after the press, and
+      before or after the market. Granger precedence measures timing, not cause.
     </p>
     <p>
-      below the numbers sits the reading list — three stacked lists linking to
-      the source documents: the narrative's core pieces (most aligned with its
-      defining terms), its earliest writing, and its most recent. related
-      narratives close the page, ranked three ways: by meaning (closeness of the
-      cluster centers in embedding space), by terms (shared distinctive
-      vocabulary), and by curve shape (correlation of the two volume curves). a
-      narrative that scores high on all three is a close neighbor.
+      below the numbers sits the reading list: three stacked lists linking to
+      the source documents — the narrative's core pieces, its earliest writing,
+      and its most recent. related narratives close the page, ranked three ways:
+      by meaning (closeness of the cluster centers in embedding space), by terms
+      (shared distinctive vocabulary), and by curve shape (correlation of the
+      two volume curves). a narrative that scores high on all three is a close
+      neighbor.
     </p>
   </section>
 </Base>
