@@ -864,9 +864,16 @@ def stability(
     help="Comma-separated anchor IDs or 'all'",
 )
 @click.option("--clusters", default=None, help="Clusters parquet path")
+@click.option("--output", default=None,
+              help="Also write a JSON summary (e.g. into the dashboard artifacts "
+                   "dir so the site can report the score).")
 @click.pass_context
-def validate(ctx: click.Context, anchors: str, clusters: str | None) -> None:
+def validate(
+    ctx: click.Context, anchors: str, clusters: str | None, output: str | None
+) -> None:
     """Anchor recovery validation -- rate reported, not gated (ADR-019)."""
+    from datetime import datetime, timezone
+
     from mnd.validation import validate_anchor_recovery
 
     cfg = ctx.obj["cfg"]
@@ -887,6 +894,27 @@ def validate(ctx: click.Context, anchors: str, clusters: str | None) -> None:
         click.echo(f"  {mark} {r['anchor_id']}: {r['note']}")
 
     click.echo(f"\n  Recovered : {n_recovered}/{len(results)}  (reported, not gated -- ADR-019)")
+
+    if output:
+        out_path = Path(output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            json.dumps(
+                {
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "n_recovered": n_recovered,
+                    "n_total": len(results),
+                    "results": [
+                        {"anchor_id": r["anchor_id"], "recovered": bool(r["recovered"]), "note": r["note"]}
+                        for r in results
+                    ],
+                },
+                ensure_ascii=False,
+                indent=1,
+            ),
+            encoding="utf-8",
+        )
+        click.echo(f"  Wrote summary -> {out_path}")
 
 
 # ---------------------------------------------------------------------------
