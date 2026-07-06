@@ -171,11 +171,11 @@ export function mountMap3d(
     },
   });
 
-  // scrollZoom ON: wheel dollies the 3-D camera. The map is now text-width with
-  // page margins on either side, so the wheel-over-map case is intentional zoom,
-  // not a scroll-trap.
+  // Wheel zoom is handled by our own dolly (below) — plotly's built-in scroll
+  // zoom clamps the camera distance and reads as "resistance" when zooming in
+  // deep, so it stays off. Touch pinch keeps plotly's native handling.
   Plotly.newPlot(el, [edgeTrace, nodeTrace], layout, {
-    displayModeBar: false, responsive: true, scrollZoom: true,
+    displayModeBar: false, responsive: true, scrollZoom: false,
   });
 
   // ---- selection: hover is passive (tooltip only); a click pins a name tag
@@ -287,9 +287,61 @@ export function mountMap3d(
   // the resume is scheduled from the window. Hovering pauses too, so a point
   // never drifts away while the reader aims at it.
   el.addEventListener("pointerdown", pause);
-  el.addEventListener("wheel", () => { pause(); scheduleResume(); }, { passive: true });
   window.addEventListener("pointerup", scheduleResume);
   window.addEventListener("pointercancel", scheduleResume);
+
+  // Custom wheel dolly: scale the eye→center distance exponentially with no
+  // hard floor in reach, so deep zooms keep responding instead of hitting
+  // plotly's internal distance clamp.
+  const DEFAULT_EYE = { x: 0.95, y: 0.95, z: 0.62 };
+  const CENTER = { x: 0, y: 0, z: -0.12 };
+  el.addEventListener(
+    "wheel",
+    (ev: WheelEvent) => {
+      ev.preventDefault();
+      pause();
+      const eye = lastEye ?? {
+        x: radius * Math.cos(angle),
+        y: radius * Math.sin(angle),
+        z: camZ,
+      };
+      const dx = eye.x - CENTER.x, dy = eye.y - CENTER.y, dz = eye.z - CENTER.z;
+      const dist = Math.hypot(dx, dy, dz) || 1e-6;
+      const next = Math.min(8, Math.max(0.02, dist * Math.exp(ev.deltaY * 0.0016)));
+      const s = next / dist;
+      const ne = { x: CENTER.x + dx * s, y: CENTER.y + dy * s, z: CENTER.z + dz * s };
+      lastEye = ne;
+      try {
+        Plotly.relayout(el, { "scene.camera.eye": ne });
+      } catch { /* mid-redraw; the next tick lands it */ }
+      scheduleResume();
+    },
+    { passive: false },
+  );
+
+  // Reset control (top right of the plot): camera, spin, and selection back to
+  // the defaults without reloading the page.
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.className = "map-reset";
+  resetBtn.textContent = "⟲ reset view";
+  resetBtn.setAttribute("aria-label", "reset the map view");
+  resetBtn.addEventListener("click", () => {
+    lastEye = undefined;
+    angle = Math.atan2(DEFAULT_EYE.x, DEFAULT_EYE.y);
+    radius = Math.hypot(DEFAULT_EYE.x, DEFAULT_EYE.y);
+    camZ = DEFAULT_EYE.z;
+    hoverCid = null;
+    Plotly.restyle(el, { x: [[]], y: [[]], z: [[]] }, [0]);
+    Plotly.relayout(el, {
+      "scene.camera.eye": { ...DEFAULT_EYE },
+      "scene.camera.center": { ...CENTER },
+      "scene.annotations": [],
+    });
+    spinning = true;
+  });
+  if (getComputedStyle(el).position === "static") el.style.position = "relative";
+  el.appendChild(resetBtn);
   el.on("plotly_hover", (ev: any) => {
     const cd = ev.points?.[0]?.customdata;
     hoverCid = Array.isArray(cd) ? cd[0] : (cd ?? null);
