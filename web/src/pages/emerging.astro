@@ -57,49 +57,45 @@ const kSigma = heating.length
     whose attention is still climbing. ordered by how fast they are rising.
   </p>
 
-  {emerging.length > 0 ? (
-    <>
-      <div class="toolbar reveal">
-        <input id="search" type="search" placeholder="filter by name or term…" />
-      </div>
+  <div class="toolbar reveal">
+    <input id="search" type="search" placeholder="filter by name or term…" />
+  </div>
 
-      <div class="grid reveal" id="gallery">
-        {emerging.map((e) => (
-          <div class="card-wrap" data-label={(displayName(e) + " " + e.label).toLowerCase()}
-            data-terms={e.top_terms.join(" ").toLowerCase()}>
-            <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
-          </div>
-        ))}
+  <div class="grid reveal" id="gallery">
+    {emerging.map((e) => (
+      <div class="card-wrap" data-label={(displayName(e) + " " + e.label).toLowerCase()}
+        data-terms={e.top_terms.join(" ").toLowerCase()}>
+        <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
       </div>
-      <p id="empty" class="muted hidden">no narratives match that filter.</p>
-      <nav id="pager" class="pager" aria-label="catalog pages"></nav>
-    </>
-  ) : (
-    <p class="muted reveal">
-      no new narratives have entered the record in the last four weeks — new
-      arrivals appear here as soon as the sources start writing about them.
+    ))}
+  </div>
+  <p id="empty" class={`muted${emerging.length ? " hidden" : ""}`}>
+    {emerging.length
+      ? "no narratives match that filter."
+      : "no new narratives have entered the record in the last four weeks — new arrivals appear here as soon as the sources start writing about them."}
+  </p>
+  <nav id="pager" class="pager" aria-label="catalog pages"></nav>
+
+  <section class="heating reveal">
+    <p class="eyebrow">a separate signal</p>
+    <h2>heating in the press</h2>
+    <p class="lede">
+      tracked narratives whose recent press attention sits more than {kSigma}σ
+      above their own yearly baseline (Media Cloud) — a press-led signal,
+      distinct from when the institutional sources first pick a story up.
     </p>
-  )}
-
-  {heating.length > 0 && (
-    <section class="heating reveal">
-      <p class="eyebrow">a separate signal</p>
-      <h2>heating in the press</h2>
-      <p class="lede">
-        tracked narratives whose recent press attention sits more than {kSigma}σ
-        above their own yearly baseline (Media Cloud) — a press-led signal,
-        distinct from when the institutional sources first pick a story up.
-      </p>
-      <div class="grid" id="heat-gallery">
-        {heating.map((e) => (
-          <div class="card-wrap">
-            <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
-          </div>
-        ))}
-      </div>
-      <nav id="heat-pager" class="pager" aria-label="press-heating pages"></nav>
-    </section>
-  )}
+    <div class="grid" id="heat-gallery">
+      {heating.map((e) => (
+        <div class="card-wrap">
+          <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
+        </div>
+      ))}
+    </div>
+    {heating.length === 0 && (
+      <p class="muted">no narrative is running hot in the press right now.</p>
+    )}
+    <nav id="heat-pager" class="pager" aria-label="press-heating pages"></nav>
+  </section>
 
   <script>
     import { setupCatalog } from "@lib/catalog";

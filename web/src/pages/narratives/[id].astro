@@ -128,17 +128,6 @@ const direction = (d: any) =>
           <tr><td>recent log-slope</td><td>{sd.trend_slope != null ? `${fmt(sd.trend_slope, 3)} / day` : "—"}</td></tr>
           <tr><td>vs own peak</td><td>{sd.recent_peak_ratio == null ? "—" : `${Math.round(sd.recent_peak_ratio * 100)}% of peak level${n.stage === "dormant" ? " — faded" : ""}`}</td></tr>
         </table>
-        <p class="caption">
-          {num(sirP.doubling_time_up) && num(sirP.half_life_down) ? (
-            sirGoodFit ? (
-              <>as an epidemic wave: attention doubled every {num(sirP.doubling_time_up, 1)} days on the rise and halved every {num(sirP.half_life_down, 1)} days on the fall (asymmetry {num(sirP.asymmetry, 1)}×) — the shape of its spread; the stage above is read from the recent trend.</>
-            ) : (
-              <>this narrative doesn't trace a single rise-and-fall wave (SIR R² {num(sirP.r2)}), so no spread rates are reported; the stage is read from the recent trend above.</>
-            )
-          ) : (
-            <>the stage is read from the recent trend above.</>
-          )}
-        </p>
       </div>
       <div>
         <p class="eyebrow">shape facts</p>
@@ -150,6 +139,17 @@ const direction = (d: any) =>
         </table>
       </div>
     </div>
+    <p class="caption sir-note">
+      {num(sirP.doubling_time_up) && num(sirP.half_life_down) ? (
+        sirGoodFit ? (
+          <>as an epidemic wave: attention doubled every {num(sirP.doubling_time_up, 1)} days on the rise and halved every {num(sirP.half_life_down, 1)} days on the fall (asymmetry {num(sirP.asymmetry, 1)}×) — the shape of its spread; the stage above is read from the recent trend.</>
+        ) : (
+          <>this narrative doesn't trace a single rise-and-fall wave (SIR R² {num(sirP.r2)}), so no spread rates are reported; the stage is read from the recent trend above.</>
+        )
+      ) : (
+        <>the stage is read from the recent trend above.</>
+      )}
+    </p>
   </section>
 
   {(n.markets || n.mediacloud) && (
@@ -208,8 +208,7 @@ const direction = (d: any) =>
             {p.items.map((a) => (
               <li>
                 <a href={a.url} target="_blank" rel="noopener">{a.title}</a>
-                <div class="meta">{a.source_id} · {a.published_at}</div>
-                {a.excerpt && <p class="excerpt">{a.excerpt}</p>}
+                <span class="meta">{a.source_id} · {a.published_at?.slice(0, 10)}</span>
               </li>
             ))}
           </ul>
@@ -492,11 +491,8 @@ const direction = (d: any) =>
 </Base>
 
 <style>
-  /* the index/emerging/guide page titles use the larger homepage --fs-title,
-     but a single narrative's name is a label, not a page banner — keep it at
-     the pre-change h1 size so it doesn't dwarf the meta line beneath it. */
-  h1 { font-size: clamp(2rem, 4vw, 3.1rem); }
   .heat-note { margin-top: 0.6rem; }
+  .sir-note { margin-top: 1.2rem; }
   .heat-note .heat {
     font-size: 0.72rem; padding: 0.1rem 0.45rem; border-radius: 999px;
     border: 1px solid color-mix(in srgb, #c2410c 45%, var(--paper));
@@ -547,24 +543,25 @@ const direction = (d: any) =>
   .chart :global(.drag) { cursor: default !important; }
   .chart.dragging :global(.nsewdrag),
   .chart.dragging :global(.drag) { cursor: grabbing !important; }
-  .rep-panels {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-    gap: 1.5rem 2.5rem;
-  }
+  /* three stacked lists (core / earliest / most recent), each row a single
+     title + source line — a scannable reading list, not an excerpt wall. */
+  .rep-panels { display: flex; flex-direction: column; gap: 1.6rem; }
   .rep-panel-title {
     font-size: var(--fs-meta);
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--muted);
-    margin: 0 0 0.35rem;
+    margin: 0 0 0.2rem;
     padding-bottom: 0.35rem;
     border-bottom: 1px solid var(--line-soft);
   }
   .reps { list-style: none; margin: 0; padding: 0; }
-  .reps li { padding: 0.9rem 0; border-bottom: 1px solid var(--line-soft); }
+  .reps li {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 0.6rem 1.6rem; flex-wrap: wrap;
+    padding: 0.6rem 0; border-bottom: 1px solid var(--line-soft);
+  }
   .reps a { font-weight: 600; }
-  .reps .meta { color: var(--muted); font-size: var(--fs-meta); margin-top: 0.15rem; }
-  .reps .excerpt { color: var(--muted); font-size: var(--fs-ui); margin: 0.35rem 0 0; max-width: none; }
+  .reps .meta { color: var(--muted); font-size: var(--fs-meta); white-space: nowrap; }
   .related dd { line-height: 1.7; }
 </style>
