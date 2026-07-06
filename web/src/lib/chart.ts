@@ -236,16 +236,23 @@ export function mountMap3d(
   // flag, so the loop can neither die nor double up. Interacting (drag, wheel,
   // hover) pauses it; it resumes a few seconds after the last interaction from
   // wherever the camera was left, preserving the user's zoom and tilt.
-  let angle = Math.atan2(0.95, 0.95);
-  let radius = Math.hypot(0.95, 0.95);
-  let camZ = 0.62;
+  const DEFAULT_EYE = { x: 0.95, y: 0.95, z: 0.62 };
+  const DEFAULT_CENTER = { x: 0, y: 0, z: -0.12 };
+  // the orbit + zoom share one camera state: the point the camera looks at
+  // (which zoom-to-cursor moves) and the eye's polar offset around it.
+  let orbitCenter = { ...DEFAULT_CENTER };
+  let angle = Math.atan2(DEFAULT_EYE.y - DEFAULT_CENTER.y, DEFAULT_EYE.x - DEFAULT_CENTER.x);
+  let radius = Math.hypot(DEFAULT_EYE.x - DEFAULT_CENTER.x, DEFAULT_EYE.y - DEFAULT_CENTER.y);
+  let relZ = DEFAULT_EYE.z - DEFAULT_CENTER.z;
   let spinning = true;
   let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 
   let lastEye: { x: number; y: number; z: number } | undefined;
   el.on("plotly_relayout", (ev: any) => {
-    const eye = ev?.["scene.camera"]?.eye ?? ev?.["scene.camera.eye"];
+    const cam = ev?.["scene.camera"];
+    const eye = cam?.eye ?? ev?.["scene.camera.eye"];
     if (eye) lastEye = eye;
+    if (cam?.center) orbitCenter = { ...cam.center };
   });
 
   const loop = () => {
@@ -254,9 +261,9 @@ export function mountMap3d(
       try {
         Plotly.relayout(el, {
           "scene.camera.eye": {
-            x: radius * Math.cos(angle),
-            y: radius * Math.sin(angle),
-            z: camZ,
+            x: orbitCenter.x + radius * Math.cos(angle),
+            y: orbitCenter.y + radius * Math.sin(angle),
+            z: orbitCenter.z + relZ,
           },
         });
       } catch {
@@ -272,9 +279,9 @@ export function mountMap3d(
   };
   const resume = () => {
     if (lastEye) {
-      radius = Math.hypot(lastEye.x, lastEye.y);
-      angle = Math.atan2(lastEye.y, lastEye.x);
-      camZ = lastEye.z;
+      radius = Math.hypot(lastEye.x - orbitCenter.x, lastEye.y - orbitCenter.y);
+      angle = Math.atan2(lastEye.y - orbitCenter.y, lastEye.x - orbitCenter.x);
+      relZ = lastEye.z - orbitCenter.z;
     }
     spinning = true;
   };
@@ -290,30 +297,52 @@ export function mountMap3d(
   window.addEventListener("pointerup", scheduleResume);
   window.addEventListener("pointercancel", scheduleResume);
 
-  // Custom wheel dolly: scale the eye→center distance exponentially with no
-  // hard floor in reach, so deep zooms keep responding instead of hitting
-  // plotly's internal distance clamp.
-  const DEFAULT_EYE = { x: 0.95, y: 0.95, z: 0.62 };
-  const CENTER = { x: 0, y: 0, z: -0.12 };
+  // Wheel zoom dollies toward the cursor, not the scene center: the mouse
+  // position is unprojected onto the plane through the look-at point, and both
+  // eye and center scale about that spot, so what's under the cursor stays
+  // under the cursor. Zoom-out is capped; zoom-in is not.
   el.addEventListener(
     "wheel",
     (ev: WheelEvent) => {
       ev.preventDefault();
       pause();
+      const C = orbitCenter;
       const eye = lastEye ?? {
-        x: radius * Math.cos(angle),
-        y: radius * Math.sin(angle),
-        z: camZ,
+        x: C.x + radius * Math.cos(angle),
+        y: C.y + radius * Math.sin(angle),
+        z: C.z + relZ,
       };
-      const dx = eye.x - CENTER.x, dy = eye.y - CENTER.y, dz = eye.z - CENTER.z;
-      const dist = Math.hypot(dx, dy, dz) || 1e-6;
-      // zoom-out is capped so the map can't shrink to a speck; zoom-in is not.
+      const vx = C.x - eye.x, vy = C.y - eye.y, vz = C.z - eye.z;
+      const dist = Math.hypot(vx, vy, vz) || 1e-6;
+      const dx = vx / dist, dy = vy / dist, dz = vz / dist;
+
+      // camera basis (plotly gl3d is z-up); guard the straight-down case
+      let rx = dy * 1 - dz * 0, ry = dz * 0 - dx * 1, rz = dx * 0 - dy * 0;
+      const rlen = Math.hypot(rx, ry, rz);
+      if (rlen < 1e-6) { rx = 1; ry = 0; rz = 0; } else { rx /= rlen; ry /= rlen; rz /= rlen; }
+      const ux = ry * dz - rz * dy, uy = rz * dx - rx * dz, uz = rx * dy - ry * dx;
+
+      // cursor ray hits the center plane at T (gl3d vertical fov ~45deg)
+      const rect = el.getBoundingClientRect();
+      const nx = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      const ny = 1 - ((ev.clientY - rect.top) / rect.height) * 2;
+      const tanV = 0.414;
+      const tanH = tanV * (rect.width / Math.max(1, rect.height));
+      const ox = nx * tanH * dist, oy = ny * tanV * dist;
+      const T = {
+        x: C.x + rx * ox + ux * oy,
+        y: C.y + ry * ox + uy * oy,
+        z: C.z + rz * ox + uz * oy,
+      };
+
       const next = Math.min(4, dist * Math.exp(ev.deltaY * 0.0016));
       const s = next / dist;
-      const ne = { x: CENTER.x + dx * s, y: CENTER.y + dy * s, z: CENTER.z + dz * s };
+      const ne = { x: T.x + (eye.x - T.x) * s, y: T.y + (eye.y - T.y) * s, z: T.z + (eye.z - T.z) * s };
+      const nc = { x: T.x + (C.x - T.x) * s, y: T.y + (C.y - T.y) * s, z: T.z + (C.z - T.z) * s };
       lastEye = ne;
+      orbitCenter = nc;
       try {
-        Plotly.relayout(el, { "scene.camera.eye": ne });
+        Plotly.relayout(el, { "scene.camera.eye": ne, "scene.camera.center": nc });
       } catch { /* mid-redraw; the next tick lands it */ }
       scheduleResume();
     },
@@ -329,14 +358,15 @@ export function mountMap3d(
   resetBtn.setAttribute("aria-label", "reset the map view");
   resetBtn.addEventListener("click", () => {
     lastEye = undefined;
-    angle = Math.atan2(DEFAULT_EYE.x, DEFAULT_EYE.y);
-    radius = Math.hypot(DEFAULT_EYE.x, DEFAULT_EYE.y);
-    camZ = DEFAULT_EYE.z;
+    orbitCenter = { ...DEFAULT_CENTER };
+    angle = Math.atan2(DEFAULT_EYE.y - DEFAULT_CENTER.y, DEFAULT_EYE.x - DEFAULT_CENTER.x);
+    radius = Math.hypot(DEFAULT_EYE.x - DEFAULT_CENTER.x, DEFAULT_EYE.y - DEFAULT_CENTER.y);
+    relZ = DEFAULT_EYE.z - DEFAULT_CENTER.z;
     hoverCid = null;
     Plotly.restyle(el, { x: [[]], y: [[]], z: [[]] }, [0]);
     Plotly.relayout(el, {
       "scene.camera.eye": { ...DEFAULT_EYE },
-      "scene.camera.center": { ...CENTER },
+      "scene.camera.center": { ...DEFAULT_CENTER },
       "scene.annotations": [],
     });
     spinning = true;

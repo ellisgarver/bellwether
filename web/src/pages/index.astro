@@ -15,12 +15,13 @@ const fmt = (n: number) => n.toLocaleString("en-US");
        filling the rest of the first viewport. -->
   <section class="hero">
     <div class="hero-top">
-      <p class="eyebrow reveal">macro narrative dynamics</p>
+      <p class="eyebrow reveal">macro narratives, measured</p>
       <h1 class="hero-title reveal">how macro narratives rise and fade.</h1>
       <p class="hero-thesis reveal">
-        fifteen years of institutional writing — the Fed, IMF, BIS, NBER and
-        their peers — clustered into narratives and mapped: every point below
-        is one story, placed among its nearest neighbors.
+        fifteen years of institutional writing from the Fed, IMF, BIS, NBER and
+        their peers, clustered into narratives and mapped. every point below is
+        one of the {index.n_narratives} charted narratives, placed among its
+        nearest neighbors.
       </p>
     </div>
 
@@ -29,11 +30,11 @@ const fmt = (n: number) => n.toLocaleString("en-US");
         <div id="map" class="map3d reveal" data-base={base}></div>
         <script id="map-data" type="application/json" set:html={JSON.stringify(entries)}></script>
         <p class="map-key reveal">
-          color is the life-cycle stage —
-          <span style="color:var(--growth)">growing</span>,
+          color is the life-cycle stage
+          (<span style="color:var(--growth)">growing</span>,
           <span style="color:var(--stable)">stable</span>,
           <span style="color:var(--decay)">fading</span>,
-          <span style="color:var(--dormant)">dormant</span> —
+          <span style="color:var(--dormant)">dormant</span>);
           size is the volume written.
           <span class="map-hint">drag orbits · scroll zooms · click selects a narrative</span>
         </p>
