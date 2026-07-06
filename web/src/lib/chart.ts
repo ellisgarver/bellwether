@@ -337,8 +337,25 @@ export function mountMap3d(
 
       const next = Math.min(4, dist * Math.exp(ev.deltaY * 0.0016));
       const s = next / dist;
-      const ne = { x: T.x + (eye.x - T.x) * s, y: T.y + (eye.y - T.y) * s, z: T.z + (eye.z - T.z) * s };
-      const nc = { x: T.x + (C.x - T.x) * s, y: T.y + (C.y - T.y) * s, z: T.z + (C.z - T.z) * s };
+      let ne = { x: T.x + (eye.x - T.x) * s, y: T.y + (eye.y - T.y) * s, z: T.z + (eye.z - T.z) * s };
+      let nc = { x: T.x + (C.x - T.x) * s, y: T.y + (C.y - T.y) * s, z: T.z + (C.z - T.z) * s };
+
+      // A proportional dolly stalls once the camera is close: each tick moves a
+      // fraction of an already-tiny distance. Below a floor of absolute travel,
+      // switch to flight — translate eye and center together along the cursor
+      // ray at a constant pace, so the camera moves through the cloud instead
+      // of creeping toward a point it never reaches.
+      const MIN_STEP = 0.05;
+      const travel = Math.hypot(ne.x - eye.x, ne.y - eye.y, ne.z - eye.z);
+      const zoomingIn = ev.deltaY < 0;
+      if (travel < MIN_STEP && (zoomingIn || dist < 0.5)) {
+        let fx = T.x - eye.x, fy = T.y - eye.y, fz = T.z - eye.z;
+        const flen = Math.hypot(fx, fy, fz) || 1e-6;
+        const step = (zoomingIn ? MIN_STEP : -MIN_STEP);
+        fx = (fx / flen) * step; fy = (fy / flen) * step; fz = (fz / flen) * step;
+        ne = { x: eye.x + fx, y: eye.y + fy, z: eye.z + fz };
+        nc = { x: C.x + fx, y: C.y + fy, z: C.z + fz };
+      }
       lastEye = ne;
       orbitCenter = nc;
       try {
