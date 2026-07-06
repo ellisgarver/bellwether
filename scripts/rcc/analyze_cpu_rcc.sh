@@ -19,7 +19,10 @@
 #   Partition: caslake (CPU)
 #   CPUs:      8
 #   RAM:       64 GB   (headroom for a first-time JEL prototype embed on CPU)
-#   Time:      4 h    (a warm-cache re-bake is minutes; cold fits well under this)
+#   Time:      12 h   (a warm-cache re-bake is minutes; the cold-rebuild pole is
+#              the full Media Cloud fetch — one query per cluster over the whole
+#              span — which the delta cache then makes incremental forever after.
+#              A timeout is benign: every stage checkpoints, resubmit resumes.)
 #
 # Chain manually, or submit standalone after cluster has produced clusters.parquet
 # + embeddings.npy:
@@ -30,7 +33,7 @@
 #SBATCH --partition=caslake
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=04:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=logs/analyze_cpu_rcc_%j.log
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ehgarver@uchicago.edu
