@@ -2,27 +2,24 @@
 # SLURM job script: downstream analysis -> dashboard artifacts on RCC (Midway3),
 # CPU-only variant of analyze_rcc.sh.
 #
-# Why a CPU variant: the analyze step's only GPU use is embedding the ~20 JEL
-# prototype descriptions + per-cluster representation strings (a few hundred short
-# texts) for nearest-prototype scope assignment. The dominant cost -- PyMC NUTS
-# sampling for every in-scope cluster -- runs on CPU regardless. Loading
-# Qwen3-Embedding-8B on CPU for a few hundred short encodes is bounded (~tens of
-# minutes), so the whole step runs on the caslake CPU partition and skips the
-# a100 queue entirely (which has repeatedly cost 24h+ of wait). R0/curve outputs
-# are identical to the GPU path -- only the JEL embed device differs.
+# Why a CPU variant: the analyze step needs no GPU at all since ADR-067 — the
+# lens fits are deterministic least squares, JEL scope is a cosine over existing
+# cluster centroids (the 8B embedder loads only if the fixed JEL prototype
+# vectors aren't cached yet), and every stage is cache-incremental (ADR-065).
+# Running on the caslake CPU partition skips the a100 queue entirely (which has
+# repeatedly cost 24h+ of wait); outputs are identical to the GPU path.
 #
-# Use this for re-analyses that change the analysis layer (staging, priors,
-# naming) but not the embeddings/clustering. For a run that must re-fit dynamics
-# (e.g. a prior change), the fit cache under data/processed/dashboard/.fit_cache
-# is invalidated automatically when config.dynamics changes; delete it to force a
-# clean re-fit.
+# Use this for re-analyses that change the analysis layer (staging, lens config,
+# naming) but not the embeddings/clustering. The per-lens fit cache under
+# data/processed/dashboard/.fit_cache is invalidated automatically when the
+# relevant config changes; delete it to force a clean re-fit.
 #
 # Resource spec:
 #   Account:   pi-dachxiu
 #   Partition: caslake (CPU)
-#   CPUs:      8   (PyMC chains)
-#   RAM:       64 GB   (8B model on CPU in fp16 ~16 GB + headroom)
-#   Time:      18 h   (full dynamics re-fit is the pole; JEL embed is minutes)
+#   CPUs:      8
+#   RAM:       64 GB   (headroom for a first-time JEL prototype embed on CPU)
+#   Time:      4 h    (a warm-cache re-bake is minutes; cold fits well under this)
 #
 # Chain manually, or submit standalone after cluster has produced clusters.parquet
 # + embeddings.npy:
@@ -33,7 +30,7 @@
 #SBATCH --partition=caslake
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=18:00:00
+#SBATCH --time=04:00:00
 #SBATCH --output=logs/analyze_cpu_rcc_%j.log
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ehgarver@uchicago.edu
@@ -60,7 +57,7 @@ export MND_EMBEDDING_DEVICE=cpu
 # Keep the ~16 GB Qwen3-8B HF cache on scratch, not the 30 GB home quota.
 export HF_HOME="/scratch/midway3/ehgarver/huggingface"
 export HF_HUB_OFFLINE=0
-# Keep BLAS from oversubscribing across the PyMC chain processes.
+# Keep BLAS threads bounded; the analysis is I/O- and single-core-bound.
 export OMP_NUM_THREADS=2
 export MKL_NUM_THREADS=2
 

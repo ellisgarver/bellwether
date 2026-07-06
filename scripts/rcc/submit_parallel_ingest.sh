@@ -167,7 +167,7 @@ fi
 CLUSTER=$(sbatch --parsable --dependency=afterok:$EMBED_PRIMARY scripts/rcc/cluster_rcc.sh)
 echo "   cluster:          $CLUSTER"
 
-ANALYZE=$(sbatch --parsable --dependency=afterok:$CLUSTER scripts/rcc/analyze_rcc.sh)
+ANALYZE=$(sbatch --parsable --dependency=afterok:$CLUSTER scripts/rcc/analyze_cpu_rcc.sh)
 echo "   analyze:          $ANALYZE"
 
 cat <<EOF
