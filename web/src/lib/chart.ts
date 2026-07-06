@@ -137,13 +137,13 @@ export function mountMap3d(
     hovertemplate:
       "%{text}<br>%{customdata[1]} articles · %{customdata[2]}<extra></extra>",
     marker: {
-      size: pts.map((p) => 4 + Math.sqrt(p.n_articles) * 0.55),
+      size: pts.map((p) => 4.5 + Math.sqrt(p.n_articles) * 0.62),
       color: pts.map((p) => STAGE_COLOR[p.stage] ?? COL.dormant),
       symbol: pts.map((p) => JEL_SYMBOL[p.jel_code] ?? "circle"),
-      opacity: 0.95,
+      opacity: 1,
       line: {
-        width: pts.map((p) => (p.is_emerging ? 2.5 : 0.5)),
-        color: pts.map((p) => (p.is_emerging ? COL.ember : "rgba(255,255,255,0.85)")),
+        width: pts.map((p) => (p.is_emerging ? 2.5 : 1)),
+        color: pts.map((p) => (p.is_emerging ? COL.ember : "rgba(255,255,255,0.9)")),
       },
     },
     showlegend: false,
@@ -162,12 +162,16 @@ export function mountMap3d(
     spikethickness: 1,
   };
 
+  // UMAP axes are unitless, so the display aspect is a presentation choice: a
+  // landscape ratio spreads the cloud across the wide canvas instead of boxing
+  // it into a cube, and the camera sits closer and lower for presence.
   const layout = baseLayout({
     margin: { l: 0, r: 0, t: 0, b: 0 },
     scene: {
       xaxis: axis, yaxis: axis, zaxis: axis,
-      aspectmode: "cube",
-      camera: { eye: { x: 0.95, y: 0.95, z: 0.62 }, center: { x: 0, y: 0, z: -0.12 } },
+      aspectmode: "manual",
+      aspectratio: { x: 1.5, y: 1.5, z: 0.85 },
+      camera: { eye: { x: 0.85, y: 0.85, z: 0.5 }, center: { x: 0, y: 0, z: -0.12 } },
     },
   });
 
@@ -236,7 +240,7 @@ export function mountMap3d(
   // flag, so the loop can neither die nor double up. Interacting (drag, wheel,
   // hover) pauses it; it resumes a few seconds after the last interaction from
   // wherever the camera was left, preserving the user's zoom and tilt.
-  const DEFAULT_EYE = { x: 0.95, y: 0.95, z: 0.62 };
+  const DEFAULT_EYE = { x: 0.85, y: 0.85, z: 0.5 };
   const DEFAULT_CENTER = { x: 0, y: 0, z: -0.12 };
   // the orbit + zoom share one camera state: the point the camera looks at
   // (which zoom-to-cursor moves) and the eye's polar offset around it.
