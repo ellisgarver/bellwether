@@ -203,6 +203,18 @@ a.card:hover { background: var(--paper-2); padding-left: 0.9rem; padding-right: 
 /* ---- charts ---- */
 .chart { width: 100%; min-height: 380px; }
 
+/* reset control overlaid on the 3-D map (injected by chart.ts) */
+.map-reset {
+  position: absolute; top: 0.4rem; right: 0.2rem; z-index: 10;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  color: var(--muted); font: inherit; font-size: var(--fs-meta);
+  padding: 0.25rem 0.75rem; cursor: pointer;
+  transition: color 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+.map-reset:hover { color: var(--ink); border-color: var(--accent); }
+.map-reset:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* ---- key/value + facts (flat tables, hairline rules) ---- */
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 0.45rem 1.4rem; font-size: var(--fs-ui); margin: 0; }
 .kv dt { color: var(--muted); }
