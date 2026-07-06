@@ -4,6 +4,7 @@ import NarrativeCard from "@components/NarrativeCard.astro";
 import { loadIndex, loadNarrative, displayName } from "@lib/data";
 
 const index = loadIndex();
+const hasInScope = index.narratives.some((e) => e.in_scope);
 
 function spark(values: number[], n = 44): number[] {
   if (values.length <= n) return values;
@@ -53,74 +54,109 @@ const kSigma = heating.length
   <p class="eyebrow reveal">the frontier</p>
   <h1 class="reveal">emerging narratives</h1>
   <p class="lede reveal">
-    narratives that first appeared within four weeks of the corpus frontier and
-    whose attention is still climbing. ordered by how fast they are rising.
+    narratives that first appeared within four weeks of the corpus frontier,
+    ordered by how fast they are rising.
   </p>
 
   <div class="toolbar reveal">
-    <input id="search" type="search" placeholder="filter by name or term…" />
+    <input id="e-search" type="search" placeholder="filter by name or term…" />
+    <label class="toggle"><input type="checkbox" id="e-growth" checked /> growth</label>
+    <label class="toggle"><input type="checkbox" id="e-stable" checked /> stable</label>
+    <label class="toggle"><input type="checkbox" id="e-decay" checked /> decay</label>
+    <label class="toggle"><input type="checkbox" id="e-dormant" checked /> dormant</label>
+    {hasInScope && (
+      <label class="toggle scope"><input type="checkbox" id="e-scope" checked /> macro scope only</label>
+    )}
   </div>
 
-  <div class="grid reveal" id="gallery">
+  <div class="grid reveal" id="e-gallery">
     {emerging.map((e) => (
       <div class="card-wrap" data-label={(displayName(e) + " " + e.label).toLowerCase()}
-        data-terms={e.top_terms.join(" ").toLowerCase()}>
+        data-terms={e.top_terms.join(" ").toLowerCase()}
+        data-stage={e.stage}
+        data-scope={e.in_scope ? "in" : "out"}>
         <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
       </div>
     ))}
   </div>
-  <p id="empty" class={`muted${emerging.length ? " hidden" : ""}`}>
-    {emerging.length
-      ? "no narratives match that filter."
-      : "no new narratives have entered the record in the last four weeks — new arrivals appear here as soon as the sources start writing about them."}
+  <p id="e-empty" class={`muted${emerging.length ? " hidden" : ""}`}>
+    {emerging.length ? "no narratives match that filter." : "none in the current window."}
   </p>
-  <nav id="pager" class="pager" aria-label="catalog pages"></nav>
+  <nav id="e-pager" class="pager" aria-label="emerging pages"></nav>
 
   <section class="heating reveal">
     <p class="eyebrow">a separate signal</p>
     <h2>heating in the press</h2>
     <p class="lede">
       tracked narratives whose recent press attention sits more than {kSigma}σ
-      above their own yearly baseline (Media Cloud) — a press-led signal,
-      distinct from when the institutional sources first pick a story up.
+      above their own yearly baseline (Media Cloud). this signal is press-led,
+      separate from when the institutional sources first pick a story up.
     </p>
-    <div class="grid" id="heat-gallery">
+
+    <div class="toolbar">
+      <input id="h-search" type="search" placeholder="filter by name or term…" />
+      <label class="toggle"><input type="checkbox" id="h-growth" checked /> growth</label>
+      <label class="toggle"><input type="checkbox" id="h-stable" checked /> stable</label>
+      <label class="toggle"><input type="checkbox" id="h-decay" checked /> decay</label>
+      <label class="toggle"><input type="checkbox" id="h-dormant" checked /> dormant</label>
+      {hasInScope && (
+        <label class="toggle scope"><input type="checkbox" id="h-scope" checked /> macro scope only</label>
+      )}
+    </div>
+
+    <div class="grid" id="h-gallery">
       {heating.map((e) => (
-        <div class="card-wrap">
+        <div class="card-wrap" data-label={(displayName(e) + " " + e.label).toLowerCase()}
+          data-terms={e.top_terms.join(" ").toLowerCase()}
+          data-stage={e.stage}
+          data-scope={e.in_scope ? "in" : "out"}>
           <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
         </div>
       ))}
     </div>
-    {heating.length === 0 && (
-      <p class="muted">no narrative is running hot in the press right now.</p>
-    )}
-    <nav id="heat-pager" class="pager" aria-label="press-heating pages"></nav>
+    <p id="h-empty" class={`muted${heating.length ? " hidden" : ""}`}>
+      {heating.length ? "no narratives match that filter." : "none right now."}
+    </p>
+    <nav id="h-pager" class="pager" aria-label="press-heating pages"></nav>
   </section>
 
   <script>
     import { setupCatalog } from "@lib/catalog";
-    const search = document.getElementById("search");
-    if (search) {
+
+    // Both sections carry the same filter bar as the narratives catalog; wire
+    // each to its own controls by id prefix.
+    function wire(prefix) {
+      const $ = (id) => document.getElementById(`${prefix}-${id}`);
+      const search = $("search");
+      const gallery = $("gallery");
+      if (!search || !gallery) return;
+      const flags = {
+        growth: $("growth"),
+        stable: $("stable"),
+        decay: $("decay"),
+        dormant: $("dormant"),
+      };
+      const scope = $("scope");
       const catalog = setupCatalog({
-        cards: [...document.querySelectorAll("#gallery .card-wrap")],
-        empty: document.getElementById("empty"),
-        pager: document.getElementById("pager"),
-        scrollTo: document.getElementById("gallery"),
+        cards: [...gallery.querySelectorAll(".card-wrap")],
+        empty: $("empty"),
+        pager: $("pager"),
+        scrollTo: gallery,
         matches(c) {
           const q = (search.value || "").trim().toLowerCase();
-          return !q || c.dataset.label.includes(q) || c.dataset.terms.includes(q);
+          const anyChecked = Object.values(flags).some((f) => f?.checked);
+          const okText = !q || c.dataset.label.includes(q) || c.dataset.terms.includes(q);
+          const okCat = !anyChecked || flags[c.dataset.stage]?.checked;
+          const okScope = !scope?.checked || c.dataset.scope === "in";
+          return okText && okCat && okScope;
         },
       });
-      search.addEventListener("input", () => catalog.refresh());
+      [search, ...Object.values(flags), scope].forEach((el) =>
+        el?.addEventListener("input", () => catalog.refresh()),
+      );
     }
-    const heatGallery = document.getElementById("heat-gallery");
-    if (heatGallery) {
-      setupCatalog({
-        cards: [...heatGallery.querySelectorAll(".card-wrap")],
-        pager: document.getElementById("heat-pager"),
-        scrollTo: heatGallery,
-      });
-    }
+    wire("e");
+    wire("h");
   </script>
 </Base>
 
@@ -142,5 +178,5 @@ const kSigma = heating.length
     margin-top: 3.5rem; padding-top: 2rem; border-top: 1px solid var(--line);
   }
   .heating h2 { margin: 0.2rem 0 0.4rem; }
-  .heating .lede { margin-bottom: 1.4rem; }
+  .heating .lede { margin-bottom: 0.2rem; }
 </style>

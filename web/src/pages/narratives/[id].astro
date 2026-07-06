@@ -140,12 +140,8 @@ const direction = (d: any) =>
       </div>
     </div>
     <p class="caption sir-note">
-      {num(sirP.doubling_time_up) && num(sirP.half_life_down) ? (
-        sirGoodFit ? (
-          <>as an epidemic wave: attention doubled every {num(sirP.doubling_time_up, 1)} days on the rise and halved every {num(sirP.half_life_down, 1)} days on the fall (asymmetry {num(sirP.asymmetry, 1)}×) — the shape of its spread; the stage above is read from the recent trend.</>
-        ) : (
-          <>this narrative doesn't trace a single rise-and-fall wave (SIR R² {num(sirP.r2)}), so no spread rates are reported; the stage is read from the recent trend above.</>
-        )
+      {sirGoodFit && num(sirP.doubling_time_up) && num(sirP.half_life_down) ? (
+        <>as an epidemic wave, attention doubled every {num(sirP.doubling_time_up, 1)} days on the rise and halved every {num(sirP.half_life_down, 1)} days on the fall (asymmetry {num(sirP.asymmetry, 1)}×). the stage above is read from the recent trend.</>
       ) : (
         <>the stage is read from the recent trend above.</>
       )}

@@ -178,28 +178,13 @@ export function mountMap3d(
     displayModeBar: false, responsive: true, scrollZoom: true,
   });
 
-  // Navigate only on a deliberate click: gl3d fires plotly_click on any mouseup
-  // over a point, including the release of an orbit drag — gate on the pointer
-  // having barely moved between down and up so a drag never opens a narrative.
-  let downX = 0, downY = 0;
-  el.addEventListener("pointerdown", (ev) => { downX = ev.clientX; downY = ev.clientY; }, true);
-  let upX = 0, upY = 0;
-  el.addEventListener("pointerup", (ev) => { upX = ev.clientX; upY = ev.clientY; }, true);
-  el.on("plotly_click", (ev: any) => {
-    if (Math.hypot(upX - downX, upY - downY) > 6) return;
-    const cd = ev.points?.[0]?.customdata;
-    const cid = Array.isArray(cd) ? cd[0] : cd;
-    if (cid !== undefined) window.location.href = `${base}/narratives/${cid}`;
-  });
+  // ---- selection: hover is passive (tooltip only); a click pins a name tag
+  // to the cluster and lights its edges. The tag's link opens the narrative.
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-  // Light up the hovered node's incident edges; clear on unhover. Edge trace is
-  // index 0 in the newPlot call below, so restyle targets [0].
-  el.on("plotly_hover", (ev: any) => {
-    const cd = ev.points?.[0]?.customdata;
-    const cid = Array.isArray(cd) ? cd[0] : cd;
-    const src = cid === undefined ? undefined : byId[cid];
-    if (!src) return;
-    const a = xyz(src);
+  const edgesFor = (cid: number) => {
+    const a = xyz(byId[cid]);
     const hx: (number | null)[] = [];
     const hy: (number | null)[] = [];
     const hz: (number | null)[] = [];
@@ -209,71 +194,112 @@ export function mountMap3d(
       hy.push(a[1], b[1], null);
       hz.push(a[2], b[2], null);
     }
-    Plotly.restyle(el, { x: [hx], y: [hy], z: [hz] }, [0]);
-  });
+    return { x: [hx], y: [hy], z: [hz] };
+  };
 
-  el.on("plotly_unhover", () => {
-    Plotly.restyle(el, { x: [[]], y: [[]], z: [[]] }, [0]);
-  });
+  const tagFor = (cid: number) => {
+    const p = byId[cid];
+    const [x, y, z] = xyz(p);
+    return {
+      x, y, z,
+      text: `<a href="${base}/narratives/${cid}">${esc(p.label_human || p.label)} ↗</a>`,
+      bgcolor: COL.paper2,
+      bordercolor: COL.line,
+      borderwidth: 1,
+      borderpad: 6,
+      font: { family: FONT, size: 13, color: COL.accent },
+      arrowcolor: COL.muted,
+      arrowwidth: 1.2,
+      arrowhead: 6,
+      ax: 0,
+      ay: -44,
+      captureevents: false, // clicks reach the anchor inside the tag
+    };
+  };
 
-  // gentle auto-orbit. Any interaction (drag/scroll/touch) pauses it; it resumes
-  // ~10s after the last interaction, picking up from wherever the user left the
-  // camera — so their zoom (radius) and tilt (eye.z) are preserved, only motion
-  // is restored.
+  // Selection keys off the hover pick (gl3d's one reliable picking signal): a
+  // pointerup with minimal travel selects whatever point is under the cursor.
+  // Travel gating means an orbit-drag release never selects.
+  let hoverCid: number | null = null;
+  const select = (cid: number) => {
+    Plotly.restyle(el, edgesFor(cid), [0]);
+    Plotly.relayout(el, { "scene.annotations": [tagFor(cid)] });
+  };
+  let downX = 0, downY = 0;
+  el.addEventListener("pointerdown", (ev) => { downX = ev.clientX; downY = ev.clientY; }, true);
+  el.addEventListener("pointerup", (ev) => {
+    if (Math.hypot(ev.clientX - downX, ev.clientY - downY) > 6) return;
+    if (hoverCid !== null && byId[hoverCid]) select(hoverCid);
+  }, true);
+
+  // ---- gentle auto-orbit: one persistent animation loop; `spinning` is only a
+  // flag, so the loop can neither die nor double up. Interacting (drag, wheel,
+  // hover) pauses it; it resumes a few seconds after the last interaction from
+  // wherever the camera was left, preserving the user's zoom and tilt.
   let angle = Math.atan2(0.95, 0.95);
   let radius = Math.hypot(0.95, 0.95);
-  let z = 0.62;
+  let camZ = 0.62;
   let spinning = true;
   let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const tick = () => {
-    if (!spinning) return;
-    angle += 0.0016;
-    Plotly.relayout(el, {
-      "scene.camera.eye": {
-        x: radius * Math.cos(angle),
-        y: radius * Math.sin(angle),
-        z,
-      },
-    });
-    requestAnimationFrame(tick);
-  };
-
-  // user drags/zooms emit plotly_relayout with the live camera; cache its eye so
-  // resume() can pick up from exactly where they left it (preserving zoom + tilt).
   let lastEye: { x: number; y: number; z: number } | undefined;
   el.on("plotly_relayout", (ev: any) => {
     const eye = ev?.["scene.camera"]?.eye ?? ev?.["scene.camera.eye"];
     if (eye) lastEye = eye;
   });
 
-  const resume = () => {
-    if (spinning) return; // never stack a second animation loop
-    if (lastEye) {
-      radius = Math.hypot(lastEye.x, lastEye.y);
-      angle = Math.atan2(lastEye.y, lastEye.x);
-      z = lastEye.z;
+  const loop = () => {
+    if (spinning) {
+      angle += 0.0016;
+      try {
+        Plotly.relayout(el, {
+          "scene.camera.eye": {
+            x: radius * Math.cos(angle),
+            y: radius * Math.sin(angle),
+            z: camZ,
+          },
+        });
+      } catch {
+        // plot mid-redraw; skip this frame and keep the loop alive
+      }
     }
-    spinning = true;
-    requestAnimationFrame(tick);
+    requestAnimationFrame(loop);
   };
 
   const pause = () => {
     spinning = false;
     if (resumeTimer) clearTimeout(resumeTimer);
   };
+  const resume = () => {
+    if (lastEye) {
+      radius = Math.hypot(lastEye.x, lastEye.y);
+      angle = Math.atan2(lastEye.y, lastEye.x);
+      camZ = lastEye.z;
+    }
+    spinning = true;
+  };
   const scheduleResume = () => {
     if (resumeTimer) clearTimeout(resumeTimer);
     resumeTimer = setTimeout(resume, 6000);
   };
 
-  // pause starts on the map, but the release often lands outside it (mid-drag
-  // the pointer leaves the plot) — listen on the window so every interaction
-  // end reliably schedules the resume.
+  // pause starts on the map, but the release often lands outside the plot, so
+  // the resume is scheduled from the window. Hovering pauses too, so a point
+  // never drifts away while the reader aims at it.
   el.addEventListener("pointerdown", pause);
   el.addEventListener("wheel", () => { pause(); scheduleResume(); }, { passive: true });
   window.addEventListener("pointerup", scheduleResume);
   window.addEventListener("pointercancel", scheduleResume);
+  el.on("plotly_hover", (ev: any) => {
+    const cd = ev.points?.[0]?.customdata;
+    hoverCid = Array.isArray(cd) ? cd[0] : (cd ?? null);
+    pause();
+  });
+  el.on("plotly_unhover", () => {
+    hoverCid = null;
+    scheduleResume();
+  });
+  el.addEventListener("mouseleave", scheduleResume);
 
-  requestAnimationFrame(tick);
+  requestAnimationFrame(loop);
 }
