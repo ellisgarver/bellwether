@@ -905,7 +905,14 @@ def validate(
                     "n_recovered": n_recovered,
                     "n_total": len(results),
                     "results": [
-                        {"anchor_id": r["anchor_id"], "recovered": bool(r["recovered"]), "note": r["note"]}
+                        {
+                            "anchor_id": r["anchor_id"],
+                            "recovered": bool(r["recovered"]),
+                            "dominant_cluster": r["dominant_cluster"],
+                            "concentration": r["concentration"],
+                            "n_articles": r["n_articles"],
+                            "note": r["note"],
+                        }
                         for r in results
                     ],
                 },
