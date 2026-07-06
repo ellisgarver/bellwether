@@ -82,7 +82,9 @@ p { margin: 0 0 1rem; }
 /* ---- layout ---- */
 .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 1.6rem; }
 .bleed { width: 100%; }
-main { padding: var(--space-5) 0 var(--space-3); }
+/* pages end on their own last-section padding; main adds none below, so the
+   footer rule sits one consistent gap under the content everywhere. */
+main { padding: var(--space-5) 0 0; }
 .lede { color: var(--muted); font-size: var(--fs-lede); line-height: 1.55; margin: var(--space-1) 0 var(--space-4); }
 .muted { color: var(--muted); }
 .hidden { display: none !important; }
@@ -144,7 +146,7 @@ a.card:hover { background: var(--paper-2); padding-left: 0.9rem; padding-right: 
 /* ---- catalog pager (narratives / emerging) ---- */
 .pager {
   display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;
-  margin: 1.2rem 0 0.4rem;
+  margin: 1.2rem 0 2rem;
 }
 .page-btn {
   background: none; border: 1px solid transparent; border-radius: 6px;
