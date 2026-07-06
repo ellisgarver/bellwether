@@ -1,6 +1,9 @@
 ---
 import Base from "../layouts/Base.astro";
+import { loadValidation } from "@lib/data";
 const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
+const val = loadValidation();
+const anchorName = (id: string) => id.replace(/^anchor[_-]?/, "").replace(/_/g, " ");
 ---
 
 <Base title="research" active="research">
@@ -56,21 +59,21 @@ const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
     </figure>
 
     <p>
-      this project is framed around Robert Shiller's <em>Narrative Economics</em> (2017 AEA
+      the starting point is Robert Shiller's <em>Narrative Economics</em> (2017 AEA
       presidential address; 2019 book): economic stories spread through a population
-      the way contagious diseases do — a story is "caught" from exposure, carried for
-      a while, and eventually dropped, and its prevalence over time traces the same
-      rise-and-fall shape as an outbreak. this project quantifies that analogy.
+      the way contagious ideas do — a story is picked up, carried for a while, and
+      eventually dropped — and the stories people carry shape the economic decisions
+      they make. what spreads, in other words, matters as much as the fundamentals.
     </p>
     <p>
-      Shiller maps cleanly onto SIR compartments: people who have not yet
-      encountered a story are <em>susceptible</em>, those actively repeating it are
-      <em>infected</em>, and those who have moved on are <em>recovered</em>. the same
-      mechanics that determine whether a disease takes off also determine whether a
-      story does. that epidemic picture is one of several lenses the tool fits to each
-      curve. the lifecycle itself — whether a story is rising, holding, or fading — is
-      read directly from the volume of institutional macro writing, model-free, so the
-      reading never depends on any one model being the right one.
+      this tool takes the part of that idea that can be measured — that narratives
+      have life-cycles — and reads those life-cycles directly from the record:
+      each stage comes straight from the volume trajectory of institutional macro
+      writing, model-free, so no reading depends on any one theory of how stories
+      spread being right. the contagion picture above survives as one of three
+      interpretive lenses fit alongside — epidemic, growth, and adoption curves —
+      each a different account of the same measured shape, shown with how well it
+      fits and never used to decide the stage.
     </p>
   </section>
 
@@ -91,6 +94,21 @@ const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
       pipeline recovers each within a date tolerance is measured and reported as a
       face-validity diagnostic; it is never used to select or adjust a parameter.
     </p>
+    {val && (
+      <div class="val">
+        <p class="val-score">
+          on the current corpus: <strong>{val.n_recovered} of {val.n_total}</strong> anchor
+          narratives recovered.
+        </p>
+        <ul class="anchors">
+          {val.results.map((r) => (
+            <li class={r.recovered ? "ok" : "miss"} title={r.note}>
+              <span class="mark">{r.recovered ? "✓" : "✕"}</span>{anchorName(r.anchor_id)}
+            </li>
+          ))}
+        </ul>
+      </div>
+    )}
     <p>
       the press and markets overlays on each narrative are display and validation
       only. neither is an input to the embedding, the clustering, or the curve
@@ -164,6 +182,20 @@ const repo = "https://github.com/ellisgarver/macro-narrative-dynamics";
   @media (prefers-reduced-motion: reduce) {
     .node { animation: none; fill: var(--growth); }
   }
+
+  /* anchor-recovery scoreboard: one chip per anchor, recovered in growth green,
+     missed in muted gray — a factual readout, not a grade. */
+  .val { margin: 1.2rem 0 0.4rem; }
+  .val-score { margin: 0 0 0.7rem; }
+  .anchors { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .anchors li {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    font-size: var(--fs-ui); padding: 0.24rem 0.7rem; border-radius: 999px;
+    background: var(--paper-2); border: 1px solid var(--line); color: var(--ink);
+  }
+  .anchors li.ok .mark { color: var(--growth); font-weight: 700; }
+  .anchors li.miss { color: var(--muted); }
+  .anchors li.miss .mark { color: var(--faint); font-weight: 700; }
 
   .reading {
     list-style: none;
