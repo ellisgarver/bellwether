@@ -25,15 +25,17 @@ const fmt = (n: number) => n.toLocaleString("en-US");
       </p>
     </div>
 
-    <div class="hero-stats reveal">
-      <div><span class="num">{fmt(index.n_narratives)}</span><span class="lbl">narratives</span></div>
-      <div><span class="num">{fmt(totalArticles)}</span><span class="lbl">articles</span></div>
-      <div><span class="num">12</span><span class="lbl">feeds</span></div>
-      <div><span class="num">2010</span><span class="lbl">tracked since</span></div>
-    </div>
-    <div class="hero-cta reveal">
-      <a href={`${base}/narratives`}>browse all narratives →</a>
-      <a href={`${base}/emerging`}>see what's emerging →</a>
+    <div class="hero-band reveal">
+      <div class="hero-stats">
+        <div><span class="num">{fmt(index.n_narratives)}</span><span class="lbl">narratives</span></div>
+        <div><span class="num">{fmt(totalArticles)}</span><span class="lbl">articles</span></div>
+        <div><span class="num">12</span><span class="lbl">feeds</span></div>
+        <div><span class="num">2010</span><span class="lbl">tracked since</span></div>
+      </div>
+      <div class="hero-cta">
+        <a href={`${base}/narratives`}>browse all narratives →</a>
+        <a href={`${base}/emerging`}>see what's emerging →</a>
+      </div>
     </div>
 
     {hasMap && (
@@ -87,7 +89,15 @@ const fmt = (n: number) => n.toLocaleString("en-US");
     margin: 0;
   }
 
-  .hero-stats { display: flex; gap: 2.4rem; flex-wrap: wrap; margin-top: 1.5rem; }
+  .hero-band {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1.2rem 2.4rem;
+    flex-wrap: wrap;
+    margin-top: 1.5rem;
+  }
+  .hero-stats { display: flex; gap: 2.4rem; flex-wrap: wrap; }
   .hero-stats .num {
     display: block;
     font-size: clamp(1.35rem, 2vw, 1.7rem);
@@ -103,7 +113,6 @@ const fmt = (n: number) => n.toLocaleString("en-US");
     flex-wrap: wrap;
     font-size: var(--fs-body);
     font-weight: 600;
-    margin-top: 1rem;
   }
 
   .map3d {
@@ -126,6 +135,7 @@ const fmt = (n: number) => n.toLocaleString("en-US");
     .hero { min-height: 0; }
     .map3d { min-height: 0; height: 56vh; margin: 1.4rem 0 0.8rem; }
     .hero-stats { gap: 1.2rem 1.8rem; }
+    .hero-band { flex-direction: column; align-items: flex-start; }
   }
 
   .hero .reveal:nth-of-type(1) { transition-delay: 0.05s; }
