@@ -332,6 +332,11 @@ def build_dashboard_artifacts(
         narratives=index_rows,
         median_article_words=_median_article_words(clusters_df),
         n_clusters_total=n_clusters_total,
+        n_articles_corpus=(
+            int(clusters_df["article_id"].nunique())
+            if "article_id" in clusters_df.columns
+            else None
+        ),
         min_articles_to_fit=(
             int(cfg["dynamics"]["min_articles_to_fit"])
             if "min_articles_to_fit" in cfg.get("dynamics", {})

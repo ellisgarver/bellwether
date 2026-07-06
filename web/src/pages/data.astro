@@ -101,18 +101,23 @@ const sources: [string, string][] = [
 ];
 
 const fmt = (n: number) => n.toLocaleString("en-US");
-const stats: [string, string][] = [
-  [fmt(index.n_narratives), "narratives"],
+const floor = index.min_articles_to_fit;
+const corpusStats: [string, string][] = [
+  ...(index.n_articles_corpus
+    ? ([[fmt(index.n_articles_corpus), "articles"]] as [string, string][])
+    : []),
   ...(index.n_clusters_total
     ? ([[fmt(index.n_clusters_total), "clusters detected"]] as [string, string][])
     : []),
-  [fmt(totalArticles), "articles"],
+  ["12", "feeds"],
+  ["2010", "tracked since"],
+];
+const shownStats: [string, string][] = [
+  [fmt(index.n_narratives), "narratives"],
+  [fmt(totalArticles), "articles within them"],
   ...(index.median_article_words
     ? ([[fmt(index.median_article_words), "median words / article"]] as [string, string][])
     : []),
-  ["12", "feeds"],
-  ["8", "dimensions"],
-  ["2010", "tracked since"],
 ];
 ---
 
@@ -123,11 +128,31 @@ const stats: [string, string][] = [
     a fixed, complete body of institutional and academic macro writing.
   </p>
 
-  <div class="stat-row reveal">
-    {stats.map(([num, lbl]) => (
-      <div class="stat"><span class="num">{num}</span><span class="lbl">{lbl}</span></div>
-    ))}
+  <div class="stat-band reveal">
+    <div class="stat-group">
+      <p class="stat-group-lbl">the full corpus</p>
+      <div class="stat-row">
+        {corpusStats.map(([num, lbl]) => (
+          <div class="stat"><span class="num">{num}</span><span class="lbl">{lbl}</span></div>
+        ))}
+      </div>
+    </div>
+    <div class="stat-group">
+      <p class="stat-group-lbl">shown on the site</p>
+      <div class="stat-row">
+        {shownStats.map(([num, lbl]) => (
+          <div class="stat"><span class="num">{num}</span><span class="lbl">{lbl}</span></div>
+        ))}
+      </div>
+    </div>
   </div>
+  {floor && (
+    <p class="caption reveal">
+      clustering keeps every topic the corpus contains; the site surfaces the
+      narratives with at least {floor} articles — enough history to chart and
+      stage a life-cycle. the smaller clusters stay in the corpus totals above.
+    </p>
+  )}
 
   <section class="section reveal">
     <p class="eyebrow">the sources</p>
@@ -267,12 +292,17 @@ const stats: [string, string][] = [
 </Base>
 
 <style>
-  /* corpus stat row: tabular figures with quiet labels, mirroring the home hero
-     stats but as a self-contained band under the lede. */
-  .stat-row {
-    display: flex; flex-wrap: wrap; gap: 2.6rem;
+  /* corpus stat band: two labeled groups — the full corpus vs what the site
+     surfaces — with the same tabular figures as the home hero stats. */
+  .stat-band {
+    display: flex; flex-wrap: wrap; gap: 1.6rem 4.5rem;
     margin: 1.8rem 0 0; padding: 1.2rem 0 0; border-top: 1px solid var(--line);
   }
+  .stat-group-lbl {
+    font-size: var(--fs-label); letter-spacing: 0.08em; color: var(--faint);
+    margin: 0 0 0.7rem;
+  }
+  .stat-row { display: flex; flex-wrap: wrap; gap: 1.2rem 2.6rem; }
   .stat .num {
     display: block; font-size: var(--fs-stat); font-weight: 600; line-height: 1;
     font-variant-numeric: tabular-nums; color: var(--ink);
