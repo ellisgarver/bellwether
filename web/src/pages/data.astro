@@ -3,6 +3,7 @@ import Base from "../layouts/Base.astro";
 import { loadIndex, loadNarrative, JEL_NAME } from "@lib/data";
 
 const index = loadIndex();
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 // Aggregate the corpus at build time from the artifact contract — no hard-coded
 // totals. Article counts come from each narrative's index entry; the per-source
@@ -148,9 +149,10 @@ const shownStats: [string, string][] = [
   </div>
   {floor && (
     <p class="caption reveal">
-      clustering keeps every topic the corpus contains; the site surfaces the
-      narratives with at least {floor} articles — enough history to chart and
-      stage a life-cycle. the smaller clusters stay in the corpus totals above.
+      clustering keeps every topic the corpus contains; the site charts the
+      narratives with at least {floor} articles — enough history to fit and
+      stage a life-cycle. the rest are browsable in
+      <a href={`${base}/directory`}>the full directory</a>.
     </p>
   )}
 
@@ -270,15 +272,15 @@ const shownStats: [string, string][] = [
         jelEl,
         [{
           type: "bar",
-          x: jel.map((d: any) => d.name),
+          x: jel.map((d: any) => d.code),
           y: jel.map((d: any) => d.articles),
           marker: { color: jel.map((d: any) => (d.in_scope ? COL.accent : COL.faint)) },
-          customdata: jel.map((d: any) => d.code),
-          hovertemplate: "%{y:,} articles<extra></extra>",
+          customdata: jel.map((d: any) => d.name),
+          hovertemplate: "%{customdata} — %{y:,} articles<extra></extra>",
         }],
         baseLayout({
-          margin: { l: 52, r: 12, t: Math.round(SRC_T + halfSlot), b: 80 },
-          xaxis: { tickangle: -30, automargin: true, fixedrange: true },
+          margin: { l: 52, r: 12, t: Math.round(SRC_T + halfSlot), b: 40 },
+          xaxis: { automargin: true, fixedrange: true },
           yaxis: {
             gridcolor: "rgba(226,220,207,0.6)", zeroline: false, tickformat: ",",
             range: [0, niceMax], dtick: step, fixedrange: true,

@@ -44,6 +44,7 @@ from mnd.clustering.jel_classifier import classify_clusters
 from mnd.clustering.similar_narratives import compute_similar_narratives
 from mnd.dashboard.build_artifacts import (
     build_dashboard_artifacts,
+    write_cluster_directory,
     write_dashboard_artifacts,
 )
 from mnd.dashboard.naming import NamingInput, generate_names
@@ -281,7 +282,11 @@ def run_analysis(
         cfg=cfg,
         cards=cards,
     )
-    return write_dashboard_artifacts(index, narratives, out_dir)
+    out_path = write_dashboard_artifacts(index, narratives, out_dir)
+    # Full-corpus directory (every non-noise cluster, incl. sub-floor ones) so
+    # the site can offer a searchable index of the whole corpus.
+    write_cluster_directory(clusters_df, topic_info, fit_ids, names, out_dir)
+    return out_path
 
 
 def _naming_inputs(

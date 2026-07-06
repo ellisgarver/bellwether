@@ -54,7 +54,11 @@ from mnd.dashboard.artifacts import (
     SeriesArtifact,
     SimilarNarratives,
 )
-from mnd.dashboard.story_card import NOISE_TOPIC, build_story_card
+from mnd.dashboard.story_card import (
+    NOISE_TOPIC,
+    _terms_from_topic_info,
+    build_story_card,
+)
 from mnd.dynamics.fitting import ClusterDynamics, FitResult
 from mnd.stages.classify import StageClassification
 from mnd.utils.config import load_config
@@ -352,6 +356,73 @@ def build_dashboard_artifacts(
         sum(1 for e in index_rows if e.is_emerging),
     )
     return index, narratives
+
+
+def write_cluster_directory(
+    clusters_df: pd.DataFrame,
+    topic_info: pd.DataFrame | None,
+    fit_ids: list[int],
+    names: dict[int, Any],
+    out_dir: str | Path,
+) -> Path | None:
+    """Write ``clusters_all.json`` — the full-corpus cluster directory.
+
+    One compact row per non-noise cluster (all of them, not just the surfaced
+    narratives): id, c-TF-IDF label, display name when one exists, article count,
+    date span, and whether the cluster has a narrative page. Lets the site offer
+    a searchable directory of the entire corpus without baking 7,000+ full
+    artifacts. Returns the written path, or ``None`` when the frame lacks the
+    needed columns (sample/partial data).
+    """
+    if "topic" not in clusters_df.columns or "article_id" not in clusters_df.columns:
+        return None
+    rows = clusters_df[clusters_df["topic"] != NOISE_TOPIC]
+    if rows.empty:
+        return None
+
+    counts = rows.groupby("topic")["article_id"].nunique()
+    date_ranges: dict[int, tuple[str, str]] = {}
+    if "published_at" in rows.columns:
+        days = rows.assign(_d=rows["published_at"].astype(str).str.slice(0, 10))
+        days = days[days["_d"].str.match(r"\d{4}-\d{2}-\d{2}")]
+        if not days.empty:
+            g = days.groupby("topic")["_d"]
+            date_ranges = {
+                int(cid): (str(lo), str(hi))
+                for cid, lo, hi in zip(g.min().index, g.min(), g.max())
+            }
+
+    surfaced = {int(c) for c in fit_ids}
+    entries = []
+    for cid in sorted(int(c) for c in counts.index):
+        nm = names.get(cid)
+        entries.append(
+            {
+                "cluster_id": cid,
+                "label": _terms_from_topic_info(topic_info, cid)[0],
+                "label_human": getattr(nm, "title", None),
+                "n_articles": int(counts[cid]),
+                "date_range": list(date_ranges[cid]) if cid in date_ranges else None,
+                "surfaced": cid in surfaced,
+            }
+        )
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / "clusters_all.json"
+    path.write_text(
+        json.dumps(
+            {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "n_clusters": len(entries),
+                "clusters": entries,
+            },
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    )
+    log.info("Wrote full-corpus cluster directory (%d clusters) to %s", len(entries), path)
+    return path
 
 
 def write_dashboard_artifacts(

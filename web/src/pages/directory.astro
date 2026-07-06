@@ -1,0 +1,158 @@
+---
+import Base from "../layouts/Base.astro";
+import { loadDirectory, loadIndex } from "@lib/data";
+
+const dir = loadDirectory();
+const index = loadIndex();
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const fmt = (n: number) => n.toLocaleString("en-US");
+
+// Compact rows for the client: [id, display label, terms for search, articles,
+// from, to, surfaced]. The 7,000+ rows render client-side, 50 at a time, so the
+// page itself stays light.
+const rows = (dir?.clusters ?? [])
+  .sort((a, b) => b.n_articles - a.n_articles)
+  .map((c) => [
+    c.cluster_id,
+    c.label_human || c.label.replace(/^-?\d+_/, "").split("_").join(", "),
+    c.label.toLowerCase(),
+    c.n_articles,
+    c.date_range?.[0]?.slice(0, 4) ?? "",
+    c.date_range?.[1]?.slice(0, 4) ?? "",
+    c.surfaced ? 1 : 0,
+  ]);
+---
+
+<Base title="directory" active="data">
+  <p class="eyebrow reveal">the directory</p>
+  <h1 class="reveal">every cluster in the corpus</h1>
+  <p class="lede reveal">
+    all {fmt(dir?.n_clusters ?? index.n_clusters_total ?? 0)} clusters the corpus
+    contains, from the {fmt(index.n_narratives)} narratives charted on this site
+    down to the smallest recurring threads. narratives with a full page link
+    through; the rest are named by their defining terms.
+  </p>
+
+  {rows.length > 0 ? (
+    <>
+      <div class="toolbar reveal">
+        <input id="search" type="search" placeholder="filter by name or term…" />
+        <label class="toggle"><input type="checkbox" id="f-surfaced" /> charted narratives only</label>
+      </div>
+      <div id="rows" class="dir-rows reveal"></div>
+      <p id="empty" class="muted hidden">no clusters match that filter.</p>
+      <nav id="pager" class="pager" aria-label="directory pages"></nav>
+      <script id="dir-data" type="application/json" set:html={JSON.stringify(rows)}></script>
+    </>
+  ) : (
+    <p class="muted reveal">the full directory ships with the next data refresh.</p>
+  )}
+
+  <script>
+    const dataEl = document.getElementById("dir-data");
+    if (dataEl) {
+      const all = JSON.parse(dataEl.textContent || "[]");
+      const base = document.body.dataset.base || "";
+      const rowsEl = document.getElementById("rows");
+      const empty = document.getElementById("empty");
+      const pagerEl = document.getElementById("pager");
+      const search = document.getElementById("search");
+      const surfacedOnly = document.getElementById("f-surfaced");
+      const PAGE = 50;
+      let page = 0;
+
+      const esc = (s) =>
+        s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+      function matches(r) {
+        const q = (search.value || "").trim().toLowerCase();
+        if (surfacedOnly.checked && !r[6]) return false;
+        return !q || r[1].toLowerCase().includes(q) || r[2].includes(q);
+      }
+
+      function render(scroll = false) {
+        const hits = all.filter(matches);
+        const pages = Math.max(1, Math.ceil(hits.length / PAGE));
+        page = Math.min(Math.max(0, page), pages - 1);
+        const slice = hits.slice(page * PAGE, (page + 1) * PAGE);
+        rowsEl.innerHTML = slice
+          .map(([id, name, , n, from, to, surfaced]) => {
+            const span = from ? `${from}–${to}` : "";
+            const label = surfaced
+              ? `<a href="${base}/narratives/${id}">${esc(name)}</a>`
+              : `<span class="dir-name">${esc(name)}</span>`;
+            return `<div class="dir-row">${label}<span class="dir-meta">${n.toLocaleString("en-US")} articles${span ? " · " + span : ""}</span></div>`;
+          })
+          .join("");
+        empty.classList.toggle("hidden", hits.length !== 0);
+        renderPager(hits.length, pages);
+        if (scroll) rowsEl.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+
+      function renderPager(total, pages) {
+        pagerEl.innerHTML = "";
+        pagerEl.classList.toggle("hidden", pages <= 1);
+        if (pages <= 1) return;
+        const btn = (label, disabled, go) => {
+          const b = document.createElement("button");
+          b.type = "button"; b.className = "page-btn"; b.textContent = label; b.disabled = disabled;
+          if (!disabled) b.addEventListener("click", () => { page = go; render(true); });
+          return b;
+        };
+        pagerEl.appendChild(btn("← prev", page === 0, page - 1));
+        const want = new Set([0, page - 1, page, page + 1, pages - 1]);
+        let prev = -1;
+        for (let i = 0; i < pages; i++) {
+          if (!want.has(i)) continue;
+          if (prev !== -1 && i - prev > 1) {
+            const gap = document.createElement("span");
+            gap.className = "page-gap"; gap.textContent = "…";
+            pagerEl.appendChild(gap);
+          }
+          const b = btn(String(i + 1), false, i);
+          if (i === page) b.classList.add("active");
+          pagerEl.appendChild(b);
+          prev = i;
+        }
+        pagerEl.appendChild(btn("next →", page === pages - 1, page + 1));
+        const info = document.createElement("span");
+        info.className = "page-info";
+        info.textContent = `${total.toLocaleString("en-US")} clusters`;
+        pagerEl.appendChild(info);
+      }
+
+      [search, surfacedOnly].forEach((el) =>
+        el.addEventListener("input", () => { page = 0; render(); }),
+      );
+      render();
+    }
+  </script>
+</Base>
+
+<style>
+  .toolbar {
+    display: flex; gap: 1.2rem; flex-wrap: wrap; align-items: center;
+    margin: 1.4rem 0 0.6rem; padding-bottom: 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .toolbar input[type="search"] {
+    flex: 1; min-width: 220px; padding: 0.55rem 0.2rem;
+    border: none; border-bottom: 1px solid var(--line);
+    background: transparent; font: inherit; color: var(--ink);
+  }
+  .toolbar input[type="search"]:focus {
+    outline: none; border-bottom-color: var(--accent);
+  }
+  .dir-rows { scroll-margin-top: 76px; }
+  .dir-rows :global(.dir-row) {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 0.6rem 1.6rem; flex-wrap: wrap;
+    padding: 0.55rem 0.2rem; border-bottom: 1px solid var(--line-soft);
+  }
+  .dir-rows :global(a) { font-weight: 600; }
+  .dir-rows :global(.dir-name) { color: var(--ink); }
+  .dir-rows :global(.dir-meta) {
+    color: var(--muted); font-size: var(--fs-meta);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+</style>
