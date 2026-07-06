@@ -208,7 +208,7 @@ a.card:hover { background: var(--paper-2); padding-left: 0.9rem; padding-right: 
 
 /* reset control overlaid on the 3-D map (injected by chart.ts) */
 .map-reset {
-  position: absolute; top: 0.4rem; right: 1.2rem; z-index: 10;
+  position: absolute; top: 0.4rem; right: 0.2rem; z-index: 10;
   border: 1px solid var(--line); border-radius: 999px;
   background: color-mix(in srgb, var(--paper) 88%, transparent);
   color: var(--muted); font: inherit; font-size: var(--fs-meta);
