@@ -1,22 +1,20 @@
 # Macro Narrative Dynamics
 
-How macro narratives rise and fade. This project reads fifteen years of U.S.
-macro-financial discourse — the Fed, the IMF, the BIS, the NBER and their peers
-— clusters it into narratives, and tracks the arc of each one: when it emerged,
-how fast it spread, when it peaked, and where its attention is heading now.
+How macro narratives form, rise, and fade. This project reads fifteen years of U.S.
+macro-financial discourse from academic and institutional sources — the Fed, the IMF, the BIS, the NBER and their peers
+— clusters into narratives, and tracks each story.
 
-The result is a public site: a 3-D map of the narrative landscape, a catalog of
+The analysis surfaces a 3-D map of the narrative landscape, a catalog of
 every charted narrative with its life-cycle stage, an emerging-signals feed, and
 per-narrative pages that chart each story's volume against classical growth
 curves, broad-press coverage, and market series.
 
 ## The idea
 
-The frame is Robert Shiller's *Narrative Economics*: economic stories spread
+The original idea was inspired by Robert Shiller's *Narrative Economics*: economic stories spread
 through a population like contagious ideas, and the stories people carry shape
-the decisions they make. This tool measures the part of that idea that can be
-measured — that narratives have life-cycles — and reads those life-cycles
-directly from the institutional record.
+the decisions they make. This tool extends that idea to what can be
+measured and incorporates other models and lenses of analysis.
 
 ## How it works
 
@@ -24,20 +22,20 @@ directly from the institutional record.
   dimensions of U.S. macro discourse: the Federal Reserve Board and four
   regional Feds, the IMF, the BIS, the CBO and CEA, the Treasury's OFR,
   Brookings, PIIE, the NBER, VoxEU, and Congressional testimony. Everything
-  from every source is ingested; nothing is filtered by topic on the way in.
+  from every source is ingested; nothing is filtered by topic.
 - **Narratives** — documents are embedded with Qwen3-Embedding-8B and clustered
   with BERTopic; each cluster of related writing is a narrative candidate,
-  scoped after the fact against the AEA's JEL taxonomy.
+  scoped after the fact against the standard AEA JEL taxonomy and seeded by >= 42.
 - **Life-cycles** — each narrative's stage (growth, stable, decay, dormant) is
-  read model-free from its own volume trajectory with a trend test. Epidemic,
+  read model-free from its own volume trajectory with a trend test. Epidemic (SIR),
   logistic, and Bass adoption curves are fit alongside as interpretive lenses,
-  each reported with its fit quality — never used to decide the stage.
+  each reported with its fit quality, but not used to decide the stage.
 - **Context** — broad-press story counts (Media Cloud) and market series (FRED)
-  overlay each narrative for lead–lag comparison; both are display-only and
-  never feed the analysis.
+  serve as overlays for each narrative for lead–lag comparison; both are display-only and
+  don't directly contribute to the analysis.
 
 Every threshold is a published library default or a value cited from primary
-literature, every random step flows from one fixed seed, and no parameter is
+literature, every random step flows from the one fixed seed, and parameters aren't
 ever tuned toward recovering known events. The full methodology, with the
 citation behind each choice, is in
 [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md); every decision is logged in
