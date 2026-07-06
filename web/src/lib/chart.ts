@@ -133,7 +133,7 @@ export function mountMap3d(
     y: pts.map((p) => xyz(p)[1]),
     z: pts.map((p) => xyz(p)[2]),
     customdata: pts.map((p) => p.cluster_id),
-    text: pts.map((p) => p.label),
+    text: pts.map((p) => p.label_human || p.label),
     hovertemplate: "%{text}<extra></extra>",
     marker: {
       size: pts.map((p) => 3 + Math.sqrt(p.n_articles) * 0.5),
