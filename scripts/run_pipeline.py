@@ -603,6 +603,23 @@ def embed(
     if chunks_path.exists():
         log.info("Loading existing chunks from %s", chunks_path)
         chunk_df = pd.read_parquet(chunks_path)
+        # Incremental chunking (ADR-066 Part C): articles that arrived after the
+        # chunks file was built (a weekly delta) are chunked and appended, so the
+        # existing rows keep their positions and cached embedding rows stay
+        # aligned while the delta gets encoded fresh.
+        if parquet_path.exists():
+            articles_df = pd.read_parquet(parquet_path)
+            have = set(chunk_df["article_id"].astype(str))
+            fresh_articles = articles_df[~articles_df["article_id"].astype(str).isin(have)]
+            if len(fresh_articles):
+                log.info(
+                    "Chunking %d new articles (delta) and appending to %s",
+                    len(fresh_articles), chunks_path,
+                )
+                chunk_df = pd.concat(
+                    [chunk_df, chunk_corpus(fresh_articles)], ignore_index=True
+                )
+                chunk_df.to_parquet(chunks_path, index=False)
     else:
         log.info("Chunking corpus from %s", parquet_path)
         df = pd.read_parquet(parquet_path)
@@ -779,6 +796,108 @@ def cluster(
         log.warning("BERTopic model persistence skipped (%s); merge path will need a rebuild", exc)
     log.info(
         "Saved clusters (%d topics) → %s", results["n_topics"], out_path
+    )
+
+
+# ---------------------------------------------------------------------------
+# merge-week  (ADR-066 Part C — identity-stable weekly re-cluster)
+# ---------------------------------------------------------------------------
+
+@cli.command("merge-week")
+@click.option("--min-similarity", default=None, type=float,
+              help="merge_models threshold (default: config update.merge_min_similarity)")
+@click.pass_context
+def merge_week(ctx: click.Context, min_similarity: float | None) -> None:
+    """Fold newly embedded chunks into the narrative set, ids preserved (ADR-066).
+
+    Delta chunks (present in chunks.parquet, absent from clusters.parquet) are
+    fit as a new-week BERTopic model and merged into the persisted base model,
+    so every existing topic keeps its id, URL, and name; genuinely-new stories
+    append as new topics. The identity gate runs before anything is written:
+    if any existing non-noise topic id fails to survive the merge, the command
+    aborts and the narrative set is untouched.
+    """
+    from mnd.clustering.incremental import (
+        _nonnoise_ids,
+        anchors_keep_ids,
+        assemble_merged_clusters,
+        load_base_model,
+        merge_new_week,
+        save_merged_model,
+    )
+
+    cfg = ctx.obj["cfg"]
+    root = data_root()
+    chunks_path = root / cfg["paths"]["processed_chunks"]
+    emb_path = root / cfg["paths"]["processed_embeddings"]
+    clusters_path = root / cfg["paths"]["processed_clusters"]
+    model_dir = clusters_path.parent / "topic_model"
+
+    for p, hint in [
+        (chunks_path, "run `embed` first"),
+        (emb_path, "run `embed` first"),
+        (clusters_path, "run a full `cluster` first"),
+        (model_dir, "the base model is persisted by `cluster`; run a full rebuild first"),
+    ]:
+        if not p.exists():
+            log.error("merge-week: %s missing — %s.", p, hint)
+            sys.exit(1)
+
+    chunk_df = pd.read_parquet(chunks_path)
+    emb = np.load(str(emb_path))
+    if emb.shape[0] != len(chunk_df):
+        log.error(
+            "merge-week: embeddings (%d rows) and chunks (%d rows) misaligned — "
+            "re-run `embed` before merging.", emb.shape[0], len(chunk_df),
+        )
+        sys.exit(1)
+    clusters_df = pd.read_parquet(clusters_path)
+
+    known = set(clusters_df["chunk_id"].astype(str))
+    delta_mask = ~chunk_df["chunk_id"].astype(str).isin(known)
+    n_delta = int(delta_mask.sum())
+    if n_delta == 0:
+        log.info("merge-week: no new chunks since the last cluster/merge — nothing to do.")
+        return
+    log.info("merge-week: %d delta chunks to fold in (of %d total).", n_delta, len(chunk_df))
+
+    delta_df = chunk_df[delta_mask]
+    delta_docs = (delta_df["title"].fillna("") + " " + delta_df["body"].fillna("")).tolist()
+    delta_emb = emb[delta_mask.to_numpy()]
+
+    upd = cfg.get("update", {})
+    min_sim = float(min_similarity if min_similarity is not None
+                    else upd.get("merge_min_similarity", 0.7))
+
+    base_model = load_base_model(model_dir)
+    merged, new_topics = merge_new_week(base_model, delta_docs, delta_emb, cfg, min_sim)
+
+    # Identity gate (ADR-066): every existing non-noise topic id must survive.
+    base_ids = _nonnoise_ids(base_model)
+    ok, missing = anchors_keep_ids(base_model, merged, base_ids)
+    if not ok:
+        log.error(
+            "merge-week: identity gate FAILED — %d of %d existing topic ids missing "
+            "after the merge (e.g. %s). Nothing was written; the narrative set is "
+            "unchanged and the delta stays parked.",
+            len(missing), len(base_ids), missing[:5],
+        )
+        sys.exit(1)
+    log.info("merge-week: identity gate passed — all %d existing topic ids preserved.",
+             len(base_ids))
+
+    delta_topics = dict(zip(delta_df["chunk_id"].astype(str), new_topics))
+    out_df = assemble_merged_clusters(chunk_df, clusters_df, delta_topics)
+
+    backup = clusters_path.with_suffix(".parquet.bak")
+    clusters_path.replace(backup)
+    out_df.to_parquet(clusters_path, index=False)
+    merged.get_topic_info().to_parquet(clusters_path.parent / "topic_info.parquet", index=False)
+    save_merged_model(merged, model_dir, cfg)
+    log.info(
+        "merge-week: wrote %d rows (%d delta) → %s (previous kept at %s); "
+        "topic_info + base model updated.",
+        len(out_df), n_delta, clusters_path, backup,
     )
 
 
@@ -1065,6 +1184,11 @@ def name_artifacts(ctx: click.Context, artifacts_dir: str | None) -> None:
               help="Skip the delta ingest; only refresh analyze / the press layer.")
 @click.option("--skip-analyze", is_flag=True, default=False,
               help="Skip the analyze re-bake; only fetch the delta.")
+@click.option("--merge/--no-merge", "merge_flag", default=None,
+              help="Fold the delta into the narrative set via merge-week "
+                   "(ADR-066 Part C). Default comes from config "
+                   "update.merge_enabled (off until the identity gate has "
+                   "passed once on the real corpus).")
 @click.pass_context
 def update(
     ctx: click.Context,
@@ -1072,6 +1196,7 @@ def update(
     buffer_days: int | None,
     skip_ingest: bool,
     skip_analyze: bool,
+    merge_flag: bool | None,
 ) -> None:
     """Portable weekly refresh (ADR-063): per-source delta ingest + analyze.
 
@@ -1081,11 +1206,12 @@ def update(
     dedup absorbs the overlap), and ``analyze`` re-bakes the artifacts, refreshing
     the Media Cloud press layer + press-heating against the current narrative set.
 
-    Deferred (ADR-057 §3): identity-stable institutional re-clustering
-    (``merge_models``). Until it lands, newly-ingested institutional articles are
-    parked in raw and the narrative *set* stays "as of the last full build" — the
-    live movement comes from the press layer. Use the SLURM fan-out
-    (``submit_parallel_ingest.sh``) for a full rebuild.
+    With the merge path enabled (``--merge`` or ``update.merge_enabled``), the
+    delta is also filtered, chunked, incrementally embedded, and folded into the
+    narrative set with existing topic ids preserved (ADR-066 Part C) — so the
+    volume charts extend weekly. The merge is gated: if any existing topic id
+    would change, nothing is written and the delta stays parked, exactly as in
+    the merge-off path.
     """
     from datetime import date as date_t
 
@@ -1093,6 +1219,7 @@ def update(
     upd = cfg.get("update", {})
     buffer = int(buffer_days if buffer_days is not None else upd.get("buffer_days", 14))
     full_start = str(upd.get("full_start", "2010-01-01"))
+    do_merge = bool(upd.get("merge_enabled", False)) if merge_flag is None else merge_flag
     today = date_t.today().isoformat()
     src_tuple = (
         BASIS_SET_SOURCES if sources.strip() == "all"
@@ -1112,11 +1239,26 @@ def update(
             log.info("update: ingest %-15s %s → %s", src, start, end)
             ctx.invoke(ingest, start=start, end=end, sources=src,
                        output_dir=None, shard=None)
+
+    if do_merge:
+        log.info("update: merge path (ADR-066) — filter, incremental embed, merge-week")
+        ctx.invoke(filter_cmd, input_dir=None, input_jsonl=None, output=None)
+        ctx.invoke(embed, role="primary", input_path=None, output=None, full_rebuild=False)
+        try:
+            ctx.invoke(merge_week, min_similarity=None)
+        except SystemExit:
+            # Gate failure or missing prerequisite: merge-week wrote nothing, so
+            # the delta stays parked; the press layer still refreshes below.
+            log.warning(
+                "update: merge-week did not apply (see errors above); continuing "
+                "with the narrative set unchanged."
+            )
+    elif not skip_ingest:
         log.warning(
-            "update: new institutional articles are PARKED in raw until the "
-            "merge_models re-cluster lands (ADR-057 §3); the narrative set stays "
-            "'as of the last full build'. The Media Cloud press layer refreshes in "
-            "the analyze step below."
+            "update: new institutional articles are PARKED in raw (merge path "
+            "disabled — update.merge_enabled: false); the narrative set stays "
+            "'as of the last full build'. The Media Cloud press layer refreshes "
+            "in the analyze step below."
         )
 
     if not skip_analyze:

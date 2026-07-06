@@ -129,3 +129,20 @@ def test_prompt_is_grounded_in_supplied_material():
     assert "FOMC raised rates" in user
     # anchor names must not leak into the prompt (no-tuning discipline, ADR-040)
     assert "SVB" not in user and "taper tantrum" not in user.lower()
+
+
+def test_signature_stable_across_date_span_extension():
+    """ADR-070: a continuing narrative's weekly-extending span must not
+    invalidate its cached title; only substance changes may."""
+    from mnd.dashboard.naming import NamingInput, _signature
+
+    base = dict(cluster_id=1, terms=["a", "b"], excerpts=["x"], sources=["fed"])
+    s1 = _signature(NamingInput(**base, date_range=("2020-01-01", "2026-06-01")), "m", 2, 7)
+    s2 = _signature(NamingInput(**base, date_range=("2020-01-01", "2026-07-06")), "m", 2, 7)
+    assert s1 == s2
+    s3 = _signature(
+        NamingInput(cluster_id=1, terms=["a", "CHANGED"], excerpts=["x"], sources=["fed"],
+                    date_range=("2020-01-01", "2026-07-06")),
+        "m", 2, 7,
+    )
+    assert s3 != s1

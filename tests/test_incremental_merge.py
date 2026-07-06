@@ -65,3 +65,32 @@ def test_weekly_merge_preserves_anchor_ids_and_appends_new():
     # (3) The new week's delta docs route to the appended id, not an existing one.
     delta_assignments = set(new_topics[-20:])
     assert delta_assignments & appended, "new-narrative docs were absorbed into an existing id"
+
+
+# ---------------------------------------------------------------------------
+# ADR-066 Part C: post-merge clusters-frame assembly
+# ---------------------------------------------------------------------------
+
+import pandas as pd
+import pytest
+
+from mnd.clustering.incremental import assemble_merged_clusters
+
+
+def _chunks(ids):
+    return pd.DataFrame({"chunk_id": ids, "title": ["t"] * len(ids), "body": ["b"] * len(ids)})
+
+
+def test_assemble_preserves_order_and_old_assignments():
+    chunks = _chunks(["a_c000", "a_c001", "b_c000", "NEW_c000"])
+    old = pd.DataFrame({"chunk_id": ["a_c000", "a_c001", "b_c000"], "topic": [3, 3, -1]})
+    out = assemble_merged_clusters(chunks, old, {"NEW_c000": 7})
+    assert list(out["chunk_id"]) == list(chunks["chunk_id"])  # embedding alignment
+    assert list(out["topic"]) == [3, 3, -1, 7]                # old kept, delta assigned
+
+
+def test_assemble_refuses_unassigned_chunks():
+    chunks = _chunks(["a_c000", "orphan_c000"])
+    old = pd.DataFrame({"chunk_id": ["a_c000"], "topic": [1]})
+    with pytest.raises(RuntimeError, match="no topic assignment"):
+        assemble_merged_clusters(chunks, old, {})

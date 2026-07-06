@@ -12,10 +12,11 @@ either re-assigned to a base topic (when their topic embeddings are within
 assigned with ``merged.transform`` — validated to route continuing-story docs to the
 kept base id and genuinely-new docs to the appended id.
 
-This module is the mechanism only; wiring it into ``update`` is gated on the
-anchor-id-stability check (ADR-066): a synthetic weekly merge must not renumber any
-of the ten anchor narratives. Until that passes on the real corpus, ``update`` parks
-new institutional articles and the narrative set stays "as of the last full build".
+The production path (``merge-week`` / ``update --merge``, ADR-066 Part C) is
+gated on the identity check before anything is written: every non-noise base
+topic id must survive the merge, or the command aborts and the narrative set
+stays untouched. The wiring ships default-off (``update.merge_enabled: false``)
+until that gate has passed once on the real corpus.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from mnd.utils.logging import get_logger
 
@@ -99,3 +101,66 @@ def _nonnoise_ids(model: Any) -> list[int]:
     """Sorted non-noise topic ids of a fitted/merged BERTopic model."""
     info = model.get_topic_info()
     return sorted(int(t) for t in info["Topic"].tolist() if int(t) >= 0)
+
+
+def assemble_merged_clusters(
+    chunks_df: pd.DataFrame,
+    old_clusters_df: pd.DataFrame,
+    delta_topics: dict[str, int],
+) -> pd.DataFrame:
+    """Rebuild the clusters frame after a weekly merge (ADR-066 Part C).
+
+    Every chunk keeps its existing topic assignment; delta chunks take their
+    merged-model assignment. Rows follow ``chunks_df`` order, which is the order
+    ``embed`` wrote the embedding matrix in — the alignment the analysis layer
+    asserts on. Raises if any chunk has no assignment from either side, rather
+    than writing a frame that would misalign downstream.
+    """
+    old_map: dict[str, int] = dict(
+        zip(old_clusters_df["chunk_id"].astype(str), old_clusters_df["topic"].astype(int))
+    )
+    topics: list[int] = []
+    unassigned: list[str] = []
+    for cid in chunks_df["chunk_id"].astype(str):
+        if cid in old_map:
+            topics.append(old_map[cid])
+        elif cid in delta_topics:
+            topics.append(int(delta_topics[cid]))
+        else:
+            unassigned.append(cid)
+    if unassigned:
+        raise RuntimeError(
+            f"assemble_merged_clusters: {len(unassigned)} chunks have no topic "
+            f"assignment (e.g. {unassigned[:3]}) — refusing to write a misaligned "
+            "clusters frame."
+        )
+    out = chunks_df.copy()
+    out["topic"] = topics
+    return out
+
+
+def save_merged_model(merged: Any, model_dir: str | Path, cfg: dict[str, Any]) -> None:
+    """Persist the merged model over the base, atomically enough to survive a crash.
+
+    Writes to a sibling ``<dir>_next`` first, then swaps directories, so an
+    interrupted save leaves the previous base model intact.
+    """
+    import shutil
+
+    out = Path(model_dir)
+    tmp = out.with_name(out.name + "_next")
+    old = out.with_name(out.name + "_prev")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True, exist_ok=True)
+    merged.save(
+        str(tmp),
+        serialization="safetensors",
+        save_ctfidf=True,
+        save_embedding_model=cfg.get("embedding", {}).get("model"),
+    )
+    shutil.rmtree(old, ignore_errors=True)
+    if out.exists():
+        out.rename(old)
+    tmp.rename(out)
+    shutil.rmtree(old, ignore_errors=True)
+    log.info("Persisted merged BERTopic model → %s", out)
