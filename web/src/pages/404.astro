@@ -1,0 +1,14 @@
+---
+import Base from "../layouts/Base.astro";
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+---
+
+<Base title="not found">
+  <p class="eyebrow reveal">404</p>
+  <h1 class="reveal">this page faded out.</h1>
+  <p class="lede reveal">
+    whatever narrative lived here has left the record. try
+    <a href={`${base}/narratives`}>the catalog</a>, or head back
+    <a href={`${base}/`}>to the landscape</a>.
+  </p>
+</Base>

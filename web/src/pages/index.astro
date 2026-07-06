@@ -77,13 +77,12 @@ const fmt = (n: number) => n.toLocaleString("en-US");
   }
   .hero .eyebrow { padding-left: 0.1em; }
   .hero-title {
-    font-size: clamp(1.9rem, 3.6vw, 2.9rem);
+    font-size: var(--fs-title);
     line-height: 1.06;
     letter-spacing: -0.02em;
     margin: 0.3rem 0 0.7rem;
   }
   .hero-thesis {
-    max-width: 72ch;
     font-size: var(--fs-lede);
     line-height: 1.5;
     color: var(--ink);

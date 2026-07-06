@@ -186,34 +186,33 @@ const example =
     <p class="eyebrow">the page</p>
     <h2>reading a narrative</h2>
     <p>
-      take <a href={`${base}/narratives/${example.cluster_id}`}>{example.label}</a> for example. the
-      bars are its weekly article volume, and the line is the selected lens, switched
-      via tabs. the press overlay marks when broad-press coverage of the story
-      appeared, alongside the institutional timing. the markets overlay compares the
-      narrative against a standard series such as the VIX or the 10-year yield. each
-      overlay is rescaled onto the same axis as the volume bars to compare direction,
-      timing, and magnitude of change.
+      take <a href={`${base}/narratives/${example.cluster_id}`}>{example.label_human ?? example.label}</a> for
+      example. the bars are its weekly volume, adjusted for how much the whole
+      corpus published; the line is the selected lens. each tab carries its
+      lens's R², and the chart opens on the best-fitting one — when no lens
+      describes the narrative well, it opens on the volume alone, and the grayed
+      tabs still pull any lens up for comparison. drag pans the view; the two
+      sliders zoom time and volume independently.
     </p>
     <p>
-      underneath sit two bidirectional Granger causality tests. each sweeps over a
-      range of lags and checks, in both directions, whether past values of one
-      series help predict the other better than the series predicts itself, and
-      reports the lag with the strongest signal — a statement about temporal
-      precedence, whether discourse moved before or after the market and before or
-      after the press. one lag is one week; lags range from one to four.
-    </p>
-    <p class="muted">
-      Granger precedence measures timing, not cause — it tells you which series
-      moved first, not which one drove the other. narratives with too few weeks
-      of overlap report &ldquo;insufficient data&rdquo;.
+      the checkboxes overlay two external series, rescaled onto the same axis to
+      compare direction and timing: broad-press story counts (Media Cloud) and a
+      market series such as the VIX. underneath sit two bidirectional Granger
+      tests — each sweeps lags of one to four weeks in both directions and asks
+      whether past values of one series help predict the other, reporting the
+      strongest lag. that is a statement about temporal precedence: whether
+      discourse moved before or after the press, and before or after the market.
+      Granger precedence measures timing, not cause; narratives with too few
+      weeks of overlap report &ldquo;insufficient data&rdquo;.
     </p>
     <p>
-      top articles for each narrative are listed for context. the
-      similar-narratives list ranks neighbours by three measures: semantic
-      closeness (cosine distance between cluster centers in embedding space),
-      lexical overlap (shared distinctive terms), and the correlation of the two
-      volume curves over time. a narrative that scores high on all three ranks as
-      a close neighbour.
+      below the numbers sits the reading list — three stacked lists linking to
+      the source documents: the narrative's core pieces (most aligned with its
+      defining terms), its earliest writing, and its most recent. related
+      narratives close the page, ranked three ways: by meaning (closeness of the
+      cluster centers in embedding space), by terms (shared distinctive
+      vocabulary), and by curve shape (correlation of the two volume curves). a
+      narrative that scores high on all three is a close neighbor.
     </p>
   </section>
 </Base>
@@ -289,7 +288,7 @@ const example =
 
   /* stage states as stage-colored rows: a fixed key column + description, uniform
      rounded full-width bars so the block reads as a finished table. */
-  .r0 { list-style: none; padding: 0; margin: 1.2rem 0; width: fit-content; max-width: var(--measure); display: flex; flex-direction: column; gap: 0.5rem; }
+  .r0 { list-style: none; padding: 0; margin: 1.2rem 0; display: flex; flex-direction: column; gap: 0.5rem; }
   .r0 li {
     display: grid; grid-template-columns: 6rem 1fr; align-items: center; gap: 1rem;
     padding: 0.7rem 3.5rem 0.7rem 1rem; border-radius: 8px;

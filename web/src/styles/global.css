@@ -21,7 +21,6 @@
   --dormant: #9a958a;
 
   --maxw: 1180px;
-  --measure: 78ch;
   --font: "Space Grotesk Variable", "Space Grotesk", -apple-system,
     BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 
@@ -36,10 +35,8 @@
   /* big tabular stat figure (home hero stats + data-page corpus stats); one
      responsive value so the same role reads identically on every page. */
   --fs-stat:  clamp(2rem, 3.2vw, 2.4rem);
-  /* shared slide title (hero + landscape): the vw term self-regulates so the
-     longer slide-2 line stays on one row; the cap is the widest that still fits
-     it at the wrap's max width. */
-  --fs-title: clamp(2rem, 4.8vw, 3.8rem);
+  /* one page-title size everywhere (home hero, catalogs, detail pages). */
+  --fs-title: clamp(1.9rem, 3.6vw, 2.9rem);
 
   /* ---- spacing scale (vertical rhythm) ---- */
   --space-1: 0.5rem;
@@ -86,7 +83,7 @@ p { margin: 0 0 1rem; }
 .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 1.6rem; }
 .bleed { width: 100%; }
 main { padding: var(--space-5) 0 var(--space-3); }
-.lede { color: var(--muted); font-size: var(--fs-lede); line-height: 1.55; max-width: 68rem; margin: var(--space-1) 0 var(--space-4); }
+.lede { color: var(--muted); font-size: var(--fs-lede); line-height: 1.55; margin: var(--space-1) 0 var(--space-4); }
 .muted { color: var(--muted); }
 .hidden { display: none !important; }
 
@@ -127,7 +124,7 @@ main { padding: var(--space-5) 0 var(--space-3); }
   color: var(--faint); margin: 0 0 var(--space-1);
 }
 .caption { color: var(--muted); font-size: var(--fs-ui); max-width: none; margin: var(--space-1) 0 0; }
-.note { color: var(--ink); font-size: var(--fs-body); max-width: var(--measure); }
+.note { color: var(--ink); font-size: var(--fs-body); }
 
 /* ---- narrative index: editorial rows, not cards ---- */
 .grid { display: grid; gap: 0; scroll-margin-top: 76px; }
