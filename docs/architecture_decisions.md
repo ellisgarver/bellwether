@@ -85,6 +85,7 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 068 | **Overlay efficiency — VIX fetched once over the corpus span and sliced per narrative; Media Cloud per-narrative series delta-cached (stable history reused, recent window re-fetched) and fetched in a bounded thread pool** | Live (relates 042/047/048/063/065) |
 | 069 | **Anchor recovery scoped to anchor-relevant articles — window rows filtered by the anchor's fixed `key_terms` (registry, Phase 0), chunks folded to articles (majority topic), concentration = largest single non-noise cluster share with outliers kept in the denominator, threshold 0.50 unchanged. Replaces whole-window concentration, which is unsatisfiable on the full-breadth ADR-020 corpus (0/10 with the outlier bucket winning every plurality — a metric artifact)** | Live (amends 019 validation clause; relates 020/040) |
 | 070 | **Name-cache signature excludes the date span — a continuing narrative's weekly-extending span no longer invalidates its title, so weekly merges (066 Part C) keep display names stable; titles regenerate only when terms/excerpts/sources change. One-time full re-name absorbed into the post-rebuild naming pass** | Live (amends 056; relates 066/067) |
+| 071 | **Forming narratives — the directory bakes a `forming` flag (non-surfaced, onset within the ADR-059 window, ≥ `display.forming.min_articles`=3 articles, so single-document clusters stay out) with terms for terms-only naming; the emerging page lists them compactly and they graduate to full pages past the ADR-051 floor via the weekly merge** | Live (extends 051/059/066; display-only) |
 | 059 | **Emerging flag is recency-only — a narrative is emerging iff its onset falls within the 4-week recency window of the corpus frontier, regardless of stage; drops the earlier `stage == growth` gate so a just-arrived narrative whose short history hasn't yet registered a significant trend is still surfaced as newly arrived** | Live (amends 052 emerging clause; relates 016/057) |
 | 058 | **Peak-relative plateau test — `stable` vs `dormant` keyed to the narrative's own high-water window, not its quiet floor; fixes the all-`stable` collapse (342/365) where institutional tails made "above the floor" trivially true. MWU on the zero-heavy daily series was under-powered, so the split is by level: recent-window mean below `dormant_peak_fraction`=0.25 of the peak-window mean → dormant (a definition, not tuned to recovery)** | Live (amends 052 §2/§3 Level test; relates 040) |
 | 057 | **Phase-6 live emerging (design) — two display-only signals: institutional onset (existing) + press heating (4wk vs 52wk baseline, k=2, on Media Cloud attention-share); weekly refresh builds onto the model via BERTopic `merge_models` (ids/URLs/names preserved, new topics appended above τ); manual now → cron later; novel press-only clustering scoped out (ADR-010)** | Live design; press-heating + weekly-refresh implementations each need a follow-up ADR (relates 010/016/020/042/046/048/050/056) |
@@ -5410,6 +5411,45 @@ re-fetch the recent window.
 - **Relates.** ADR-065 (same content-addressed caching philosophy), ADR-063 (the
   `update` this makes fast), ADR-064 (press-heating reads the same cached series),
   ADR-047/042/048 (the overlays), ADR-050 (incremental-delta precedent).
+
+---
+
+## ADR-071: Forming narratives — sub-floor clusters with recent onsets surface on the emerging page
+
+- **Status**: Accepted
+- **Date**: 2026-07-06
+
+### Context
+
+The emerging flag (ADR-059) applies to surfaced narratives, but a narrative
+must clear the ADR-051 charting floor (42 articles) to be surfaced at all — and
+a story that first appeared within the last four weeks essentially never has 42
+articles yet. The emerging page was therefore structurally near-empty: the true
+frontier lives *below* the floor, among the small clusters the directory
+artifact already records. Inspection also shows that the smallest recent-onset
+clusters are single-document clusters (one long report chunked past HDBSCAN's
+min size), which are not narratives.
+
+### Decision
+
+The cluster directory (`clusters_all.json`) gains a baked `forming` flag: a
+non-surfaced cluster whose onset falls within the ADR-059 recency window
+(`stages.newly_emerging_recency_weeks`) and which spans at least
+`display.forming.min_articles` (3) distinct articles. Forming entries also
+carry their c-TF-IDF `terms` so the naming layer can title them from terms
+alone (no baked excerpts exist below the floor). The `name` command titles
+forming clusters along with the surfaced narratives — a handful per week, not
+a 7,000-cluster naming run. The emerging page lists forming clusters compactly
+(name, article count, onset); they graduate to full narrative pages when they
+grow past the ADR-051 floor, which the weekly merge (ADR-066 Part C) makes an
+organic progression.
+
+### Consequences
+
+- The emerging page reflects the actual frontier instead of an empty window.
+- Both thresholds live in config; the flag is baked at analyze time, so the
+  front end reads data, not policy. Single-document clusters stay out.
+- Display-only throughout: no effect on clustering, fitting, staging, or scope.
 
 ---
 

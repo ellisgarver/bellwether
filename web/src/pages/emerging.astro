@@ -1,10 +1,21 @@
 ---
 import Base from "../layouts/Base.astro";
 import NarrativeCard from "@components/NarrativeCard.astro";
-import { loadIndex, loadNarrative, displayName } from "@lib/data";
+import { loadDirectory, loadIndex, loadNarrative, displayName } from "@lib/data";
 
 const index = loadIndex();
 const hasInScope = index.narratives.some((e) => e.in_scope);
+const floor = index.min_articles_to_fit ?? 42;
+
+// Forming (ADR-071): sub-floor clusters with recent onsets, from the directory
+// artifact — the true frontier, since a brand-new story rarely has enough
+// articles to clear the charting floor yet. Newest onset first.
+const forming = (loadDirectory()?.clusters ?? [])
+  .filter((c) => c.forming)
+  .sort((a, b) => (b.date_range?.[0] ?? "").localeCompare(a.date_range?.[0] ?? ""));
+const formingName = (c: (typeof forming)[number]) =>
+  c.label_human || (c.terms ?? []).slice(0, 5).join(", ") ||
+  c.label.replace(/^-?\d+_/, "").split("_").join(", ");
 
 function spark(values: number[], n = 44): number[] {
   if (values.length <= n) return values;
@@ -84,13 +95,35 @@ const kSigma = heating.length
   </p>
   <nav id="e-pager" class="pager" aria-label="emerging pages"></nav>
 
+  {forming.length > 0 && (
+    <section class="forming reveal">
+      <p class="eyebrow">below the floor</p>
+      <h2>forming</h2>
+      <p class="lede">
+        new clusters that appeared within the last four weeks but haven't reached
+        the {floor}-article floor for a full page. they graduate to charted
+        narratives as they grow.
+      </p>
+      <div class="forming-rows">
+        {forming.map((c) => (
+          <div class="forming-row">
+            <span class="forming-name">{formingName(c)}</span>
+            <span class="forming-meta">
+              {c.n_articles} articles · since {c.date_range?.[0]}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  )}
+
   <section class="heating reveal">
     <p class="eyebrow">a separate signal</p>
     <h2>heating in the press</h2>
     <p class="lede">
-      tracked narratives whose recent press attention sits more than {kSigma}σ
-      above their own yearly baseline (Media Cloud). this signal is press-led,
-      separate from when the institutional sources first pick a story up.
+      tracked narratives whose recent broad press attention sits more than {kSigma}σ
+      above their own yearly baseline (via Media Cloud). this signal is press-led,
+      separate from when the institutional sources first pick a story up given above.
     </p>
 
     <div class="toolbar">
@@ -174,9 +207,20 @@ const kSigma = heating.length
   .toolbar input[type="search"]:focus {
     outline: none; border-bottom-color: var(--accent);
   }
-  .heating {
+  .heating, .forming {
     margin-top: 3.5rem; padding-top: 2rem; border-top: 1px solid var(--line);
   }
-  .heating h2 { margin: 0.2rem 0 0.4rem; }
+  .heating h2, .forming h2 { margin: 0.2rem 0 0.4rem; }
   .heating .lede { margin-bottom: 0.2rem; }
+  .forming .lede { margin-bottom: 1rem; }
+  .forming-row {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 0.6rem 1.6rem; flex-wrap: wrap;
+    padding: 0.55rem 0.2rem; border-bottom: 1px solid var(--line-soft);
+  }
+  .forming-name { color: var(--ink); font-weight: 600; }
+  .forming-meta {
+    color: var(--muted); font-size: var(--fs-meta);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
 </style>

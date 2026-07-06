@@ -364,6 +364,7 @@ def write_cluster_directory(
     fit_ids: list[int],
     names: dict[int, Any],
     out_dir: str | Path,
+    cfg: dict[str, Any] | None = None,
 ) -> Path | None:
     """Write ``clusters_all.json`` — the full-corpus cluster directory.
 
@@ -371,14 +372,20 @@ def write_cluster_directory(
     narratives): id, c-TF-IDF label, display name when one exists, article count,
     date span, and whether the cluster has a narrative page. Lets the site offer
     a searchable directory of the entire corpus without baking 7,000+ full
-    artifacts. Returns the written path, or ``None`` when the frame lacks the
-    needed columns (sample/partial data).
+    artifacts.
+
+    Sub-floor clusters whose onset falls within the ADR-059 recency window and
+    which span at least ``display.forming.min_articles`` distinct articles are
+    flagged ``forming`` (ADR-071) and carry their c-TF-IDF ``terms`` so the
+    naming layer can title them from terms alone. Returns the written path, or
+    ``None`` when the frame lacks the needed columns (sample/partial data).
     """
     if "topic" not in clusters_df.columns or "article_id" not in clusters_df.columns:
         return None
     rows = clusters_df[clusters_df["topic"] != NOISE_TOPIC]
     if rows.empty:
         return None
+    cfg = cfg or load_config()
 
     counts = rows.groupby("topic")["article_id"].nunique()
     date_ranges: dict[int, tuple[str, str]] = {}
@@ -392,20 +399,44 @@ def write_cluster_directory(
                 for cid, lo, hi in zip(g.min().index, g.min(), g.max())
             }
 
+    # Forming window (ADR-071): onset within the ADR-059 recency window of the
+    # corpus frontier, measured over the whole corpus.
+    recency_weeks = int(cfg["stages"]["newly_emerging_recency_weeks"])
+    forming_floor = int(
+        ((cfg.get("display") or {}).get("forming") or {}).get("min_articles", 3)
+    )
+    frontier = max((hi for _, hi in date_ranges.values()), default=None)
+    forming_cut = (
+        (pd.to_datetime(frontier) - pd.Timedelta(weeks=recency_weeks)).date().isoformat()
+        if frontier
+        else None
+    )
+
     surfaced = {int(c) for c in fit_ids}
     entries = []
     for cid in sorted(int(c) for c in counts.index):
         nm = names.get(cid)
-        entries.append(
-            {
-                "cluster_id": cid,
-                "label": _terms_from_topic_info(topic_info, cid)[0],
-                "label_human": getattr(nm, "title", None),
-                "n_articles": int(counts[cid]),
-                "date_range": list(date_ranges[cid]) if cid in date_ranges else None,
-                "surfaced": cid in surfaced,
-            }
+        n_articles = int(counts[cid])
+        dr = date_ranges.get(cid)
+        forming = bool(
+            forming_cut
+            and cid not in surfaced
+            and dr is not None
+            and dr[0] >= forming_cut
+            and n_articles >= forming_floor
         )
+        entry = {
+            "cluster_id": cid,
+            "label": _terms_from_topic_info(topic_info, cid)[0],
+            "label_human": getattr(nm, "title", None),
+            "n_articles": n_articles,
+            "date_range": list(dr) if dr else None,
+            "surfaced": cid in surfaced,
+            "forming": forming,
+        }
+        if forming:
+            entry["terms"] = _terms_from_topic_info(topic_info, cid)[1]
+        entries.append(entry)
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
