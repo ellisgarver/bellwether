@@ -120,7 +120,7 @@ const direction = (d: any) =>
     <div class="cols-2">
       <div>
         <p class="eyebrow">where it sits now</p>
-        <h2>{n.stage} characterization</h2>
+        <h2>currently {n.stage}</h2>
         <table class="facts">
           <tr><td>trajectory test</td><td>modified Mann–Kendall</td></tr>
           <tr><td>recent trend</td><td>{trendWord}</td></tr>
@@ -131,12 +131,12 @@ const direction = (d: any) =>
         <p class="caption">
           {num(sirP.doubling_time_up) && num(sirP.half_life_down) ? (
             sirGoodFit ? (
-              <>SIR lens (display only): the wave doubled every {num(sirP.doubling_time_up, 1)} days on the way up and halved every {num(sirP.half_life_down, 1)} days on the way down (asymmetry {num(sirP.asymmetry, 1)}×). This describes how it spread and faded, not where it sits now.</>
+              <>as an epidemic wave: attention doubled every {num(sirP.doubling_time_up, 1)} days on the rise and halved every {num(sirP.half_life_down, 1)} days on the fall (asymmetry {num(sirP.asymmetry, 1)}×) — the shape of its spread; the stage above is read from the recent trend.</>
             ) : (
-              <>SIR lens is a <strong>poor fit</strong> for this narrative (R² {num(sirP.r2)}) — its shape isn't a clean rise-and-fall, so the rise/decay numbers aren't meaningful here. The lens is still available on the chart for comparison; the stage comes from the model-free trend test above.</>
+              <>this narrative doesn't trace a single rise-and-fall wave (SIR R² {num(sirP.r2)}), so no spread rates are reported; the stage is read from the recent trend above.</>
             )
           ) : (
-            <>SIR lens unavailable here; the stage is read from the trend test above.</>
+            <>the stage is read from the recent trend above.</>
           )}
         </p>
       </div>
@@ -290,8 +290,8 @@ const direction = (d: any) =>
       b.title = !f.curve
         ? (f.failure_reason || "no fitted curve")
         : (poor
-            ? `low fit quality (R²=${r2 != null ? r2.toFixed(2) : "n/a"}) — this shape doesn't describe this narrative well; shown for comparison`
-            : `good fit (R²=${r2 != null ? r2.toFixed(2) : "n/a"})`);
+            ? `a weak match for this narrative's shape (R² ${r2 != null ? r2.toFixed(2) : "n/a"}) — shown for comparison`
+            : `R² ${r2 != null ? r2.toFixed(2) : "n/a"} — the share of the curve this lens explains`);
       b.addEventListener("click", () => {
         activeFit = i; resetView(); render();
         [...tabsEl.children].forEach((c, j) => c.classList.toggle("active", j === i));

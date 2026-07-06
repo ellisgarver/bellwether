@@ -128,7 +128,7 @@ const example =
         </svg>
         <div>
           <strong>SIR epidemic</strong> <span class="cite">(Kermack &amp; McKendrick, 1927)</span>
-          <p>splits the population into susceptible, infected, and recovered with an infection rate β and a recovery rate γ; their ratio β/γ is R₀.</p>
+          <p>treats attention as an outbreak — a wave that spreads, peaks, and burns out — measured by how fast it doubled on the way up and halved on the way down.</p>
         </div>
       </div>
       <div class="lens-card">
@@ -153,10 +153,11 @@ const example =
       </div>
     </div>
     <p>
-      each fit is done with Bayesian inference (PyMC): the fit returns a posterior
-      distribution, so every estimate carries a confidence interval. the lenses are
-      compared with AICc, a small-sample penalised likelihood, as a diagnostic of
-      which lens fits best; all four fits remain available for every narrative.
+      each curve is fit by bounded least squares and scored with R², the share of
+      the volume's variation the curve explains. every lens stays available on
+      every narrative — the chart opens on the best-scoring one, and lenses whose
+      shape doesn't match the story are grayed rather than hidden, so the fit
+      quality is always visible alongside the fit.
     </p>
     <p>
       the lenses describe shape; they do not assign the stage. the stage is read
@@ -173,14 +174,11 @@ const example =
       <li class="z"><span class="k">dormant</span><span>no trend, and recent volume has fallen well below the narrative's own peak — faded out</span></li>
     </ul>
     <p>
-      the SIR lens still answers &ldquo;how did it spread and fade?&rdquo; — but as
-      two measured rates rather than a reproduction number. it reports how fast the
-      wave doubled on the way up and how fast it halved on the way down, and their
-      ratio (its asymmetry). a reproduction number R₀ is not shown: it cannot be
-      pinned from a single attention curve without knowing the audience it could
-      have reached, so we report only what the curve itself measures. none of these
-      set the stage — a story that spread sharply and has since faded reads as decay
-      today, whatever its rise was.
+      the SIR lens answers &ldquo;how did it spread and fade?&rdquo; with two
+      measured rates: how fast the wave doubled on the way up, how fast it halved
+      on the way down, and their ratio — its asymmetry. none of these set the
+      stage: a story that spread sharply and has since faded reads as decay today,
+      whatever its rise was.
     </p>
   </section>
 
@@ -205,11 +203,9 @@ const example =
       after the press. one lag is one week; lags range from one to four.
     </p>
     <p class="muted">
-      Granger precedence measures timing, not cause. each narrative runs one test
-      among many, so at the stated thresholds some &ldquo;significant&rdquo; verdicts
-      arise by chance. narratives with too few weeks of market overlap, or press
-      coverage that begins around 2017 with Media Cloud, report &ldquo;insufficient
-      data&rdquo;.
+      Granger precedence measures timing, not cause — it tells you which series
+      moved first, not which one drove the other. narratives with too few weeks
+      of overlap report &ldquo;insufficient data&rdquo;.
     </p>
     <p>
       top articles for each narrative are listed for context. the
