@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# Publish the site from the latest RCC artifacts: pull, resolve any new display
-# names (cache-incremental; needs Ollama running locally for misses), build with
-# the GitHub Pages paths, and deploy to the gh-pages branch.
+# Publish the site from the latest RCC artifacts: pull artifacts + the RCC-
+# generated name cache (ADR-073: the mnd-name job does the bulk naming on RCC),
+# run the local name pass as a cache-hit no-op / gap-filler (misses need a local
+# Ollama), build with the GitHub Pages paths, and deploy to gh-pages.
 #
 #   bash scripts/publish.sh                # full: pull data + name + build + deploy
 #   bash scripts/publish.sh --site-only    # copy/style edits: build + deploy only
 #
 # Overridable via env: RCC (ssh target), REMOTE (artifacts dir on RCC),
-# SITE / BASE (Pages URL parts).
+# REMOTE_REPO (repo root on RCC), SITE / BASE (Pages URL parts).
 set -euo pipefail
 
 RCC="${RCC:-ehgarver@midway3.rcc.uchicago.edu}"
-REMOTE="${REMOTE:-/scratch/midway3/ehgarver/macro-narrative-dynamics/data/processed/dashboard/}"
+REMOTE_REPO="${REMOTE_REPO:-/scratch/midway3/ehgarver/macro-narrative-dynamics}"
+REMOTE="${REMOTE:-$REMOTE_REPO/data/processed/dashboard/}"
 SITE="${SITE:-https://ellisgarver.github.io}"
 BASE="${BASE:-/bellwether}"
 SITE_ONLY=0
@@ -20,10 +22,12 @@ SITE_ONLY=0
 cd "$(dirname "$0")/.."
 
 if [[ "$SITE_ONLY" == "0" ]]; then
-  echo "==> pulling artifacts from RCC"
+  echo "==> pulling artifacts + name cache from RCC"
   rsync -av --delete --exclude='.*' "$RCC:$REMOTE" data/processed/dashboard/
+  # No --delete: the cache is accumulative by design (ADR-056/070).
+  rsync -av "$RCC:$REMOTE_REPO/data/naming_cache/" data/naming_cache/
 
-  echo "==> resolving display names (cache hits are free; misses need Ollama)"
+  echo "==> resolving display names (no-op when the RCC name job covered everything)"
   python scripts/run_pipeline.py name
 
   if ! git diff --quiet -- data/naming_cache; then

@@ -270,7 +270,8 @@ class TestWrite:
 
 def test_cluster_directory_flags_forming(tmp_path):
     """ADR-071: sub-floor clusters with recent onsets and enough articles are
-    flagged forming (with terms); surfaced and single-document clusters are not."""
+    flagged forming; surfaced and single-document clusters are not. Every
+    non-surfaced entry carries terms for directory-wide titling (ADR-073)."""
     import json
 
     import pandas as pd
@@ -302,5 +303,7 @@ def test_cluster_directory_flags_forming(tmp_path):
     path = write_cluster_directory(df, ti, fit_ids=[1], names={}, out_dir=tmp_path, cfg=cfg)
     by_id = {c["cluster_id"]: c for c in json.loads(path.read_text())["clusters"]}
     assert by_id[1]["surfaced"] and not by_id[1]["forming"]
+    assert "terms" not in by_id[1]  # surfaced: titled from its story card
     assert by_id[2]["forming"] and by_id[2]["terms"] == ["c", "d"]
     assert not by_id[3]["forming"]  # single document
+    assert by_id[3]["terms"] == ["e", "f"]  # non-surfaced entries all carry terms

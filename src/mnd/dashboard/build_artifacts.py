@@ -374,11 +374,14 @@ def write_cluster_directory(
     a searchable directory of the entire corpus without baking 7,000+ full
     artifacts.
 
+    Every non-surfaced entry carries its c-TF-IDF ``terms`` so the naming layer
+    can title the whole directory from terms alone (ADR-073); surfaced clusters
+    are titled from their full story cards and need no directory terms.
     Sub-floor clusters whose onset falls within the ADR-059 recency window and
     which span at least ``display.forming.min_articles`` distinct articles are
-    flagged ``forming`` (ADR-071) and carry their c-TF-IDF ``terms`` so the
-    naming layer can title them from terms alone. Returns the written path, or
-    ``None`` when the frame lacks the needed columns (sample/partial data).
+    additionally flagged ``forming`` (ADR-071) for the emerging page. Returns
+    the written path, or ``None`` when the frame lacks the needed columns
+    (sample/partial data).
     """
     if "topic" not in clusters_df.columns or "article_id" not in clusters_df.columns:
         return None
@@ -434,7 +437,7 @@ def write_cluster_directory(
             "surfaced": cid in surfaced,
             "forming": forming,
         }
-        if forming:
+        if cid not in surfaced:
             entry["terms"] = _terms_from_topic_info(topic_info, cid)[1]
         entries.append(entry)
 
