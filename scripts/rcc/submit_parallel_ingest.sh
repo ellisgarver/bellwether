@@ -10,7 +10,7 @@
 #     | cea | voxeu | brookings | piie | cbo | nber ]  (all parallel)
 #                              │  (afterok: every ingest job)
 #                              ▼
-#         filter-pre-embed → filter → embed (primary) → cluster → analyze
+#   filter-pre-embed → filter → embed (primary) → cluster → analyze → name
 #
 # Why parallel instead of a single chained composite job:
 # the composite runs all 12 sources sequentially in one job, so a long pole
@@ -30,6 +30,11 @@
 #   # Re-run only specific sources (e.g. ones that failed), no downstream:
 #   SOURCES="cbo nber" SKIP_DOWNSTREAM=1 bash scripts/rcc/submit_parallel_ingest.sh
 #
+#   # Chain ONLY the downstream stages (no cleanup, no ingest) — e.g. after a
+#   # timed-out long-pole source was resumed by hand. DEP is optional: job id(s)
+#   # (colon-separated) the chain must wait on; empty starts filter immediately.
+#   ONLY_DOWNSTREAM=1 DEP=51501234 bash scripts/rcc/submit_parallel_ingest.sh
+#
 #   # Hard-delete prior data instead of archiving (DESTRUCTIVE):
 #   NUKE_PRIOR=1 bash scripts/rcc/submit_parallel_ingest.sh
 #
@@ -47,6 +52,8 @@ SKIP_CLEANUP="${SKIP_CLEANUP:-0}"
 NUKE_PRIOR="${NUKE_PRIOR:-0}"
 NUKE_RAW="${NUKE_RAW:-0}"
 SKIP_DOWNSTREAM="${SKIP_DOWNSTREAM:-0}"
+ONLY_DOWNSTREAM="${ONLY_DOWNSTREAM:-0}"
+DEP="${DEP:-}"
 COMPARATOR="${COMPARATOR:-0}"
 
 # All 12 basis-set sources, ordered longest-pole-first so they enter the queue
@@ -85,7 +92,10 @@ echo "=========================================="
 # ---------------------------------------------------------------------------
 # 1. Clear / archive prior output
 # ---------------------------------------------------------------------------
-if [[ "$SKIP_CLEANUP" == "1" ]]; then
+if [[ "$ONLY_DOWNSTREAM" == "1" ]]; then
+    echo ">> ONLY_DOWNSTREAM=1 — skipping cleanup + ingest; chaining downstream" \
+         "$([[ -n "$DEP" ]] && echo "on afterok:$DEP" || echo "with no dependency")"
+elif [[ "$SKIP_CLEANUP" == "1" ]]; then
     echo ">> SKIP_CLEANUP=1 — leaving prior data in place"
 else
     TS="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -122,35 +132,40 @@ mkdir -p "${REPO_ROOT}/logs" "${REPO_ROOT}/data/raw/articles" "${REPO_ROOT}/data
 # ---------------------------------------------------------------------------
 # 2. Submit one ingest job per source (all parallel, no inter-dependency)
 # ---------------------------------------------------------------------------
-echo ""
-echo ">> Submitting per-source ingest jobs ..."
 ING_IDS=()
-for s in $SOURCES; do
-    h="${HOURS[$s]:-12}"
-    jid=$(sbatch --parsable \
-        --job-name="mnd-ing-$s" \
-        --time="${h}:00:00" \
-        --export=ALL,SOURCE="$s",START="$START",END="$END" \
-        scripts/rcc/ingest_source_rcc.sh)
-    printf "   %-15s -> job %s (%sh)\n" "$s" "$jid" "$h"
-    ING_IDS+=("$jid")
-done
-
-if [[ "$SKIP_DOWNSTREAM" == "1" ]]; then
+if [[ "$ONLY_DOWNSTREAM" != "1" ]]; then
     echo ""
-    echo ">> SKIP_DOWNSTREAM=1 — not chaining filter/embed/cluster."
-    echo "   Ingest jobs: ${ING_IDS[*]}"
-    exit 0
+    echo ">> Submitting per-source ingest jobs ..."
+    for s in $SOURCES; do
+        h="${HOURS[$s]:-12}"
+        jid=$(sbatch --parsable \
+            --job-name="mnd-ing-$s" \
+            --time="${h}:00:00" \
+            --export=ALL,SOURCE="$s",START="$START",END="$END" \
+            scripts/rcc/ingest_source_rcc.sh)
+        printf "   %-15s -> job %s (%sh)\n" "$s" "$jid" "$h"
+        ING_IDS+=("$jid")
+    done
+
+    if [[ "$SKIP_DOWNSTREAM" == "1" ]]; then
+        echo ""
+        echo ">> SKIP_DOWNSTREAM=1 — not chaining filter/embed/cluster."
+        echo "   Ingest jobs: ${ING_IDS[*]}"
+        exit 0
+    fi
+    DEP="$(IFS=:; echo "${ING_IDS[*]}")"
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Chain downstream stages on afterok of EVERY ingest job
+# 3. Chain downstream stages on afterok of the ingest jobs (or $DEP)
 # ---------------------------------------------------------------------------
-DEP="$(IFS=:; echo "${ING_IDS[*]}")"
-
 echo ""
-echo ">> Submitting filter-pre-embed (afterok:all ingest) ..."
-FILTER_PRE=$(sbatch --parsable --dependency=afterok:$DEP scripts/rcc/filter_pre_embed_rcc.sh)
+echo ">> Submitting filter-pre-embed $([[ -n "$DEP" ]] && echo "(afterok:$DEP)" || echo "(no dependency)") ..."
+if [[ -n "$DEP" ]]; then
+    FILTER_PRE=$(sbatch --parsable --dependency=afterok:$DEP scripts/rcc/filter_pre_embed_rcc.sh)
+else
+    FILTER_PRE=$(sbatch --parsable scripts/rcc/filter_pre_embed_rcc.sh)
+fi
 echo "   filter-pre-embed: $FILTER_PRE"
 
 FILTER=$(sbatch --parsable --dependency=afterok:$FILTER_PRE scripts/rcc/filter_rcc.sh)
@@ -170,6 +185,9 @@ echo "   cluster:          $CLUSTER"
 ANALYZE=$(sbatch --parsable --dependency=afterok:$CLUSTER scripts/rcc/analyze_cpu_rcc.sh)
 echo "   analyze:          $ANALYZE"
 
+NAME=$(sbatch --parsable --dependency=afterok:$ANALYZE scripts/rcc/name_rcc.sh)
+echo "   name:             $NAME"
+
 cat <<EOF
 
 ==========================================
@@ -185,10 +203,12 @@ Downstream (afterok-chained):
 $( [[ "$COMPARATOR" == "1" ]] && echo "  embed comparator: $EMBED_COMPARATOR" )
   cluster:          $CLUSTER
   analyze:          $ANALYZE
+  name:             $NAME
 
 If any single source fails (0 articles → job exits 1), the afterok chain holds.
-Re-run just that source, then re-launch downstream:
+Re-run just that source, then re-launch downstream against the new job id:
   SOURCES="<failed_source>" SKIP_DOWNSTREAM=1 SKIP_CLEANUP=1 bash scripts/rcc/submit_parallel_ingest.sh
-  # then submit filter_pre_embed_rcc.sh ... cluster_rcc.sh with the new dependency
+  scancel <stale downstream job ids>
+  ONLY_DOWNSTREAM=1 DEP=<new ingest job id> bash scripts/rcc/submit_parallel_ingest.sh
 ==========================================
 EOF
