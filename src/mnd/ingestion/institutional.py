@@ -2735,9 +2735,13 @@ class CBOIngestor(Ingestor):
         self._done_pids.add(pid)
 
     def fetch(self, start: date, end: date) -> Iterator[Article]:
+        import time as _time
+
         cdx_map = self._build_or_load_cdx_map(start, end)
         yielded = 0
         skipped_done = 0
+        fetched = 0
+        walk_t0 = _time.monotonic()
         # Ascending pid order so the walk is deterministic and resumable: the
         # checkpoint a prior job wrote names exactly the low-id span already
         # covered, and we pick up at the next unmarked pid.
@@ -2801,6 +2805,19 @@ class CBOIngestor(Ingestor):
             # dropped pid, there was nothing to write). The checkpoint
             # therefore never marks a pid done before its record is durable.
             self._mark_done(pid)
+            fetched += 1
+            # Periodic walk position. The walk drops the entire pre-window id
+            # band before its first yield (~11.6k of ~25k pids in the 2010-
+            # window run), so a long yield-less stretch is normal — without
+            # this line the job log is silent for many hours and indistinguishable
+            # from a hang.
+            if fetched % 250 == 0:
+                rate = fetched / max(_time.monotonic() - walk_t0, 1e-9)
+                log.info(
+                    "CBO walk: at pub/%d — %d fetched this run (%.1f s/pid), "
+                    "%d kept, %d resumed-skip",
+                    pid, fetched, 1.0 / max(rate, 1e-9), yielded, skipped_done,
+                )
         if yielded == 0 and skipped_done == 0:
             log.warning(
                 "CBO: 0 publications from Wayback in [%s..%s]. Either the "
