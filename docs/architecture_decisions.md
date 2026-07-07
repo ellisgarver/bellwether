@@ -5414,6 +5414,48 @@ re-fetch the recent window.
 
 ---
 
+## ADR-072: NBER not-found detection — a 403 landed on www2.nber.org counts as a gap, not a block
+
+- **Status**: Accepted
+- **Date**: 2026-07-06
+
+### Context
+
+The NBER ingestor enumerates paper IDs (`w15500..ceiling`) and stops after a
+run of consecutive 404s, which historically marked the head of the series
+(ADR-030 fail-loud rules treat any other HTTP error as systemic — outage or
+bot-blocking — and abort the run rather than silently skipping papers).
+
+Observed 2026-07-06: nber.org changed its not-found behavior. A nonexistent
+paper ID no longer returns 404 — `www.nber.org/papers/wNNNNN` now 301-redirects
+to `www2.nber.org/papers/wNNNNN`, which answers 403. Verified from two
+networks: existing papers (w35429 and below) return 200 directly on
+`www.nber.org` with no redirect; every ID past the series head (w35430,
+w38000, w99999) redirects to www2 and 403s. The full catch-up ingest walked
+the entire series successfully, reached the head, and then failed loud on the
+first nonexistent ID — the 404 stop rule can never fire again.
+
+### Decision
+
+Treat a 403 whose final response URL is on `www2.nber.org` (i.e. reached via
+redirect off the canonical host) as a not-found equivalent: it increments the
+consecutive-not-found counter that terminates the walk. A 403 answered
+directly by `www.nber.org` — no redirect — remains a systemic failure and
+still aborts loud, since that is the shape genuine bot-blocking takes.
+
+### Consequences
+
+- The head-of-series stop works again under NBER's new routing; full re-ingests
+  complete instead of dying at head+1.
+- The fail-loud guarantee of ADR-030 is preserved for real blocks and outages:
+  only the specific redirect-to-www2 signature is reclassified, not 403s in
+  general.
+- If NBER changes routing again (e.g. www2 starts answering 200 for real
+  papers), the enumeration stop depends on this signature and must be
+  re-verified.
+
+---
+
 ## ADR-071: Forming narratives — sub-floor clusters with recent onsets surface on the emerging page
 
 - **Status**: Accepted
