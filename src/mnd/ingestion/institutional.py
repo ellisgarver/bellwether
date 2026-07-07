@@ -5464,12 +5464,22 @@ class NBERIngestor(Ingestor):
                 resp = _get(url, timeout=30.0)
             except requests.exceptions.HTTPError as exc:
                 status = getattr(exc.response, "status_code", None)
-                if status == 404:
+                final_url = getattr(exc.response, "url", "") or ""
+                # Nonexistent paper IDs no longer 404: since 2026-07 nber.org
+                # 301-redirects them to www2.nber.org, which answers 403
+                # (ADR-072). A 403 that landed on www2 via redirect is
+                # therefore a not-found, while a 403 answered directly by
+                # www.nber.org is still genuine blocking and falls through
+                # to the fail-loud path below.
+                not_found = status == 404 or (
+                    status == 403 and "www2.nber.org" in final_url
+                )
+                if not_found:
                     consecutive_404 += 1
                     if consecutive_404 >= self._STOP_AFTER_CONSECUTIVE_404S:
                         log.info(
-                            "NBER: stopping at %s — %d consecutive 404s "
-                            "(walked off head of series)",
+                            "NBER: stopping at %s — %d consecutive not-found "
+                            "responses (walked off head of series)",
                             paper_id, consecutive_404,
                         )
                         break
