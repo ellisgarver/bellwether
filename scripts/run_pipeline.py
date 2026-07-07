@@ -1169,13 +1169,14 @@ def name_artifacts(ctx: click.Context, artifacts_dir: str | None) -> None:
         len(names), len(inputs), art_dir,
     )
 
-    # Forming clusters (ADR-071): titles only, grounded on terms — a handful per
-    # week, patched into the directory. Surfaced entries also pick up the titles
-    # generated above so the directory matches the narrative pages.
+    # Directory titles (ADR-073): every non-surfaced cluster with baked terms
+    # gets a terms-grounded title — the whole directory, forming and sub-floor
+    # alike, not just the forming handful (ADR-071). Surfaced entries pick up
+    # the titles generated above so the directory matches the narrative pages.
     dir_path = art_dir / "clusters_all.json"
     if dir_path.exists():
         directory = json.loads(dir_path.read_text(encoding="utf-8"))
-        forming_inputs = [
+        directory_inputs = [
             NamingInput(
                 cluster_id=int(c["cluster_id"]),
                 terms=[str(t) for t in (c.get("terms") or [])],
@@ -1184,21 +1185,21 @@ def name_artifacts(ctx: click.Context, artifacts_dir: str | None) -> None:
                 sources=[],
             )
             for c in directory.get("clusters", [])
-            if c.get("forming") and (c.get("terms") or [])
+            if not c.get("surfaced") and (c.get("terms") or [])
         ]
-        forming_names = generate_names(forming_inputs, cfg) if forming_inputs else {}
+        directory_names = generate_names(directory_inputs, cfg) if directory_inputs else {}
         patched = 0
         for c in directory.get("clusters", []):
             cid = int(c["cluster_id"])
-            nm = forming_names.get(cid) or names.get(cid)
+            nm = directory_names.get(cid) or names.get(cid)
             if nm is not None and c.get("label_human") != nm.title:
                 c["label_human"] = nm.title
                 patched += 1
         if patched:
             dir_path.write_text(json.dumps(directory, ensure_ascii=False), encoding="utf-8")
         log.info(
-            "name: %d forming clusters titled, %d directory entries patched",
-            len(forming_names), patched,
+            "name: %d directory clusters titled, %d directory entries patched",
+            len(directory_names), patched,
         )
 
 

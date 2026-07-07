@@ -86,6 +86,8 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 069 | **Anchor recovery scoped to anchor-relevant articles — window rows filtered by the anchor's fixed `key_terms` (registry, Phase 0), chunks folded to articles (majority topic), concentration = largest single non-noise cluster share with outliers kept in the denominator, threshold 0.50 unchanged. Replaces whole-window concentration, which is unsatisfiable on the full-breadth ADR-020 corpus (0/10 with the outlier bucket winning every plurality — a metric artifact)** | Live (amends 019 validation clause; relates 020/040) |
 | 070 | **Name-cache signature excludes the date span — a continuing narrative's weekly-extending span no longer invalidates its title, so weekly merges (066 Part C) keep display names stable; titles regenerate only when terms/excerpts/sources change. One-time full re-name absorbed into the post-rebuild naming pass** | Live (amends 056; relates 066/067) |
 | 071 | **Forming narratives — the directory bakes a `forming` flag (non-surfaced, onset within the ADR-059 window, ≥ `display.forming.min_articles`=3 articles, so single-document clusters stay out) with terms for terms-only naming; the emerging page lists them compactly and they graduate to full pages past the ADR-051 floor via the weekly merge** | Live (extends 051/059/066; display-only) |
+| 072 | **NBER not-found detection — a 403 whose final URL is on `www2.nber.org` (reached via redirect off the canonical host) counts toward the consecutive-not-found stop; a direct 403 on `www.nber.org` still aborts loud (real bot-blocking shape). NBER retired 404s at the series head, so the old stop rule could never fire** | Live (amends the ADR-030 fail-loud rule for this one signature) |
+| 073 | **Directory-wide display titles + naming on RCC — every non-surfaced directory entry bakes its c-TF-IDF terms and gets a terms-grounded title (one uniform rule, no new size cutoff); descriptions/fits/pages stay surfaced-only (051 is identifiability, not compute). Naming runs as an `mnd-name` job chained after analyze (user-space Ollama on scratch, GPU), patching artifacts in place; publish.sh pulls the cache and keeps local naming as cache-hit no-op / gap-filler** | Live (amends 067 execution default + 071 scope; display-only) |
 | 059 | **Emerging flag is recency-only — a narrative is emerging iff its onset falls within the 4-week recency window of the corpus frontier, regardless of stage; drops the earlier `stage == growth` gate so a just-arrived narrative whose short history hasn't yet registered a significant trend is still surfaced as newly arrived** | Live (amends 052 emerging clause; relates 016/057) |
 | 058 | **Peak-relative plateau test — `stable` vs `dormant` keyed to the narrative's own high-water window, not its quiet floor; fixes the all-`stable` collapse (342/365) where institutional tails made "above the floor" trivially true. MWU on the zero-heavy daily series was under-powered, so the split is by level: recent-window mean below `dormant_peak_fraction`=0.25 of the peak-window mean → dormant (a definition, not tuned to recovery)** | Live (amends 052 §2/§3 Level test; relates 040) |
 | 057 | **Phase-6 live emerging (design) — two display-only signals: institutional onset (existing) + press heating (4wk vs 52wk baseline, k=2, on Media Cloud attention-share); weekly refresh builds onto the model via BERTopic `merge_models` (ids/URLs/names preserved, new topics appended above τ); manual now → cron later; novel press-only clustering scoped out (ADR-010)** | Live design; press-heating + weekly-refresh implementations each need a follow-up ADR (relates 010/016/020/042/046/048/050/056) |
@@ -5411,6 +5413,78 @@ re-fetch the recent window.
 - **Relates.** ADR-065 (same content-addressed caching philosophy), ADR-063 (the
   `update` this makes fast), ADR-064 (press-heating reads the same cached series),
   ADR-047/042/048 (the overlays), ADR-050 (incremental-delta precedent).
+
+---
+
+## ADR-073: Directory-wide display titles; naming runs on RCC chained after analyze
+
+- **Status**: Accepted
+- **Date**: 2026-07-07
+
+### Context
+
+ADR-067 made naming key-free (open Llama via an OpenAI-compatible endpoint) but
+execution stayed on the laptop, only because that is where an Ollama happened to
+be running. ADR-071 then scoped directory naming to forming clusters ("a handful
+per week, not a 7,000-cluster naming run").
+
+The full rebuild exposes the cost profile behind that scoping. Since ADR-067 the
+analyze bake itself finishes in minutes; naming is the only remaining hours-scale
+display step (~6–8 s per cluster on laptop Ollama at ~13 tok/s), and a full
+re-cluster invalidates every ADR-070 signature at once, so the first bake after a
+rebuild pays the whole cost. Meanwhile the cluster directory lists all 7,242
+non-noise clusters but only the 365 surfaced ones (plus forming) carry readable
+names — the rest display raw c-TF-IDF labels (`23_nps_lands_acres_park`), leaving
+the site's directory mostly unreadable.
+
+Two facts frame the fix. First, the ADR-051 floor is an identifiability bound,
+not a compute budget: sub-floor clusters (median 7 articles) cannot support a
+3-parameter lifecycle fit, so fits, stages, and narrative pages must not extend
+below it regardless of what naming costs. Second, titles are display-only
+(ADR-056) and can extend to the whole directory freely. The directory JSON is
+read at site build time (Node `fs`), not fetched by the browser, so baking terms
+into every entry costs artifact bytes, not page weight.
+
+### Decision
+
+1. **Terms for every non-surfaced directory entry.** `clusters_all.json` bakes
+   the c-TF-IDF `terms` for each non-surfaced cluster, not only forming ones.
+   Surfaced clusters keep their full story-card grounding and need no directory
+   terms.
+2. **Titles for the whole directory.** The `name` command titles every
+   non-surfaced entry that carries terms — terms-grounded titles exactly as
+   forming clusters get today, one uniform rule with no new size cutoff to
+   defend. Descriptions, fits, stages, and narrative pages remain surfaced-only
+   (ADR-051 unchanged).
+3. **Naming executes on RCC.** A new `mnd-name` job (`scripts/rcc/name_rcc.sh`)
+   chains `afterok` on analyze: it serves a user-space Ollama from scratch
+   storage (binary + models under `/scratch/.../ollama`, GPU-accelerated on the
+   gpu partition) and runs the existing `name` command against the baked
+   artifacts, patching them in place. Same open model, same endpoint scheme,
+   same committed cache and ADR-070 signatures — only the execution host moves.
+4. **Local publish becomes pull + fallback + deploy.** `publish.sh` additionally
+   rsyncs `data/naming_cache/` back from the RCC repo and still runs the local
+   `name` pass, which is a cache-hit no-op when the RCC job covered everything
+   and a gap-filler (local Ollama) when it did not, then commits the cache.
+
+### Consequences
+
+- The directory is readable end to end; the one-time ~7k title backfill runs on
+  an A100 in hours instead of overnight on the laptop, and weekly steady-state
+  misses stay a handful either way (ADR-070 signatures survive the merge).
+- The laptop is no longer on the critical path for naming; the remaining local
+  steps are the site build and gh-pages deploy, kept local deliberately (git
+  credentials, pre-deploy eyeball).
+- Sub-floor titles are grounded on terms alone, so they are plainer than
+  surfaced titles — acceptable for a directory index; the prompt's no-invention
+  rule holds.
+- `clusters_all.json` grows by the terms arrays (~1–2 MB on disk); build-time
+  read only.
+- If the a100 queue is backed up, the job degrades gracefully: Ollama falls back
+  to CPU inference on any partition, slow but resumable, since every title is
+  cache-incremental.
+- Amends ADR-071 (directory naming scope) and the execution-location default of
+  ADR-067; ADR-040/051/056/070 untouched.
 
 ---
 
