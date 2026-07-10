@@ -349,10 +349,14 @@ update:
   buffer_days: 14
   # Window start for a source that has no articles yet (matches the corpus window).
   full_start: "2010-01-01"
-  # Weekly incremental re-cluster (ADR-066 Part C). Off until the identity gate
-  # (every existing topic id survives the merge) has passed once on the real
-  # corpus; until then new institutional articles stay parked at ingest.
-  merge_enabled: false
+  # Weekly incremental re-cluster (ADR-066 Part C). Enabled for the autonomous
+  # weekly loop: the merge is protected by a RUNTIME identity gate (merge-week
+  # aborts and parks the delta, leaving the narrative set untouched, if any
+  # existing topic id would fail to survive), so turning this on cannot corrupt
+  # the base model in any state. Before the base model exists, `update` just
+  # parks and continues. The first post-rebuild merge is the live validation of
+  # merge_min_similarity — watch that run's merge-week log for a parked delta.
+  merge_enabled: true
   # merge_models topic-similarity threshold (BERTopic library default).
   merge_min_similarity: 0.7
 
