@@ -56,6 +56,15 @@ BASIS_SET_SOURCES = (
     "treasury_ofr", "cea", "voxeu", "brookings", "piie", "cbo", "nber",
 )
 
+# Composite sources whose ingested articles carry per-sub source_ids — the
+# corpus never contains the composite id itself, so the composite's frontier
+# must be computed across its subs. Without this mapping the lookup always
+# misses and the weekly delta silently restarts at full_start: a 16-year
+# re-walk of all four regional Feds, every single week.
+COMPOSITE_SOURCE_IDS: dict[str, tuple[str, ...]] = {
+    "fed_regional": ("fed_atlanta", "fed_chicago", "fed_ny", "fed_sf"),
+}
+
 
 def _source_delta_windows(
     articles_df: "pd.DataFrame",
@@ -69,7 +78,10 @@ def _source_delta_windows(
     Each source advances from its *own* last-captured ``published_at`` minus
     ``buffer_days`` (so the staggered per-source frontiers do not leave gaps), to
     ``today``; the buffer overlap is absorbed by URL/content dedup. A source with no
-    articles yet starts at ``full_start``. Returns ``[(source, start, end), ...]``.
+    articles yet starts at ``full_start``. A composite source (see
+    ``COMPOSITE_SOURCE_IDS``) advances from the *minimum* frontier across its
+    subs — the laggiest sub governs, so no sub is left with a gap; the fresher
+    subs' overlap is absorbed by dedup. Returns ``[(source, start, end), ...]``.
     """
     import pandas as pd
 
@@ -80,11 +92,13 @@ def _source_delta_windows(
     else:
         max_by_source = pd.Series(dtype="datetime64[ns, UTC]")
     for src in sources:
-        last = max_by_source.get(src)
-        if pd.isna(last) if last is not None else True:
+        sub_ids = COMPOSITE_SOURCE_IDS.get(src, (src,))
+        lasts = [max_by_source.get(s) for s in sub_ids]
+        lasts = [t for t in lasts if t is not None and not pd.isna(t)]
+        if not lasts:
             start = full_start
         else:
-            start = (last - pd.Timedelta(days=buffer_days)).date().isoformat()
+            start = (min(lasts) - pd.Timedelta(days=buffer_days)).date().isoformat()
         windows.append((src, start, today))
     return windows
 
@@ -1274,7 +1288,14 @@ def update(
                        output_dir=None, shard=None)
 
     if do_merge:
-        log.info("update: merge path (ADR-066) — filter, incremental embed, merge-week")
+        log.info("update: merge path (ADR-066) — filter-pre-embed, filter, "
+                 "incremental embed, merge-week")
+        # Rebuild corpus_for_embedding.jsonl from the raw dir FIRST: `filter`
+        # prefers that file whenever it exists, and the full build leaves a
+        # stale copy behind — without this refresh the weekly delta would
+        # never reach embed/merge (merge-week reports "no new chunks" forever
+        # while the site keeps re-baking, a silent ADR-030 violation).
+        ctx.invoke(filter_pre_embed, input_dir=None, output=None)
         ctx.invoke(filter_cmd, input_dir=None, input_jsonl=None, output=None)
         ctx.invoke(embed, role="primary", input_path=None, output=None, full_rebuild=False)
         try:

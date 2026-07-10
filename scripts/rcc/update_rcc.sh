@@ -79,9 +79,16 @@ export HF_HUB_OFFLINE=0
 export OMP_NUM_THREADS=2
 export MKL_NUM_THREADS=2
 
-# API keys (GOVINFO_API_KEY for CEA, Media Cloud token, etc.) live in the repo .env.
+# API keys (GOVINFO_API_KEY for CEA, Media Cloud token, etc.) live in the repo
+# .env (scratch). The /home backup copy survives a scratch purge — keep it in
+# sync when keys change: cp .env /home/ehgarver/bellwether-data/.env.backup
 set -a
-[[ -f .env ]] && source .env
+if [[ -f .env ]]; then
+    source .env
+elif [[ -f /home/ehgarver/bellwether-data/.env.backup ]]; then
+    echo "WARNING: repo .env missing (scratch purge?) — using /home backup"
+    source /home/ehgarver/bellwether-data/.env.backup
+fi
 set +a
 
 echo "===== mnd-update (weekly refresh) ====="
@@ -123,25 +130,35 @@ python scripts/run_pipeline.py name
 #    bloats (the dashboard re-bakes whole each week, ~380 MB). The deploy Action
 #    builds from main (code) + site-data (artifacts). Built in a throwaway
 #    worktree so the deployed code checkout is never disturbed. Artifacts are
-#    read through the data/ symlink (-> /home).
+#    read through the data/ symlink (-> /home). The workflow file is copied
+#    INTO the snapshot because push-triggered Actions only run when the
+#    workflow exists on the pushed ref — an orphan branch without it would
+#    trigger no deploy at all.
 ART_BRANCH="site-data"
 git worktree prune
-WT="$(mktemp -d)"
-git worktree add --force --detach "$WT" HEAD
+# The local branch survives from last week's run; delete it so --orphan can
+# recreate it fresh (the remote copy is force-pushed anyway, nothing is lost).
+git branch -D "$ART_BRANCH" 2>/dev/null || true
+WT="$(mktemp -d)/wt"
+git worktree add --detach "$WT" HEAD
 (
     cd "$WT"
     git checkout --orphan "$ART_BRANCH"
-    git reset -q
+    # Empty the inherited index + worktree. NOT `git reset` — HEAD is unborn
+    # on a fresh orphan branch and reset dies resolving it.
+    git rm -rfq . 2>/dev/null || true
     git clean -qfdx
-    mkdir -p data/processed/dashboard data/naming_cache
+    mkdir -p data/processed/dashboard data/naming_cache .github/workflows
     rsync -a --delete --exclude='.fit_cache' "$REPO_ROOT/data/processed/dashboard/" data/processed/dashboard/
     rsync -a --delete "$REPO_ROOT/data/naming_cache/" data/naming_cache/
-    git add -f data/processed/dashboard data/naming_cache
+    cp "$REPO_ROOT/.github/workflows/deploy.yml" .github/workflows/deploy.yml
+    git add -f data/processed/dashboard data/naming_cache .github/workflows
     git -c user.name='mnd-bot' -c user.email='mnd-bot@rcc.local' \
         commit -q -m "site-data snapshot $(date +%F)"
     git push -f origin "$ART_BRANCH"   # fail-loud (job emails FAIL) if creds/branch wrong
 )
 git worktree remove --force "$WT"
+rmdir "$(dirname "$WT")" 2>/dev/null || true
 echo "Pushed site-data snapshot — deploy workflow will rebuild the site."
 
 echo "===== Complete: $(date) ====="

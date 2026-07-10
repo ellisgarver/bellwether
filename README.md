@@ -25,7 +25,9 @@ measured and incorporates other models and lenses of analysis.
   from every source is ingested; nothing is filtered by topic.
 - **Narratives** — documents are embedded with Qwen3-Embedding-8B and clustered
   with BERTopic; each cluster of related writing is a narrative candidate,
-  scoped after the fact against the standard AEA JEL taxonomy and seeded by >= 42.
+  scoped after the fact against the standard AEA JEL taxonomy. Narratives with
+  at least 42 unique articles are charted in full; smaller clusters stay in the
+  directory as forming signals.
 - **Life-cycles** — each narrative's stage (growth, stable, decay, dormant) is
   read model-free from its own volume trajectory with a trend test. Epidemic (SIR),
   logistic, and Bass adoption curves are fit alongside as interpretive lenses,

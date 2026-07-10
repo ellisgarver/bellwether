@@ -10,6 +10,9 @@ name: Deploy site (GitHub Pages)
 # Prereqs (one-time): Settings > Pages serves from the `gh-pages` branch
 # (already the current source). No secret needed — GITHUB_TOKEN is built in.
 
+# NOTE: update_rcc.sh copies this file INTO each site-data snapshot — GitHub
+# only runs push-triggered workflows that exist on the pushed ref, so without
+# the copy a site-data push would trigger nothing. Keep this file self-contained.
 on:
   push:
     branches: [main, site-data]   # code changes on main, or a fresh weekly snapshot
