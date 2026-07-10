@@ -17,22 +17,22 @@
 #   3. Force-push dashboard + naming_cache to the orphan `site-data` branch
 #      (single snapshot, no history growth), which fires deploy.yml to rebuild.
 #
-# Install as SLURM's cron (scrontab), Mondays 06:00:
-#   scrontab -e
-#   ------------------------------------------------------------------
-#   #SCRON --account=pi-dachxiu
-#   #SCRON --partition=caslake
-#   #SCRON --cpus-per-task=8
-#   #SCRON --mem=64G
-#   #SCRON --time=18:00:00
-#   #SCRON --output=/scratch/midway3/ehgarver/macro-narrative-dynamics/logs/update_scron_%j.log
-#   #SCRON --mail-type=END,FAIL --mail-user=ehgarver@uchicago.edu
-#   0 6 * * 1  /scratch/midway3/ehgarver/macro-narrative-dynamics/scripts/rcc/update_rcc.sh
-#   ------------------------------------------------------------------
-#   Verify `scrontab -l` works on Midway3; if disabled, the fallback is a
-#   self-resubmitting job that ends with `sbatch --begin=now+7days ...`.
+# Scheduling: scrontab is DISABLED on Midway3 (verified 2026-07-10), so this
+# job is a SELF-RESUBMITTING chain — the first thing a run does is queue next
+# week's run with `sbatch --begin=now+7days`, guarded so only one successor is
+# ever pending, and done before any work so a failure later in the run never
+# breaks the cadence. The first sbatch IS the enrollment; there is no separate
+# installation step.
 #
-# Run once by hand:  sbatch scripts/rcc/update_rcc.sh
+#   Validate once, no successor:  MND_NO_RESUBMIT=1 sbatch scripts/rcc/update_rcc.sh
+#   Enroll the weekly chain:      sbatch scripts/rcc/update_rcc.sh
+#     (anchor to a weekday/hour:  sbatch --begin=2026-07-13T06:00 scripts/rcc/update_rcc.sh)
+#   Inspect the chain:            squeue -u $USER -n mnd-update
+#   Stop the chain:               scancel -n mnd-update
+#
+# Silence is a signal: the job mails on END and FAIL, so a Monday with no
+# email means the pending successor vanished (e.g. cancelled in a maintenance
+# window) — re-enroll with a fresh sbatch.
 #
 # One-time prerequisites: base model exists (a full rebuild has run cluster),
 # `data` symlinked to /home (link_data_home.sh), git push creds for origin on
@@ -53,6 +53,18 @@ set -euo pipefail
 REPO_ROOT="/scratch/midway3/ehgarver/macro-narrative-dynamics"
 cd "$REPO_ROOT"
 mkdir -p logs
+
+# Perpetuate the weekly chain FIRST — before any work — so a failure later in
+# this run cannot break the cadence (scrontab is disabled on Midway3; the job
+# re-enrolls itself instead). The guard keeps exactly one successor pending.
+if [[ "${MND_NO_RESUBMIT:-0}" != "1" ]]; then
+    if squeue -h -u "$USER" -n mnd-update -t PENDING 2>/dev/null | grep -q .; then
+        echo "Weekly successor already pending — not resubmitting."
+    else
+        NEXT_ID=$(sbatch --parsable --begin=now+7days "$REPO_ROOT/scripts/rcc/update_rcc.sh")
+        echo "Scheduled next weekly run: job $NEXT_ID (begins in 7 days)"
+    fi
+fi
 
 # Guard: data/ must be the /home symlink, or this would write to scratch.
 if [[ ! -L data ]]; then
