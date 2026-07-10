@@ -38,13 +38,17 @@
 #   # Hard-delete prior data instead of archiving (DESTRUCTIVE):
 #   NUKE_PRIOR=1 bash scripts/rcc/submit_parallel_ingest.sh
 #
-# All data under /scratch/midway3/ehgarver/ — never PI project storage.
+# Persistent data under MND_DATA_ROOT (/home, backed up); repo code, HF cache,
+# and prior-output archives on scratch. Never PI project storage (ADR-063).
 # =============================================================================
 
 set -euo pipefail
 
 REPO_ROOT="/scratch/midway3/ehgarver/macro-narrative-dynamics"
-SCRATCH_DATA="/scratch/midway3/ehgarver/data"
+# ADR-063 persistence: data on backed-up /home (never scratch/purge); HF cache stays on scratch
+export MND_DATA_ROOT="/home/ehgarver/bellwether-data"
+# Prior-output archives go to scratch (ephemeral) so /home isn't filled with them.
+SCRATCH_ARCHIVE="/scratch/midway3/ehgarver/_mnd_archive"
 
 START="${START:-2010-01-01}"
 END="${END:-$(date +%Y-%m-%d)}"
@@ -99,14 +103,15 @@ elif [[ "$SKIP_CLEANUP" == "1" ]]; then
     echo ">> SKIP_CLEANUP=1 — leaving prior data in place"
 else
     TS="$(date -u +%Y%m%dT%H%M%SZ)"
-    ARCHIVE_DIR="${SCRATCH_DATA}/_archived_${TS}"
+    ARCHIVE_DIR="${SCRATCH_ARCHIVE}/_archived_${TS}"
+    # Prior output lives under MND_DATA_ROOT (/home) now, not scratch. Archive
+    # the processed base model by default; keep raw unless NUKE_RAW.
     declare -a TARGETS=(
-        "${SCRATCH_DATA}/processed"
-        "${REPO_ROOT}/data/processed"
+        "${MND_DATA_ROOT}/processed"
         "${REPO_ROOT}/logs"
     )
     if [[ "$NUKE_RAW" == "1" ]]; then
-        TARGETS+=( "${SCRATCH_DATA}/raw" "${REPO_ROOT}/data/raw" )
+        TARGETS+=( "${MND_DATA_ROOT}/raw" )
     fi
     if [[ "$NUKE_PRIOR" == "1" ]]; then
         echo ">> NUKE_PRIOR=1 — deleting prior output (DESTRUCTIVE)"
@@ -118,7 +123,7 @@ else
         mkdir -p "$ARCHIVE_DIR"
         for t in "${TARGETS[@]}"; do
             if [[ -e "$t" ]]; then
-                rel="${t#${REPO_ROOT}/}"; rel="${rel#${SCRATCH_DATA}/}"
+                rel="${t#${MND_DATA_ROOT}/}"; rel="${rel#${REPO_ROOT}/}"
                 dest="${ARCHIVE_DIR}/${rel}"
                 mkdir -p "$(dirname "$dest")"
                 echo "   mv $t -> $dest"; mv "$t" "$dest"
@@ -127,7 +132,7 @@ else
     fi
 fi
 
-mkdir -p "${REPO_ROOT}/logs" "${REPO_ROOT}/data/raw/articles" "${REPO_ROOT}/data/processed"
+mkdir -p "${REPO_ROOT}/logs" "${MND_DATA_ROOT}/raw/articles" "${MND_DATA_ROOT}/processed"
 
 # ---------------------------------------------------------------------------
 # 2. Submit one ingest job per source (all parallel, no inter-dependency)

@@ -13,7 +13,10 @@ set -euo pipefail
 
 RCC="${RCC:-ehgarver@midway3.rcc.uchicago.edu}"
 REMOTE_REPO="${REMOTE_REPO:-/scratch/midway3/ehgarver/macro-narrative-dynamics}"
-REMOTE="${REMOTE:-$REMOTE_REPO/data/processed/dashboard/}"
+# ADR-063 persistence: data (dashboard artifacts + name cache) lives on backed-up
+# /home, not scratch (purge-eligible). Code/repo stays on scratch.
+REMOTE_DATA="${REMOTE_DATA:-/home/ehgarver/bellwether-data}"
+REMOTE="${REMOTE:-$REMOTE_DATA/processed/dashboard/}"
 SITE="${SITE:-https://ellisgarver.github.io}"
 BASE="${BASE:-/bellwether}"
 SITE_ONLY=0
@@ -25,7 +28,7 @@ if [[ "$SITE_ONLY" == "0" ]]; then
   echo "==> pulling artifacts + name cache from RCC"
   rsync -av --delete --exclude='.*' "$RCC:$REMOTE" data/processed/dashboard/
   # No --delete: the cache is accumulative by design (ADR-056/070).
-  rsync -av "$RCC:$REMOTE_REPO/data/naming_cache/" data/naming_cache/
+  rsync -av "$RCC:$REMOTE_DATA/naming_cache/" data/naming_cache/
 
   echo "==> resolving display names (no-op when the RCC name job covered everything)"
   python scripts/run_pipeline.py name
