@@ -1,4 +1,6 @@
-# Data directories — never commit raw or processed data
+# Data directories — never commit raw or processed data. The site artifacts
+# (dashboard) reach the deploy Action via the force-pushed `site-data` snapshot
+# branch (scripts/rcc/update_rcc.sh), not main — so main stays code-only (ADR-063).
 data/raw/
 data/processed/
 data/snapshots/
