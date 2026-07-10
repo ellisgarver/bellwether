@@ -3,20 +3,19 @@
 # job that runs the FULL pipeline delta and pushes artifacts so the deploy
 # GitHub Action rebuilds the site. Designed to run unattended under scrontab.
 #
+# Persistence: the repo's data/ dir is a symlink to the backed-up /home store
+# (see scripts/rcc/link_data_home.sh) — so all repo-relative data/ paths below
+# resolve to /home, not purge-eligible scratch. Code + HF cache stay on scratch.
+#
 # What it does, in order:
 #   1. update --sources all --merge : per-source delta ingest -> filter ->
 #      incremental embed onto the base model -> merge-week (identity-stable
-#      re-cluster; existing narrative ids/names preserved, new topics appended,
-#      protected by a runtime identity gate) -> analyze (re-bake artifacts +
-#      Media Cloud press layer).
-#   2. name : title any newly-appended clusters via a user-space Ollama (CPU —
-#      a weekly delta is a handful of new clusters; cache-incremental, so this
-#      is fast and resumable).
-#   3. commit + push the dashboard artifacts + name cache, which fires
-#      .github/workflows/deploy.yml to rebuild and ship the site.
-#
-# Persistence (ADR-063): data on backed-up /home (MND_DATA_ROOT); code/repo +
-# HF cache + Ollama on scratch (regenerable). See docs memory weekly-cron-end-state.
+#      re-cluster; existing ids/names preserved, new topics appended, gated) ->
+#      analyze (re-bake artifacts + Media Cloud press layer).
+#   2. name : title newly-appended clusters via a user-space Ollama (CPU — a
+#      weekly delta is a handful of new clusters; cache-incremental, resumable).
+#   3. Force-push dashboard + naming_cache to the orphan `site-data` branch
+#      (single snapshot, no history growth), which fires deploy.yml to rebuild.
 #
 # Install as SLURM's cron (scrontab), Mondays 06:00:
 #   scrontab -e
@@ -26,18 +25,18 @@
 #   #SCRON --cpus-per-task=8
 #   #SCRON --mem=64G
 #   #SCRON --time=18:00:00
-#   #SCRON --output=/home/ehgarver/bellwether-data/logs/update_scron_%j.log
+#   #SCRON --output=/scratch/midway3/ehgarver/macro-narrative-dynamics/logs/update_scron_%j.log
 #   #SCRON --mail-type=END,FAIL --mail-user=ehgarver@uchicago.edu
 #   0 6 * * 1  /scratch/midway3/ehgarver/macro-narrative-dynamics/scripts/rcc/update_rcc.sh
 #   ------------------------------------------------------------------
-#   Verify `scrontab -l` works on Midway3; if scrontab is disabled, the fallback
-#   is a self-resubmitting job that ends with `sbatch --begin=now+7days ...`.
+#   Verify `scrontab -l` works on Midway3; if disabled, the fallback is a
+#   self-resubmitting job that ends with `sbatch --begin=now+7days ...`.
 #
 # Run once by hand:  sbatch scripts/rcc/update_rcc.sh
 #
-# One-time prerequisites (see runbook): base model exists (a full rebuild has
-# run `cluster`), git push credentials configured for origin on RCC, and .env
-# present at the repo root with GOVINFO_API_KEY (CEA) + the Media Cloud token.
+# One-time prerequisites: base model exists (a full rebuild has run cluster),
+# `data` symlinked to /home (link_data_home.sh), git push creds for origin on
+# RCC, and .env at the repo root with GOVINFO_API_KEY (CEA) + Media Cloud token.
 
 #SBATCH --job-name=mnd-update
 #SBATCH --account=pi-dachxiu
@@ -52,10 +51,14 @@
 set -euo pipefail
 
 REPO_ROOT="/scratch/midway3/ehgarver/macro-narrative-dynamics"
-# ADR-063 persistence: data on backed-up /home (never scratch/purge); HF cache stays on scratch
-export MND_DATA_ROOT="/home/ehgarver/bellwether-data"
 cd "$REPO_ROOT"
-mkdir -p logs "$MND_DATA_ROOT/logs"
+mkdir -p logs
+
+# Guard: data/ must be the /home symlink, or this would write to scratch.
+if [[ ! -L data ]]; then
+    echo "ERROR: $REPO_ROOT/data is not the /home symlink — run scripts/rcc/link_data_home.sh first." >&2
+    exit 1
+fi
 
 MND_CONDA_ENV="/home/ehgarver/.conda/envs/mnd"
 export PATH="${MND_CONDA_ENV}/bin:$PATH"
@@ -84,7 +87,7 @@ set +a
 echo "===== mnd-update (weekly refresh) ====="
 echo "Job ID:   ${SLURM_JOB_ID:-manual}"
 echo "Node:     $(hostname)"
-echo "Data:     $MND_DATA_ROOT"
+echo "Data:     $(readlink -f data)"
 echo "Started:  $(date)"
 echo "======================================="
 
@@ -118,9 +121,9 @@ python scripts/run_pipeline.py name
 # 3) Publish the site artifacts to the orphan `site-data` branch — a single
 #    force-pushed snapshot, so main's history stays code-only and the repo never
 #    bloats (the dashboard re-bakes whole each week, ~380 MB). The deploy Action
-#    builds from main (code) + site-data (artifacts). naming_cache rides along as
-#    an offsite backup of the LLM titles; canonical copies stay on /home. Built
-#    in a throwaway worktree so the deployed code checkout is never disturbed.
+#    builds from main (code) + site-data (artifacts). Built in a throwaway
+#    worktree so the deployed code checkout is never disturbed. Artifacts are
+#    read through the data/ symlink (-> /home).
 ART_BRANCH="site-data"
 git worktree prune
 WT="$(mktemp -d)"
@@ -128,11 +131,11 @@ git worktree add --force --detach "$WT" HEAD
 (
     cd "$WT"
     git checkout --orphan "$ART_BRANCH"
-    git reset -q                     # clear the inherited index
-    git clean -qfdx                  # empty the worktree
+    git reset -q
+    git clean -qfdx
     mkdir -p data/processed/dashboard data/naming_cache
-    rsync -a --delete --exclude='.fit_cache' "$MND_DATA_ROOT/processed/dashboard/" data/processed/dashboard/
-    rsync -a --delete "$MND_DATA_ROOT/naming_cache/" data/naming_cache/
+    rsync -a --delete --exclude='.fit_cache' "$REPO_ROOT/data/processed/dashboard/" data/processed/dashboard/
+    rsync -a --delete "$REPO_ROOT/data/naming_cache/" data/naming_cache/
     git add -f data/processed/dashboard data/naming_cache
     git -c user.name='mnd-bot' -c user.email='mnd-bot@rcc.local' \
         commit -q -m "site-data snapshot $(date +%F)"

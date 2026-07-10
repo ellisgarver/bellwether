@@ -41,8 +41,6 @@ set -euo pipefail
 : "${SOURCE:?Set SOURCE=<source_id> (e.g. SOURCE=brookings)}"
 
 REPO_ROOT="/scratch/midway3/ehgarver/macro-narrative-dynamics"
-# ADR-063 persistence: data on backed-up /home (never scratch/purge); HF cache stays on scratch
-export MND_DATA_ROOT="/home/ehgarver/bellwether-data"
 cd "$REPO_ROOT"
 
 mkdir -p logs data/raw/articles
