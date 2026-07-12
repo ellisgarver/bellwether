@@ -328,7 +328,7 @@ display:
     model: "llama3.1"           # backend=llama: served model id (env MND_NAMING_MODEL overrides)
     local_model: "Qwen/Qwen2.5-7B-Instruct"   # backend=local: open, Apache-2.0, no key
     max_title_words: 7          # soft target for the title (not a hard cap)
-    prompt_version: 2           # bump to invalidate the cache when the prompt changes
+    prompt_version: 3           # bump to invalidate the cache when the prompt changes
     cache_dir: "data/naming_cache"   # tracked path (data/ is not gitignored)
   forming:
     # Sub-floor clusters surface as "forming" on the emerging page when their

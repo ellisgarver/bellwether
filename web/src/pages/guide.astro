@@ -29,7 +29,6 @@ for (const e of (pool.length ? pool : index.narratives)) {
 ---
 
 <Base title="guide" active="guide">
-  <p class="eyebrow reveal">the guide</p>
   <h1 class="reveal">how bellwether works</h1>
   <p class="lede reveal">
     how the pipeline turns institutional writing into clustered narratives and
@@ -37,7 +36,6 @@ for (const e of (pool.length ? pool : index.narratives)) {
   </p>
 
   <section class="section reveal">
-    <p class="eyebrow">clustering</p>
     <h2>from articles to narratives</h2>
 
     <figure class="pipeline reveal">
@@ -122,7 +120,6 @@ for (const e of (pool.length ? pool : index.narratives)) {
   </section>
 
   <section class="section reveal">
-    <p class="eyebrow">the model</p>
     <h2>four lenses on one curve</h2>
     <p>
       counting a narrative's articles per week gives a volume curve: a time series
@@ -196,23 +193,26 @@ for (const e of (pool.length ? pool : index.narratives)) {
   </section>
 
   <section class="section reveal">
-    <p class="eyebrow">the page</p>
     <h2>reading a narrative</h2>
     <p>
       take <a href={`${base}/narratives/${example.cluster_id}`}>{displayName(example)}</a> for
       example. the bars on the chart are its weekly volume, adjusted for how much the whole
       corpus published, and the line is the selected lens. each tab carries its
       lens's R², and the chart opens on the best-fitting one. drag pans the view; the two
-      sliders zoom time and volume independently. also see shape facts and standing quantifications below the chart.
+      sliders zoom time and volume independently. the stage readout and the direct
+      shape facts sit below the chart.
     </p>
     <p>
-      the checkboxes overlay two external series, rescaled onto the same axis to
-      compare direction and timing: broad-press story counts (Media Cloud) and a
-      market series (VIX). underneath sit two bidirectional Granger
-      tests. each sweeps lags of one to four weeks in both directions, asks
-      whether past values of one series help predict the other, and reports the
-      strongest lag: whether discourse moved before or after the press, and
-      before or after the market. note that Granger precedence measures timing, not cause.
+      the checkboxes overlay two external series: broad-press story counts
+      (Media Cloud, thin before ~2017) and a market series (VIX). each is min-max
+      rescaled onto the volume axis — its own low sits at the floor and its own
+      high at the tallest bar — so the overlays carry timing and shape, never
+      height. underneath sit two bidirectional Granger tests, computed on the
+      unscaled weekly series. each sweeps lags of one to four weeks in both
+      directions, asks whether past values of one series help predict the other,
+      and reports the strongest lag: whether discourse moved before or after the
+      press, and before or after the market. note that Granger precedence
+      measures timing, not cause.
     </p>
     <p>
       further down sits a reading list, three stacked lists linking to

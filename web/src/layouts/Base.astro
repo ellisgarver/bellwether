@@ -21,7 +21,7 @@ const asOf = loadIndex().generated_at?.slice(0, 10) ?? "";
     <title>{title} · bellwether</title>
     <meta
       name="description"
-      content="bellwether tracks how macro-finance narratives form, spread, and fade across fifteen years of institutional and academic writing, mapped and charted against the press and the markets."
+      content="bellwether tracks how macro-finance narratives form, spread, and fade across sixteen years of institutional and academic writing, mapped and charted against the press and the markets."
     />
     <link rel="icon" type="image/svg+xml" href={href("/favicon.svg")} />
     <meta property="og:type" content="website" />
@@ -29,7 +29,7 @@ const asOf = loadIndex().generated_at?.slice(0, 10) ?? "";
     <meta property="og:title" content={`${title} · bellwether`} />
     <meta
       property="og:description"
-      content="how macro narratives rise and fade: fifteen years of institutional macro-finance writing, mapped and charted."
+      content="how macro narratives rise and fade: sixteen years of institutional macro-finance writing, mapped and charted."
     />
     <meta name="twitter:card" content="summary" />
   </head>
@@ -46,6 +46,7 @@ const asOf = loadIndex().generated_at?.slice(0, 10) ?? "";
           <a href={href("/guide")} class={active === "guide" ? "active" : ""}>guide</a>
           <a href={href("/data")} class={active === "data" ? "active" : ""}>data</a>
           <a href={href("/research")} class={active === "research" ? "active" : ""}>research</a>
+          {asOf && <span class="asof">as of {asOf}</span>}
         </nav>
       </div>
     </header>
@@ -68,6 +69,13 @@ const asOf = loadIndex().generated_at?.slice(0, 10) ?? "";
       // replayed, not restore the previous scroll position mid-page.
       if ("scrollRestoration" in history) history.scrollRestoration = "manual";
       window.scrollTo(0, 0);
+
+      // the header is flat at the top of the page and picks up its blur +
+      // hairline only once content actually scrolls beneath it.
+      const hdr = document.querySelector(".site-header");
+      const onScroll = () => hdr?.classList.toggle("scrolled", window.scrollY > 8);
+      onScroll();
+      window.addEventListener("scroll", onScroll, { passive: true });
 
       // scroll-reveal: fade-and-lift elements tagged .reveal as they enter view
       const els = document.querySelectorAll(".reveal");

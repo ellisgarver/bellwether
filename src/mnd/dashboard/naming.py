@@ -59,24 +59,49 @@ class NarrativeName:
 _SYSTEM = (
     "You write titles and descriptions for clusters of U.S. economic-policy and "
     "financial writing, shown on a public educational dashboard that tracks how such "
-    "narratives rise and fade. You are given a cluster's defining keywords and short "
-    "excerpts from its most central documents.\n\n"
+    "narratives rise and fade. You are given a cluster's defining keywords, and "
+    "usually short excerpts from its most central documents plus its active date "
+    "span.\n\n"
     "Write two things:\n"
-    "- title: a short, specific noun phrase naming what the cluster is about — a "
-    "headline, not a sentence, and not a bare keyword. Name the period or event when "
-    "the excerpts make it clear.\n"
-    "- description: 3 to 4 plain, concrete sentences explaining what the narrative is "
-    "about and why it mattered, written for an interested non-expert.\n\n"
+    "- title: a short, specific noun phrase naming what the writing is about — a "
+    "headline, not a sentence, and not a bare keyword. Sentence case, never "
+    "title case: capitalize the first word, proper nouns, and acronyms only "
+    "(write 'Regional bank deposit runs', not 'Regional Bank Deposit Runs'). "
+    "Name the period or event when the excerpts make it clear.\n"
+    "- description: 2 to 4 plain, concrete sentences on what the writing covers and, "
+    "where the material itself shows it, why it mattered — written for an interested "
+    "non-expert.\n\n"
     "Rules:\n"
-    "- Use ONLY the supplied keywords and excerpts. Do not add events, places, dates, "
-    "numbers, or claims that are not present in them; when unsure, stay general.\n"
+    "- Ground everything in the supplied material. Do not add events, places, dates, "
+    "numbers, causes, or outcomes that are not present in it. If the keywords "
+    "resemble a well-known event, name that event only when the excerpts confirm "
+    "it; otherwise stay general.\n"
+    "- If the material does not say why something happened, leave the why out — "
+    "no 'likely', 'possibly', or 'may have been influenced by' padding, and never "
+    "say that the material does not specify something.\n"
+    "- When no excerpts are supplied, title from the keywords alone, and prefer a "
+    "modest descriptive phrase over guessing a specific event.\n"
     "- If the material is not about economics or finance, name it plainly for what it "
     "actually is rather than forcing an economic framing.\n"
     "- Neutral and factual: no hype, no editorializing, no forecasting, no advice.\n"
-    "- Do not open with filler such as 'This narrative', 'This cluster', 'This topic', "
-    "'In the world of', or 'Explores' — start with the substance, and vary how you "
-    "open across descriptions.\n"
-    "Return strictly the requested JSON."
+    "- Write about the subject directly, as if the reader is looking at the "
+    "documents themselves. Never refer to 'this narrative', 'this cluster', 'this "
+    "topic', 'these articles', 'the writing', 'the material', 'the excerpts', "
+    "'the keywords', or 'the dashboard', and never open with 'Explores' or 'In "
+    "the world of'. Vary how you open across descriptions.\n"
+    "- No quotation marks around the title, no trailing period on it, no markdown "
+    "anywhere.\n"
+    "Return strictly the requested JSON.\n\n"
+    "Example (with excerpts):\n"
+    '{"title": "Municipal bond market stress, 2010\\u20132011", "description": '
+    '"State and local governments faced rising borrowing costs as investors '
+    "questioned the safety of municipal debt. Analysts weighed default risk "
+    "against the market's long record of low losses, and the debate shaped how "
+    'pension shortfalls were reported."}\n'
+    "Example (keywords only):\n"
+    '{"title": "Crop insurance and farm subsidy programs", "description": '
+    '"Federal support for farmers through crop insurance and direct subsidies, '
+    'and the recurring budget debates over the cost of both."}'
 )
 
 _SCHEMA: dict[str, Any] = {
@@ -97,13 +122,22 @@ def _build_user(inp: NamingInput, title_words: int) -> str:
         lines.append(f"Sources: {', '.join(inp.sources[:4])}")
     if inp.date_range:
         lines.append(f"Active: {inp.date_range[0]} to {inp.date_range[1]}")
-    lines.append("Central excerpts:")
-    for i, ex in enumerate(inp.excerpts[:3], 1):
-        lines.append(f"{i}. {ex.strip()[:500]}")
+    if inp.excerpts:
+        lines.append("Central excerpts:")
+        for i, ex in enumerate(inp.excerpts[:3], 1):
+            lines.append(f"{i}. {ex.strip()[:500]}")
+    else:
+        # directory/terms-only path (ADR-073): no excerpts exist for sub-floor
+        # clusters — say so explicitly so the model stays modest instead of
+        # inferring a specific event from keyword resemblance alone.
+        lines.append(
+            "No excerpts are available for this cluster; ground the title in the "
+            "keywords alone and stay general."
+        )
     lines.append(
         "\nReturn JSON with two keys: title (a short, specific phrase — roughly "
-        f"{title_words} words, never a full sentence, no trailing period) and "
-        "description (3 to 4 plain, concrete sentences)."
+        f"{title_words} words, sentence case, never a full sentence, no trailing "
+        "period) and description (2 to 4 plain, concrete sentences)."
     )
     return "\n".join(lines)
 
@@ -272,6 +306,7 @@ class OpenAICompatNamer:
         payload = {
             "model": self._model,
             "temperature": 0,
+            "seed": 42,  # belt-and-braces with temperature 0; ignored where unsupported
             "response_format": {"type": "json_object"},  # honored where supported
             "messages": [
                 {"role": "system", "content": system},

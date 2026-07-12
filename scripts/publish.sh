@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Publish the site from the latest RCC artifacts: pull artifacts + the RCC-
-# generated name cache (ADR-073: the mnd-name job does the bulk naming on RCC),
-# run the local name pass as a cache-hit no-op / gap-filler (misses need a local
-# Ollama), build with the GitHub Pages paths, and deploy to gh-pages.
+# Manual site deploy. The PRODUCTION path is the RCC weekly chain pushing the
+# `site-data` branch + the GitHub Action building and deploying to gh-pages
+# (.github/workflows/deploy.yml); this script is the manual fallback.
 #
-#   bash scripts/publish.sh                # full: pull data + name + build + deploy
 #   bash scripts/publish.sh --site-only    # copy/style edits: build + deploy only
+#
+# Full mode (pull RCC artifacts + name + commit naming_cache to main) is
+# RETIRED: committing data/naming_cache to main can make the RCC checkout —
+# which reaches those paths through the data/ -> /home symlink — refuse to
+# pull. It remains available behind FORCE_FULL=1 for emergencies only.
 #
 # Overridable via env: RCC (ssh target), REMOTE (artifacts dir on RCC),
 # REMOTE_REPO (repo root on RCC), SITE / BASE (Pages URL parts).
@@ -20,6 +23,12 @@ SITE_ONLY=0
 [[ "${1:-}" == "--site-only" ]] && SITE_ONLY=1
 
 cd "$(dirname "$0")/.."
+
+if [[ "$SITE_ONLY" == "0" && "${FORCE_FULL:-0}" != "1" ]]; then
+  echo "publish.sh full mode is retired — the weekly RCC chain + GitHub Action deploy the site." >&2
+  echo "Use 'bash scripts/publish.sh --site-only' for a manual build+deploy, or FORCE_FULL=1 to override." >&2
+  exit 1
+fi
 
 if [[ "$SITE_ONLY" == "0" ]]; then
   echo "==> pulling artifacts + name cache from RCC"

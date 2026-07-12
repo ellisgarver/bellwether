@@ -123,7 +123,6 @@ const shownStats: [string, string][] = [
 ---
 
 <Base title="data" active="data">
-  <p class="eyebrow reveal">the data</p>
   <h1 class="reveal">the corpus behind bellwether</h1>
   <p class="lede reveal">
     a fixed, complete body of institutional and academic macro writing.
@@ -156,14 +155,13 @@ const shownStats: [string, string][] = [
   )}
 
   <section class="section reveal">
-    <p class="eyebrow">the sources</p>
     <h2>where the words come from</h2>
     <p>
       the source set is a fixed basis spanning every independent dimension of
       U.S. macro discourse, including the upstream writing of policymakers, researchers, and
       analysts. eight discourse dimensions plus a cross-cutting Q&A register, across
-      twelve active source feeds, and each carry several document types (articles, speeches, etc). open a row for info on the
-      underlying series:
+      twelve active source feeds, each carrying several document types (articles,
+      speeches, reports). open a row for the underlying series:
     </p>
     <div class="feeds">
       {sources.map(([dim, src], i) => (
@@ -192,7 +190,6 @@ const shownStats: [string, string][] = [
   </section>
 
   <section class="section reveal">
-    <p class="eyebrow">the breakdown</p>
     <h2>what is in the corpus</h2>
     <p>
       every clustered article counts toward one source and one JEL economics field.

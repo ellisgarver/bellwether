@@ -1,8 +1,6 @@
-"""Smoke tests for the Phase 0 scaffold.
-
-These tests are deliberately minimal — they verify that the static scaffold
-is internally consistent. Heavier integration tests for ingestion, embedding,
-and pipeline execution belong in subsequent phases.
+"""Smoke tests for the static scaffold: config schema, whitelist invariants,
+anchor fixtures, and importability. Heavier integration tests live in the
+other test modules.
 
 Run from the repo root: `pytest`.
 """
@@ -29,8 +27,8 @@ def test_master_config_loads():
 
 
 def test_embedding_single_model_post_adr019():
-    """ADR-019: sole production embedder is Qwen3-Embedding-0.6B. The mpnet
-    comparator look-ahead apparatus from ADR-011 was removed."""
+    """ADR-019: a single production embedder (Qwen3-Embedding, 8B per ADR-036).
+    The mpnet comparator look-ahead apparatus from ADR-011 was removed."""
     from mnd.utils.config import load_config
     cfg = load_config()
     assert "primary" in cfg["embedding"]

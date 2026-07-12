@@ -24,13 +24,12 @@ const rows = (dir?.clusters ?? [])
 ---
 
 <Base title="directory" active="data">
-  <p class="eyebrow reveal">the directory</p>
   <h1 class="reveal">every cluster in the corpus</h1>
   <p class="lede reveal">
     all {fmt(dir?.n_clusters ?? index.n_clusters_total ?? 0)} clusters the corpus
     contains, from the {fmt(index.n_narratives)} narratives charted on this site
     down to the smallest recurring threads. narratives with a full page link
-    through; the rest exist here just aren't linked or analyzed on the main site.
+    through; the rest are listed here but not charted or analyzed.
   </p>
 
   {rows.length > 0 ? (

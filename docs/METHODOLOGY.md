@@ -1,4 +1,4 @@
-# Macro Narrative Dynamics — Methodology
+# bellwether — Methodology
 
 How the system measures the lifecycle of macro-financial narratives, stage by stage, with the field-accepted citation behind each choice. Every parameter is a published library default, a value cited from primary literature, or absent where no field-accepted anchor exists; the standing rules are in §6.
 
@@ -10,7 +10,7 @@ The system measures how macro-financial narratives — "the Fed is engineering a
 
 The frame is Robert Shiller's *Narrative Economics* (2017, 2019), which holds that economic narratives spread through a population in patterns resembling epidemics and leaves the formal measurement of that claim open. The system operationalizes the lifecycle half of that framework — emergence, growth, peak, decay — by tracking the volume of BERTopic clusters over time and reading each narrative's trajectory directly, with SIR, logistic, and Bass models fit alongside as interpretive lenses. Population-level virality and causal effects on macro outcomes belong to structural work in the Flynn & Sastry (2024) tradition.
 
-The discourse measured here — institutional, policy, and academic writing — is the upstream supply side of the narratives households later adopt, a layer that Andre, Haaland, Roth, Wiederholt & Wohlfart (forthcoming, *Review of Economic Studies*) show to differ qualitatively from household-elicited narratives.
+The discourse measured here — institutional, policy, and academic writing — is the upstream supply side of the narratives households later adopt, a layer that Andre, Haaland, Roth, Wiederholt & Wohlfart (2025, *Review of Economic Studies*, advance article) show to differ qualitatively from household-elicited narratives.
 
 Roos & Reccius (2024, *Journal of Economic Surveys*), the most recent survey of narrative economics, describes a field still consolidating, with no settled definition of an "economic narrative" and no operationalization of Shiller's framework beyond keyword counts. The closest quantitative precedents are Bybee, Kelly, Manela & Xiu (2024, *Journal of Finance*) and Larsen & Thorsrud (2019, *Journal of Econometrics*) on topic modeling, Bertsch et al. (2021, *Economics Letters*) on temporal dynamics, and Hansen, McMahon & Prat (2018, *QJE*) on institutional text. The full survey is in `docs/related_work.md`.
 
@@ -104,7 +104,9 @@ Each narrative cluster yields two weekly volume series.
 
 The two series support cross-validation and lead-lag reading. A narrative present in both institutional discourse and the press is corroborated across both; institutional volume without press volume marks a procedural artifact; press volume without institutional discourse is downstream of the corpus and outside scope. Institutional discourse typically leads the press by days to weeks, and plotting both on one axis shows the offset directly.
 
-Media Cloud is a volume signal only; its text never enters embedding or clustering. The institutional series is smoothed with a 7-day centered moving average to remove the weekend drop in daily output (Shumway & Stoffer); the press series is shown as reported.
+Media Cloud is a volume signal only; its text never enters embedding or clustering. The institutional series is smoothed with a 7-day centered moving average to remove the weekend drop in daily output (Shumway & Stoffer); the press series is shown as reported. Media Cloud's news archive thins before roughly 2017, so early press counts may be sparse or absent; the artifact carries this caveat for display.
+
+A market series (the VIX, from FRED) joins the press counts as a second external overlay. Both support a lead-lag reading: bidirectional Granger tests (Granger 1969) on the first-differenced weekly pairs sweep lags of one to four weeks in each direction and report the most significant lag — temporal precedence, not cause. On the site's charts each overlay is min-max rescaled onto the narrative's volume axis (its own minimum at the floor, its own maximum at the tallest bar), so overlays carry timing and shape, never level; the Granger tests run on the unscaled weekly series. Neither overlay feeds embedding, clustering, or the dynamics fits.
 
 ### Stage 7 — Dynamics fitting
 
@@ -176,7 +178,7 @@ The rules below govern every parameter choice.
 - **Embedding & retrieval**: Thakur et al. 2021 *BEIR* (NeurIPS); Reimers & Gurevych 2019 *SBERT*; Qwen3-Embedding-8B model card.
 - **Clustering**: Grootendorst 2022 *BERTopic* (arXiv:2203.05794); McInnes et al. 2018 *UMAP*; McInnes & Healy 2017 *HDBSCAN*.
 - **Published topic-model narrative studies**: Bybee, Kelly, Manela & Xiu 2024 (*Journal of Finance* 79(5), 3105–3147); Hansen, McMahon & Prat 2018 (*QJE* 133(2), 801–870); Larsen & Thorsrud 2019 (*Journal of Econometrics* 210(1), 203–218); Larsen, Thorsrud & Zhulanova 2021 (*JME*); Bertsch, Hull, Lumsdaine & Zhang 2021 (*Economics Letters*).
-- **Narrative-economics framing & related work**: Shiller 2017 (AEA Presidential Address); Shiller 2019 *Narrative Economics*; Roos & Reccius 2024 (*Journal of Economic Surveys*); Flynn & Sastry 2024 (NBER WP 32602); Andre, Haaland, Roth, Wiederholt & Wohlfart (forthcoming, *RES*).
+- **Narrative-economics framing & related work**: Shiller 2017 (AEA Presidential Address); Shiller 2019 *Narrative Economics*; Roos & Reccius 2024 (*Journal of Economic Surveys*); Flynn & Sastry 2024 (NBER WP 32602); Andre, Haaland, Roth, Wiederholt & Wohlfart (2025, *RES*, advance article).
 - **Adjacent technical precedents**: Boutaleb, Picault & Grosjean 2024 *BERTrend* (ACL FuturED); Medeiros, Quigley & Revie 2026 (arXiv:2602.20939).
 - **Text-as-data surveys**: Ash & Hansen 2023 (*Annual Review of Economics*); Gentzkow, Kelly & Taddy 2019 (*JEL* 57(3), 535–574).
 - **Epidemic / diffusion models**: Kermack & McKendrick 1927; Schlickeiser & Kröger 2020 (closed-form SIR solution, *J. Phys. A* 53:505601); Verhulst 1838 (logistic); Bass 1969 (diffusion of innovations); Sultan, Farley & Lehmann 1990 (Bass meta-analysis).

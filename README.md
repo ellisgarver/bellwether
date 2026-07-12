@@ -1,8 +1,10 @@
 # bellwether
 
-A tool to examine how macroeconomic narratives form, rise, and fade. This project reads years (since 2010) of U.S.
-macro-financial discourse from academic and institutional sources — the Fed, the IMF, the BIS, the NBER and their peers
-— clusters into narratives, and tracks each story.
+A tool to examine how macroeconomic narratives form, rise, and fade. This project reads sixteen years (2010–present) of
+U.S. macro-financial discourse from academic and institutional sources — the Fed, the IMF, the BIS, the NBER and their
+peers — clusters it into narratives, and tracks each story.
+
+**Live site: [ellisgarver.github.io/bellwether](https://ellisgarver.github.io/bellwether/)**
 
 The analysis surfaces a 3-D map of the narrative landscape, a catalog of
 every charted narrative with its life-cycle stage, an emerging-signals feed, and
@@ -52,6 +54,18 @@ citation behind each choice, can be found in
 | `web/` | the static Astro site, built from baked JSON artifacts |
 | `docs/` | methodology and the architecture-decision log |
 | `data/anchors/` | the ten documented anchor narratives used for validation |
+
+## References
+
+The core anchors; the full cited set, with the choice each one backs, is in
+[`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) §7 and the literature survey in
+[`docs/related_work.md`](docs/related_work.md).
+
+- **Framing** — Shiller (2017), "Narrative Economics," *AER* 107(4); Shiller (2019), *Narrative Economics*, Princeton; Roos & Reccius (2024), *J. Economic Surveys* 38(2).
+- **Closest precedents** — Bybee, Kelly, Manela & Xiu (2024), *J. Finance* 79(5); Larsen & Thorsrud (2019), *J. Econometrics* 210(1); Hansen, McMahon & Prat (2018), *QJE* 133(2); Bertsch et al. (2021), *Economics Letters* 201; Flynn & Sastry (2024), NBER WP 32602; Andre et al. (2025), *REStud* advance article.
+- **Method** — Grootendorst (2022), BERTopic, arXiv:2203.05794; McInnes et al. (2018), UMAP; McInnes & Healy (2017), HDBSCAN; Thakur et al. (2021), BEIR (NeurIPS); Qwen3-Embedding-8B model card; Broder (1997) MinHash; Henzinger (2006).
+- **Dynamics & staging** — Kermack & McKendrick (1927); Schlickeiser & Kröger (2020), *J. Phys. A* 53:505601; Verhulst (1838); Bass (1969); Sultan, Farley & Lehmann (1990); Mann (1945); Kendall (1948); Hamed & Rao (1998); Sen (1968); Wallinga & Lipsitch (2007).
+- **Overlays & validation** — Granger (1969); Brown & Warner (1985); Media Cloud (search.mediacloud.org); FRED (Federal Reserve Bank of St. Louis).
 
 ## License
 

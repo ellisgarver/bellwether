@@ -26,7 +26,7 @@
 
   /* ---- type scale (one size per role; do not introduce in-between sizes) ---- */
   --fs-micro: 0.8rem;   /* term tags, pills */
-  --fs-label: 0.84rem;  /* eyebrows, small-caps labels */
+  --fs-label: 0.84rem;  /* small-caps labels (stat-group headings) */
   --fs-meta:  0.9rem;   /* meta lines, footer, secondary captions */
   --fs-ui:    0.94rem;  /* nav, tabs, toggles, key/value, tables, captions */
   --fs-body:  1.0625rem; /* body copy (17px at the 16px root) */
@@ -74,9 +74,9 @@ h1 { font-size: var(--fs-title); }
 h2 { font-size: var(--fs-h2); margin: var(--space-5) 0 var(--space-2); }
 h3 { font-size: var(--fs-lede); margin: var(--space-3) 0 var(--space-1); }
 
-/* an eyebrow is the lead-in to a heading: collapse the heading's top margin so
-   the eyebrow→heading gap is identical everywhere (no per-page overrides). */
-.eyebrow + h1, .eyebrow + h2, .eyebrow + h3 { margin-top: 0; }
+/* a heading that opens its container carries no top margin — the section's own
+   padding sets the gap, identically everywhere (no per-page overrides). */
+h1:first-child, h2:first-child, h3:first-child { margin-top: 0; }
 
 p { margin: 0 0 1rem; }
 
@@ -90,29 +90,44 @@ main { padding: var(--space-5) 0 0; }
 .muted { color: var(--muted); }
 .hidden { display: none !important; }
 
-/* ---- header ---- */
+/* ---- header ----
+   flat and borderless while the page sits at the top; once scrolled it picks up
+   the translucent paper blur and hairline, so it reads as part of the page
+   until it actually has something to float over. */
 .site-header {
   position: sticky; top: 0; z-index: 50;
+  background: transparent;
+  border-bottom: 1px solid transparent;
+  transition: background 0.3s var(--ease), border-color 0.3s var(--ease);
+}
+.site-header.scrolled {
   background: color-mix(in srgb, var(--paper) 82%, transparent);
   backdrop-filter: saturate(1.4) blur(10px);
-  border-bottom: 1px solid var(--line);
+  border-bottom-color: var(--line);
 }
 .site-header .wrap {
   display: flex; align-items: center; justify-content: space-between; height: 64px;
 }
-.brand { font-weight: 600; font-size: var(--fs-body); color: var(--ink); letter-spacing: -0.02em; }
+.brand { font-weight: 600; font-size: var(--fs-body); color: var(--ink); letter-spacing: -0.035em; }
 .brand:hover { color: var(--ink); }
 .brand .mk { color: var(--accent); }
-.nav { display: flex; gap: 1.5rem; }
+.nav { display: flex; gap: 1.5rem; align-items: baseline; }
 .nav a { color: var(--muted); font-size: var(--fs-ui); position: relative; padding: 0.2rem 0; }
+/* a short accent tick under the current page, not a full-width underline */
 .nav a::after {
-  content: ""; position: absolute; left: 0; right: 0; bottom: -2px; height: 2px;
+  content: ""; position: absolute; left: 0; bottom: -2px; height: 2px; width: 1.3rem;
   background: var(--accent); transform: scaleX(0); transform-origin: left;
   transition: transform 0.25s var(--ease);
 }
 .nav a:hover { color: var(--ink); }
 .nav a.active { color: var(--ink); }
 .nav a.active::after, .nav a:hover::after { transform: scaleX(1); }
+/* build-date chip: the one piece of state worth carrying on every page */
+.nav .asof {
+  color: var(--faint); font-size: var(--fs-meta); font-variant-numeric: tabular-nums;
+  border-left: 1px solid var(--line); padding-left: 1.5rem;
+}
+@media (max-width: 900px) { .nav .asof { display: none; } }
 
 /* ---- editorial sections (de-boxed: hairline rules, not cards) ---- */
 .section { padding: var(--space-section) 0; border-top: 1px solid var(--line); }
@@ -122,10 +137,6 @@ main { padding: var(--space-5) 0 0; }
    research, where the section follows the lede directly with nothing between). */
 .lede + .section { padding-top: 0; }
 .panel { margin: var(--space-4) 0; }
-.eyebrow {
-  font-size: var(--fs-label); letter-spacing: 0.08em;
-  color: var(--faint); margin: 0 0 var(--space-1);
-}
 .caption { color: var(--muted); font-size: var(--fs-ui); max-width: none; margin: var(--space-1) 0 0; }
 .note { color: var(--ink); font-size: var(--fs-body); }
 

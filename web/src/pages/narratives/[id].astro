@@ -98,17 +98,16 @@ const direction = (d: any) =>
 
   <!-- life-cycle chart -->
   <section class="section reveal">
-    <p class="eyebrow">life-cycle</p>
     <h2>how the volume rose and fell</h2>
     <div class="lens-bar">
       <div class="tabs" id="lens-tabs"></div>
       {(n.mediacloud || n.markets) && (
         <div class="toggle-row" id="overlay-toggles">
           {n.mediacloud && (
-            <label class="toggle"><input type="checkbox" id="t-press" /> broad-press volume (Media Cloud)</label>
+            <label class="toggle" title="rescaled to fit the volume axis — compare timing, not height"><input type="checkbox" id="t-press" /> broad-press volume (Media Cloud)</label>
           )}
           {n.markets && (
-            <label class="toggle"><input type="checkbox" id="t-market" /> {mlabel} (markets)</label>
+            <label class="toggle" title="rescaled to fit the volume axis — compare timing, not height"><input type="checkbox" id="t-market" /> {mlabel} (markets)</label>
           )}
         </div>
       )}
@@ -131,8 +130,7 @@ const direction = (d: any) =>
   <section class="section reveal">
     <div class="cols-2">
       <div>
-        <p class="eyebrow">where it sits now</p>
-        <h2>currently {n.stage}</h2>
+        <h2>where it sits now: {n.stage}</h2>
         <table class="facts">
           <tr><td>trajectory test</td><td>modified Mann–Kendall</td></tr>
           <tr><td>recent trend</td><td>{trendWord}</td></tr>
@@ -142,8 +140,7 @@ const direction = (d: any) =>
         </table>
       </div>
       <div>
-        <p class="eyebrow">shape facts</p>
-        <h2>measured directly from the curve</h2>
+        <h2>direct shape facts</h2>
         <table class="facts">
           {factOrder.filter(([k]) => k in facts).map(([k, lbl]) => (
             <tr><td>{lbl}</td><td>{facts[k].toLocaleString(undefined, { maximumFractionDigits: 1 })}</td></tr>
@@ -164,8 +161,7 @@ const direction = (d: any) =>
       <div class="cols-2">
         {n.markets && mkg && (
           <div>
-            <p class="eyebrow">markets</p>
-            <h2>did discourse lead or lag {mlabel}?</h2>
+            <h2>did discourse lead or lag the {mlabel}?</h2>
             <p class="note">{mkg.verdict}</p>
             <dl class="kv" style="margin-top:0.8rem">
               <dt>discourse → {mlabel}</dt>
@@ -177,8 +173,7 @@ const direction = (d: any) =>
         )}
         {n.mediacloud && (
           <div>
-            <p class="eyebrow">broad-press</p>
-            <h2>did discourse lead or lag press?</h2>
+            <h2>did discourse lead or lag the press?</h2>
             {mcg ? (
               <>
                 <p class="note">{mcg.verdict}</p>
@@ -205,7 +200,6 @@ const direction = (d: any) =>
 
   <!-- representative articles -->
   <section class="section reveal">
-    <p class="eyebrow">in the corpus</p>
     <h2>representative writing</h2>
     <div class="rep-panels">
       {repPanels.map((p) => (
@@ -229,7 +223,6 @@ const direction = (d: any) =>
 
   {n.similar && (n.similar.semantic.length + n.similar.lexical.length + n.similar.morphological.length > 0) && (
     <section class="section reveal">
-      <p class="eyebrow">nearby</p>
       <h2>related narratives</h2>
       <dl class="kv related">
         <dt>by meaning</dt>

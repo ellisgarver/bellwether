@@ -1,4 +1,4 @@
-# Macro Narrative Dynamics — common developer tasks.
+# bellwether — common developer tasks.
 #
 # Run `make help` for a list of targets.
 
@@ -23,7 +23,7 @@ install-dev:  ## Install dev tools (ruff, pytest extras)
 preflight:  ## Run the pre-flight environment check (no model download)
 	$(PYTHON) scripts/preflight_check.py --skip-embedding
 
-preflight-full:  ## Run pre-flight INCLUDING embedding model load (~600MB download)
+preflight-full:  ## Run pre-flight INCLUDING embedding model load (multi-GB download)
 	$(PYTHON) scripts/preflight_check.py
 
 test:  ## Run pytest suite
@@ -54,7 +54,7 @@ filter-pre-embed:  ## Exclude archived sources from raw JSONL (ADR-010/012)
 filter:  ## Date-range filter + MinHash dedup (no topic filter per ADR-012)
 	$(PYTHON) scripts/run_pipeline.py filter
 
-embed:  ## Embed filtered articles. ROLE=primary|comparator
+embed:  ## Embed filtered articles (primary Qwen3 embedder)
 	$(PYTHON) scripts/run_pipeline.py embed --role $(or $(ROLE),primary)
 
 cluster:  ## Run clustering on embeddings

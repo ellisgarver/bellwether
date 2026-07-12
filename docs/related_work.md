@@ -16,7 +16,7 @@ The field has bifurcated into three streams:
 
 1. **Topic-model-on-news/policy-text papers** — Hansen, McMahon & Prat (2018, *QJE*); Larsen & Thorsrud (2019, *Journal of Econometrics*); Bybee, Kelly, Manela & Xiu (2024); Bertsch, Hull, Lumsdaine & Zhang (2021, *Economics Letters*); Flynn & Sastry (2024, NBER WP). Extract latent themes from large corpora and correlate them with macro variables. This is the methodological mainstream and the closest comparator stream.
 2. **Dictionary/sentiment papers** — Tetlock (2007, *JF*); Garcia (2013, *JF*); Loughran & McDonald (2011, *JF*); Baker, Bloom & Davis (2016, *QJE*); Manela & Moreira (2017, *JFE*). Extract a single intensity index rather than narrative topics.
-3. **Survey/experimental papers** — Andre, Haaland, Roth, Wiederholt & Wohlfart (forthcoming, *Review of Economic Studies*). Directly elicit narratives from households or experts and represent them as DAGs.
+3. **Survey/experimental papers** — Andre, Haaland, Roth, Wiederholt & Wohlfart (2025, *Review of Economic Studies*, advance article). Directly elicit narratives from households or experts and represent them as DAGs.
 
 A fourth, very recent stream uses LLMs at sentence/document level (Schmidt et al. 2025; Gueta et al. 2025; Hartley 2025). These target the "what is a narrative" extraction problem rather than the lifecycle dynamics problem.
 
@@ -51,7 +51,7 @@ NLP on 10-K filings to extract narrative shares; embed a viral narrative in a ne
 
 **Overlap:** MEDIUM (theory), LOW (corpus, dynamics method). The most theoretically ambitious narrative-economics paper, modelling narrative virality structurally over a corpus of firm filings. This project measures lifecycle empirically over policy/academic text and supplies the descriptive measurement infrastructure that structural work of this kind requires.
 
-### Andre, Haaland, Roth, Wiederholt & Wohlfart (forthcoming, *Review of Economic Studies*), "Narratives about the Macroeconomy"
+### Andre, Haaland, Roth, Wiederholt & Wohlfart (2025, *Review of Economic Studies*, advance article), "Narratives about the Macroeconomy"
 Open-ended surveys of 10,000+ U.S. households and 100 academic experts about inflation causes; represent narratives as DAGs; experiment shows narratives shape inflation expectations.
 
 **Overlap:** LOW (method), HIGH (subject). Complementary survey-elicited household narratives rather than text-extracted policy narratives. Its central empirical finding — expert narratives differ qualitatively from household narratives — bears directly on a focus on institutional/expert discourse, which is the upstream supply side that surveys of households do not measure.
@@ -71,7 +71,7 @@ Novel relative to vanilla BERTopic:
 
 **Overlap:** HIGH (technical adjacent), MEDIUM (intent), LOW (domain). The closest published BERTopic + temporal-dynamics precedent and the most widely-known open-source library for incremental BERTopic, applied to general weak-signal trend detection rather than economics.
 
-The two approaches differ in their dynamics layer. BERTrend's signal classification rests on dynamically chosen popularity thresholds; the life-cycle staging here is keyed to the R₀ epidemic threshold (Kermack & McKendrick 1927). BERTrend reports a popularity trajectory and categorises it; this project fits parametric SIR and logistic models with Bayesian inference and reports R₀ with confidence intervals. BERTrend works from a single popularity signal; this project cross-validates institutional discourse against Media Cloud broad-press volume. BERTrend validates qualitatively on weak-signal recovery; this project validates against 10 documented macro events with ±14d Brown & Warner (1985) event-study windows.
+The two approaches differ in their dynamics layer. BERTrend's signal classification rests on dynamically chosen popularity thresholds; the life-cycle staging here is model-free, read from each narrative's own trajectory with a trend test (Mann–Kendall with Hamed–Rao correction). BERTrend reports a popularity trajectory and categorises it; this project fits SIR, logistic, and Bass curves by least squares as interpretive lenses, each reported with its fit quality. BERTrend works from a single popularity signal; this project cross-validates institutional discourse against Media Cloud broad-press volume. BERTrend validates qualitatively on weak-signal recovery; this project validates against 10 documented macro events with ±14d Brown & Warner (1985) event-study windows.
 
 ### Medeiros, Quigley & Revie (2026), "A Statistical Framework for Detecting Emergent Narratives in Longitudinal Text Corpora" — arXiv:2602.20939
 LDA-based framework defining narrative emergence as "sustained increase in topic prominence." Validated on Nobel-Prize-recognized economic ideas 1970-2018.
@@ -129,7 +129,7 @@ Adjacent public tools:
 
 Elements distinctive relative to these comparables:
 
-1. Explicit lifecycle-stage labels grounded in SIR/logistic fits rather than ad-hoc thresholds.
+1. Explicit lifecycle-stage labels read model-free from each narrative's trajectory, with SIR/logistic/Bass fits shown alongside.
 2. An institutional and academic source mix rather than newspapers-only or filings-only.
 3. Anchor-narrative validation as a published artifact.
 4. Shiller-explicit framing as live operationalization.
@@ -168,7 +168,7 @@ The following elements are standard in the field:
 | Hansen, McMahon & Prat (2018, *QJE*) | LDA on Fed text — top-5 precedent |
 | Bertsch, Hull, Lumsdaine & Zhang (2021, *Economics Letters*) | Narrative dynamics over time (D-ETM); closest temporal precedent |
 | Flynn & Sastry (2024, NBER WP 32602) | Structural theory complement |
-| Andre, Haaland, Roth, Wiederholt & Wohlfart (forthcoming *RES*) | Bears on the institutional-discourse focus |
+| Andre, Haaland, Roth, Wiederholt & Wohlfart (2025, *RES*, advance article) | Bears on the institutional-discourse focus |
 | Roos & Reccius (2024, *Journal of Economic Surveys*) | Field-state survey |
 | Boutaleb et al. (2024) BERTrend; Medeiros et al. (2026) | BERTopic+temporal, emergence detection precedents |
 | Schmidt et al. (2025); Hartley (2025); Gueta et al. (2025) | LLM-frontier reference set |
