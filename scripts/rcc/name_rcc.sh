@@ -16,12 +16,18 @@
 #
 # Resource spec:
 #   Account:   pi-dachxiu
-#   GPU:       1x A100 40GB (llama3.1 8B fits in a fraction of it; the GPU
-#              buys ~10x tokens/s over CPU for the one-time directory backfill)
+#   GPU:       1 GPU, any node type — the pinned Ollama's CUDA 12 backend
+#              covers v100/rtx6000/a100 on the cluster's 535 driver. Pinning
+#              a100 alone queues for days behind fairshare (one a100 node in
+#              the partition). Midway3's submit filter rejects OR constraints
+#              ("rtx6000|a100") and empty ones (""); pass a single concrete
+#              feature on the sbatch line to target an idle node type, e.g.
+#              sbatch --constraint=v100 scripts/rcc/name_rcc.sh
 #   CPUs:      8
 #   RAM:       32 GB
-#   Time:      12 h  (full post-rebuild backfill ~2-4 h on A100; warm-cache
-#              re-runs are minutes)
+#   Time:      6 h  (full post-rebuild backfill ~2-4 h on A100, more on the
+#              smaller cards; naming is cache-incremental, so a timeout
+#              resumes on resubmit and warm-cache re-runs are minutes)
 #
 # Chain after analyze, or submit standalone against existing artifacts:
 #   sbatch --dependency=afterok:<analyze_jobid> scripts/rcc/name_rcc.sh
@@ -29,11 +35,10 @@
 #SBATCH --job-name=mnd-name
 #SBATCH --account=pi-dachxiu
 #SBATCH --partition=gpu
-#SBATCH --constraint=a100
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --time=12:00:00
+#SBATCH --time=6:00:00
 #SBATCH --output=logs/name_rcc_%j.log
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=ehgarver@uchicago.edu
@@ -56,13 +61,21 @@ echo "Python: $PYTHON_USED"
 
 # User-space Ollama on scratch (no root, no home-quota pressure). The tarball
 # unpacks bin/ollama + lib/ollama; models are pulled once and reused.
+# PINNED to v0.13.2: Midway3 GPU nodes run NVIDIA driver 535, and newer
+# Ollama builds are CUDA-13-only (driver >= 550), so they refuse every GPU
+# in the partition and silently fall back to ~4 tok/s CPU inference (jobs
+# 51872345/51874699). v0.13.2 is the last-tested dual cuda_v12/cuda_v13
+# release; it selects CUDA 12 on driver 535 and runs on any gpu node.
+# Do not bump this pin until the cluster driver reaches 550+.
+OLLAMA_VERSION="v0.13.2"
 OLLAMA_ROOT="/scratch/midway3/ehgarver/ollama"
 export OLLAMA_MODELS="$OLLAMA_ROOT/models"
 export OLLAMA_HOST="127.0.0.1:11434"
 mkdir -p "$OLLAMA_ROOT" "$OLLAMA_MODELS"
 if [[ ! -x "$OLLAMA_ROOT/bin/ollama" ]]; then
-    echo "Installing Ollama to $OLLAMA_ROOT"
-    curl -fsSL https://ollama.com/download/ollama-linux-amd64.tgz | tar -xz -C "$OLLAMA_ROOT"
+    echo "Installing Ollama $OLLAMA_VERSION to $OLLAMA_ROOT"
+    curl -fsSL "https://github.com/ollama/ollama/releases/download/${OLLAMA_VERSION}/ollama-linux-amd64.tgz" \
+        | tar -xz -C "$OLLAMA_ROOT"
 fi
 export PATH="$OLLAMA_ROOT/bin:$PATH"
 
@@ -79,7 +92,7 @@ curl -sf "http://${OLLAMA_HOST}/api/tags" > /dev/null || {
     exit 1
 }
 
-MODEL="${MND_NAMING_MODEL:-llama3.1}"
+MODEL="${MND_NAMING_MODEL:-qwen2.5:7b}"
 ollama pull "$MODEL"
 
 echo "===== mnd-name ====="

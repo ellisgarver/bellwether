@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -64,23 +65,33 @@ _SYSTEM = (
     "span.\n\n"
     "Write two things:\n"
     "- title: a short, specific noun phrase naming what the writing is about — a "
-    "headline, not a sentence, and not a bare keyword. Sentence case, never "
-    "title case: capitalize the first word, proper nouns, and acronyms only "
-    "(write 'Regional bank deposit runs', not 'Regional Bank Deposit Runs'). "
-    "Name the period or event when the excerpts make it clear.\n"
+    "headline, not a sentence, and not a bare keyword. Name the period or event "
+    "when the excerpts make it clear.\n"
     "- description: 2 to 4 plain, concrete sentences on what the writing covers and, "
     "where the material itself shows it, why it mattered — written for an interested "
     "non-expert.\n\n"
     "Rules:\n"
+    "- Sentence case for the title, always: capitalize the first word, proper "
+    "nouns, and acronyms — nothing else. Write 'Regional bank deposit runs', "
+    "never 'Regional Bank Deposit Runs'. This holds for every subject, economic "
+    "or not. If every word of your draft title starts with a capital letter, "
+    "rewrite it in sentence case before answering.\n"
     "- Ground everything in the supplied material. Do not add events, places, dates, "
     "numbers, causes, or outcomes that are not present in it. If the keywords "
     "resemble a well-known event, name that event only when the excerpts confirm "
     "it; otherwise stay general.\n"
     "- If the material does not say why something happened, leave the why out — "
-    "no 'likely', 'possibly', or 'may have been influenced by' padding, and never "
-    "say that the material does not specify something.\n"
+    "no 'likely', 'possibly', or 'may have been influenced by' padding. Never "
+    "write that something is unspecified, implied, or not stated; just leave it "
+    "out.\n"
     "- When no excerpts are supplied, title from the keywords alone, and prefer a "
-    "modest descriptive phrase over guessing a specific event.\n"
+    "modest descriptive phrase over guessing a specific event or storyline. Do "
+    "not invent relationships or actions connecting the people and institutions "
+    "the keywords name. Connect the keywords into a natural phrase; never output "
+    "a bare list of keywords as the title.\n"
+    "- Keywords are machine-extracted and can be malformed — run together "
+    "('officetoresidential') or oddly split. Write the title in normal English "
+    "with correct spacing and hyphens ('office-to-residential conversions').\n"
     "- If the material is not about economics or finance, name it plainly for what it "
     "actually is rather than forcing an economic framing.\n"
     "- Neutral and factual: no hype, no editorializing, no forecasting, no advice.\n"
@@ -101,8 +112,52 @@ _SYSTEM = (
     "Example (keywords only):\n"
     '{"title": "Crop insurance and farm subsidy programs", "description": '
     '"Federal support for farmers through crop insurance and direct subsidies, '
-    'and the recurring budget debates over the cost of both."}'
+    'and the recurring budget debates over the cost of both."}\n'
+    "Example (keywords only, not economics — sentence case still applies):\n"
+    '{"title": "Conference planning and event logistics", "description": '
+    '"Professional conferences are organized around registration, hotel '
+    'arrangements, agendas, and keynote sessions."}\n'
+    "Example (keywords only, mostly names — stay modest, connect nothing):\n"
+    '{"title": "European leaders and transatlantic relations", "description": '
+    '"European heads of government manage their countries\' relations with the '
+    'United States, and recurring surveys track how those relationships '
+    'shift."}'
 )
+
+# Deterministic title cleanup applied after generation, before caching. The
+# 7B-class open models copy the lowercase c-TF-IDF keywords into titles
+# ("detroit", "Gdp cpi"), and up-casing a fixed acronym list plus the first
+# letter is safe in a way the reverse (de-Title-Casing, which needs to know
+# which words are proper nouns) is not.
+_ACRONYMS = {
+    "gdp", "cpi", "pce", "ppi", "fomc", "imf", "bis", "cbo", "cea", "ofr",
+    "nber", "svb", "vix", "qe", "qt", "ecb", "boe", "boj", "pboc", "snb",
+    "fdic", "sec", "occ", "fsoc", "tarp", "btfp", "wto", "nato", "opec",
+    "ai", "uk", "eu", "un", "jel", "zlb", "nairu", "cds", "etf", "ipo",
+    "reit", "tips", "sofr", "libor",
+}
+_FIXUPS = {
+    "federal reserve": "Federal Reserve",
+    "federal open market committee": "Federal Open Market Committee",
+    "beige book": "Beige Book",
+    "jackson hole": "Jackson Hole",
+    "wall street": "Wall Street",
+    "white house": "White House",
+    "u.s.": "U.S.",
+}
+
+
+def _polish_title(title: str) -> str:
+    """Deterministic casing repair: first letter, acronyms, fixed proper nouns."""
+    t = title.strip()
+    for k, v in _FIXUPS.items():
+        t = re.sub(rf"\b{re.escape(k)}\b", v, t, flags=re.IGNORECASE)
+    words = [
+        w.upper() if w.lower().strip(",.:;()'’") in _ACRONYMS else w
+        for w in t.split(" ")
+    ]
+    t = " ".join(words)
+    return (t[0].upper() + t[1:]) if t else t
 
 _SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -404,7 +459,9 @@ def generate_names(
         for inp, path in misses:
             try:
                 d = client.name_cluster(_SYSTEM, _build_user(inp, title_words), _SCHEMA)
-                name = NarrativeName(str(d["title"]).strip(), str(d["description"]).strip())
+                name = NarrativeName(
+                    _polish_title(str(d["title"])), str(d["description"]).strip()
+                )
             except Exception as exc:
                 log.warning("Naming failed for cluster %s: %s", inp.cluster_id, exc)
                 if not produced_any:

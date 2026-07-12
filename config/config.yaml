@@ -320,15 +320,18 @@ display:
     # representation hash, and committed so the static site rebuilds with no key.
     # Disabled or unkeyed → the front end falls back to the c-TF-IDF label.
     enabled: true
-    # "llama" (default): open Llama via an OpenAI-compatible endpoint (ADR-067) —
-    # key-free/reproducible; defaults to a local Ollama (`ollama pull llama3.1`).
+    # "llama" (default): open model via an OpenAI-compatible endpoint (ADR-067) —
+    # key-free/reproducible; defaults to a local Ollama (`ollama pull qwen2.5:7b`).
     # "local": in-process transformers model. "anthropic": paid Claude Haiku.
     backend: "llama"
     base_url: "http://localhost:11434/v1"   # backend=llama: Ollama (or any OpenAI-compatible URL)
-    model: "llama3.1"           # backend=llama: served model id (env MND_NAMING_MODEL overrides)
+    # qwen2.5:7b holds sentence case where llama3.1 reverts to Title Case
+    # (2026-07-12 A/B on the v4 prompt); non-thinking, so no qwen3-style
+    # deliberation timeouts. Same family as the ADR-067 local fallback below.
+    model: "qwen2.5:7b"         # backend=llama: served model id (env MND_NAMING_MODEL overrides)
     local_model: "Qwen/Qwen2.5-7B-Instruct"   # backend=local: open, Apache-2.0, no key
     max_title_words: 7          # soft target for the title (not a hard cap)
-    prompt_version: 3           # bump to invalidate the cache when the prompt changes
+    prompt_version: 4           # bump to invalidate the cache when the prompt changes
     cache_dir: "data/naming_cache"   # tracked path (data/ is not gitignored)
   forming:
     # Sub-floor clusters surface as "forming" on the emerging page when their
