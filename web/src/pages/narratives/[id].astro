@@ -103,8 +103,8 @@ const direction = (d: any) =>
     {n.jel && <> · <abbr title={JEL_NAME[n.jel.code] ?? n.jel.code}>JEL {n.jel.code}</abbr></>}
     <span class="sep">|</span>
     <StageBadge stage={n.stage} emerging={entry.is_emerging} inScope={n.jel?.in_scope ?? true} />
-    {corpusHot && <span class="heat" title="institutional writing on this narrative is spiking above its own yearly baseline">corpus heating</span>}
-    {pressHot && <span class="heat" title="broad-press attention on this narrative is spiking above its own yearly baseline">press heating</span>}
+    {corpusHot && <span class="badge heat" title="institutional writing on this narrative is spiking above its own yearly baseline">corpus heating</span>}
+    {pressHot && <span class="badge heat" title="broad-press attention on this narrative is spiking above its own yearly baseline">press heating</span>}
   </p>
 
   <!-- life-cycle chart -->
@@ -167,7 +167,7 @@ const direction = (d: any) =>
     </p>
     {corpusHot && (
       <p class="caption heat-note">
-        <span class="heat">corpus heating</span> institutional writing on this narrative over the last {CORPUS_HEATING.recentWeeks} weeks sits {corpusHot.z.toFixed(1)}σ above its own yearly baseline.
+        <span class="badge heat">corpus heating</span> institutional writing on this narrative over the last {CORPUS_HEATING.recentWeeks} weeks sits {corpusHot.z.toFixed(1)}σ above its own yearly baseline.
       </p>
     )}
   </section>
@@ -204,7 +204,7 @@ const direction = (d: any) =>
       </div>
       {pressHot && (
         <p class="caption heat-note">
-          <span class="heat">press heating</span> broad-press attention over the last {PRESS_HEATING.recentWeeks} weeks sits {pressHot.z.toFixed(1)}σ above its own yearly baseline.
+          <span class="badge heat">press heating</span> broad-press attention over the last {PRESS_HEATING.recentWeeks} weeks sits {pressHot.z.toFixed(1)}σ above its own yearly baseline.
         </p>
       )}
     </section>
@@ -511,16 +511,6 @@ const direction = (d: any) =>
 <style>
   .heat-note { margin-top: 1.2rem; }
   .sir-note { margin-top: 1.2rem; }
-  /* heating pill — shared by the page-meta badges and the callout labels;
-     corpus and press heating use the identical pill, only the wording differs. */
-  .heat {
-    display: inline-flex; align-items: center;
-    font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.01em;
-    padding: 0.18rem 0.6rem; border-radius: 999px; line-height: 1.4;
-    border: 1px solid color-mix(in srgb, #c2410c 45%, var(--paper));
-    color: #c2410c; background: color-mix(in srgb, #c2410c 12%, var(--paper));
-    margin-right: 0.35rem; white-space: nowrap;
-  }
   .back { margin: 0 0 0.6rem; }
   /* the stage accent is the title itself, set in the narrative's stage color —
      no underline tick, so the title-to-description rhythm stays untouched. the
@@ -538,6 +528,7 @@ const direction = (d: any) =>
      body size and color; only the lede role is dropped. */
   .page-meta { color: var(--muted); font-size: var(--fs-body); margin: 0.5rem 0 1.4rem; }
   .page-meta :global(.badge) { vertical-align: middle; margin-right: 0.3rem; }
+  .heat-note :global(.badge.heat) { margin-right: 0.35rem; }
   /* lens tabs on the left, overlay checkboxes pinned to the right, one line */
   .lens-bar {
     display: flex; align-items: center; justify-content: space-between;

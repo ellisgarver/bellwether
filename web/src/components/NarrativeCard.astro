@@ -56,10 +56,10 @@ const col = STAGE_COLOR[entry.stage];
         <StageBadge stage={entry.stage} emerging={entry.is_emerging} inScope={entry.in_scope} />
       )}
       {corpusHot && (
-        <span class="heat" title="institutional writing on this narrative is spiking above its own yearly baseline">corpus heating</span>
+        <span class="badge heat" title="institutional writing on this narrative is spiking above its own yearly baseline">corpus heating</span>
       )}
       {showPress && (
-        <span class="heat" title="broad-press attention on this narrative is spiking above its own yearly baseline">press heating</span>
+        <span class="badge heat" title="broad-press attention on this narrative is spiking above its own yearly baseline">press heating</span>
       )}
       {tag && <span class="flag">{tag}</span>}
     </div>
@@ -97,14 +97,6 @@ const col = STAGE_COLOR[entry.stage];
   /* tags sit in a single row beneath the sparkline so a second tag (emerging /
      out-of-scope) widens the row instead of stacking and lengthening the cell. */
   .badges { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
-  .heat {
-    display: inline-flex; align-items: center;
-    font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.01em;
-    padding: 0.18rem 0.6rem; border-radius: 999px; line-height: 1.4;
-    border: 1px solid color-mix(in srgb, #c2410c 45%, var(--paper));
-    color: #c2410c; background: color-mix(in srgb, #c2410c 12%, var(--paper));
-    white-space: nowrap;
-  }
   /* neutral tag for cards without a page behind them (sub-floor clusters) */
   .flag {
     font-size: 0.72rem; font-weight: 600;
