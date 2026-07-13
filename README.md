@@ -1,6 +1,6 @@
 # bellwether
 
-A tool to examine how macroeconomic narratives form, rise, and fade. This project reads sixteen years (2010–present) of
+A tool to examine how macroeconomic narratives form, rise, and fade. This project reads fifteen plus years (2010–present) of
 U.S. macro-financial discourse from academic and institutional sources — the Fed, the IMF, the BIS, the NBER and their
 peers — clusters it into narratives, and tracks each story.
 
@@ -8,7 +8,7 @@ peers — clusters it into narratives, and tracks each story.
 
 The analysis surfaces a 3-D map of the narrative landscape, a catalog of
 every charted narrative with its life-cycle stage, an emerging-signals feed, and
-per-narrative pages that chart each story's volume against classical growth
+per-narrative pages that compare each story's volume against classical growth
 curves, broad-press coverage, and market series.
 
 ## The idea
@@ -24,30 +24,27 @@ measured and incorporates other models and lenses of analysis.
   dimensions of U.S. macro discourse: the Federal Reserve Board and four
   regional Feds, the IMF, the BIS, the CBO and CEA, the Treasury's OFR,
   Brookings, PIIE, the NBER, VoxEU, and Congressional testimony. Everything
-  from every source is ingested; nothing is filtered by topic.
+  from every source is ingested and nothing is filtered by topic.
 - **Narratives** — documents are embedded with Qwen3-Embedding-8B and clustered
   with BERTopic; each cluster of related writing is a narrative candidate,
-  scoped after the fact against the standard AEA JEL taxonomy. Narratives with
-  at least 42 unique articles are charted in full; smaller clusters stay in the
-  directory as forming signals.
+  scoped against the standard AEA JEL taxonomy. Narratives with
+  at least 42 unique articles are analyzed in full; smaller clusters
+  can be found in the directory as forming signals.
 - **Life-cycles** — each narrative's stage (growth, stable, decay, dormant) is
-  read model-free from its own volume trajectory with a trend test. Epidemic (SIR),
-  logistic, and Bass adoption curves are fit alongside as interpretive lenses,
-  each reported with its fit quality, but not used to decide the stage.
+  read model-free from its own volume trajectory with a modified trend test. Epidemic (SIR),
+  logistic, and Bass adoption curves are fit alongside each reported with its fit quality.
 - **Context** — broad-press story counts (Media Cloud) and market series (FRED)
-  serve as overlays for each narrative for lead–lag comparison; both are display-only and
-  don't directly contribute to the analysis.
+  serve as overlays for each narrative for lead–lag comparison; both are display-only.
 
 Every threshold is a published library default or a value cited from primary
-literature, every random step flows from the one fixed seed, and no parameter is
-tuned toward any target. The full methodology, with the citation behind each
-choice, is in [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md).
+literature, every random step flows from the one fixed seed, and parameters aren't
+tuned toward any target.
 
 ## Repository
 
 | | |
 |---|---|
-| `src/mnd/` | the full pipeline: ingestion, filtering, embedding, clustering, dynamics, staging, overlays, artifact baking |
+| `src/mnd/` | the full end-to-end pipeline |
 | `scripts/run_pipeline.py` | one CLI for every stage |
 | `config/config.yaml` | every threshold and seed |
 | `web/` | the static Astro site, built from baked JSON artifacts |
@@ -55,8 +52,8 @@ choice, is in [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md).
 
 ## References
 
-A selection below; the full cited set, with the choice each one backs, is in
-[`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) §6 and the literature survey in
+A selection below; the full cited set of design choices is in
+[`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) and the literature survey in
 [`docs/related_work.md`](docs/related_work.md).
 
 - **Framing** — Shiller (2017), "Narrative Economics," *AER* 107(4); Shiller (2019), *Narrative Economics*, Princeton; Roos & Reccius (2024), *J. Economic Surveys* 38(2).
