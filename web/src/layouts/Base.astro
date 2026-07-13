@@ -39,7 +39,11 @@ const asOf = loadIndex().generated_at?.slice(0, 10) ?? "";
     <header class="site-header">
       <div class="wrap">
         <a class="brand" href={href("/")}>
-          <img class="brand-icon" src={href("/favicon.svg")} alt="" width="22" height="22" />
+          <svg class="brand-icon" width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">
+            <rect width="32" height="32" rx="7" fill="#edece8" />
+            <path d="M4 24 C10 24 12 8 16 8 C20 8 22 20 28 20" fill="none" stroke="#3a5a93" stroke-width="2.6" stroke-linecap="round" />
+            <circle class="peak" r="2.6" fill="#c2410c" />
+          </svg>
           <span class="wordmark">bell<span class="mk">wether</span></span>
         </a>
         <nav class="nav">
@@ -101,6 +105,33 @@ const asOf = loadIndex().generated_at?.slice(0, 10) ?? "";
     <style>
       .brand { display: inline-flex; align-items: center; gap: 0.55rem; }
       .brand-icon { display: block; border-radius: 5px; }
+      /* hover: the red dot traces the curve from the left up to its peak while
+         the wordmark's underline grows to full width — matched 0.6s durations so
+         both finish at the same moment. The dot rests at the peak (offset 100%). */
+      .brand-icon .peak {
+        offset-path: path("M4 24 C10 24 12 8 16 8");
+        offset-rotate: 0deg;
+        offset-distance: 100%;
+        transition: fill 0.6s ease;
+      }
+      .brand:hover .brand-icon .peak,
+      .brand:focus-visible .brand-icon .peak {
+        animation: trace-peak 0.6s var(--ease) both;
+        fill: #e04a12;
+      }
+      @keyframes trace-peak { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+      .brand .wordmark { position: relative; }
+      .brand .wordmark::after {
+        content: ""; position: absolute; left: 0; bottom: -3px; height: 2px; width: 1.3rem;
+        background: #3a5a93; transform: scaleX(0); transform-origin: left;
+        transition: transform 0.6s var(--ease);
+      }
+      .brand:hover .wordmark::after,
+      .brand:focus-visible .wordmark::after { transform: scaleX(1); }
+      @media (prefers-reduced-motion: reduce) {
+        .brand-icon .peak { animation: none; }
+        .brand .wordmark::after { transition: none; }
+      }
     </style>
   </body>
 </html>

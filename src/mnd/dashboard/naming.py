@@ -460,11 +460,11 @@ class LocalHFNamer:
 class OpenAICompatNamer:
     """Open-model naming via an OpenAI-compatible chat endpoint (ADR-067).
 
-    The default and recommended path: a Llama served locally by Ollama
-    (``ollama pull llama3.1`` → ``http://localhost:11434/v1``) — key-free, free, and
+    The default and recommended path: an open model served locally by Ollama
+    (``ollama pull qwen2.5:7b`` → ``http://localhost:11434/v1``), key-free, free, and
     reproducible, keeping the whole pipeline runnable without any paid API. The same
-    client also drives any hosted OpenAI-compatible Llama endpoint (Together, Groq,
-    Fireworks, vLLM) by pointing ``base_url`` / setting ``MND_NAMING_API_KEY``.
+    client drives any hosted OpenAI-compatible endpoint (Together, Groq, Fireworks,
+    vLLM) by pointing ``base_url`` / setting ``MND_NAMING_API_KEY``.
 
     Uses only ``urllib`` (no SDK dependency). Temperature 0 → greedy/deterministic,
     so the committed name cache stays meaningful. Unreachable endpoint → the first
@@ -482,7 +482,7 @@ class OpenAICompatNamer:
 
         nc = (cfg.get("display") or {}).get("naming") or {}
         base_url = os.environ.get("MND_NAMING_BASE_URL", nc.get("base_url", "http://localhost:11434/v1"))
-        model = os.environ.get("MND_NAMING_MODEL", nc.get("model", "llama3.1"))
+        model = os.environ.get("MND_NAMING_MODEL", nc.get("model", "qwen2.5:7b"))
         api_key = os.environ.get("MND_NAMING_API_KEY", nc.get("api_key"))
         return cls(base_url, model, api_key)
 
@@ -538,13 +538,13 @@ def generate_names(
 
     import os
 
-    # Default: open Llama via an OpenAI-compatible endpoint (Ollama), key-free and
+    # Default: an open model via an OpenAI-compatible endpoint (Ollama), key-free and
     # reproducible (ADR-067). "local" = in-process transformers; "anthropic" = paid.
     backend = str(nc.get("backend", "llama")).lower()
     # The cache key includes the effective model id, so a backend/model switch never
     # serves another backend's titles from cache.
     if backend == "llama":
-        model = str(os.environ.get("MND_NAMING_MODEL", nc.get("model", "llama3.1")))
+        model = str(os.environ.get("MND_NAMING_MODEL", nc.get("model", "qwen2.5:7b")))
     elif backend == "local":
         model = str(nc.get("local_model", "Qwen/Qwen2.5-7B-Instruct"))
     else:

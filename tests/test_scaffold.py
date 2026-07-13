@@ -1,17 +1,11 @@
 """Smoke tests for the static scaffold: config schema, whitelist invariants,
-anchor fixtures, and importability. Heavier integration tests live in the
-other test modules.
+and importability. Heavier integration tests live in the other test modules.
 
 Run from the repo root: `pytest`.
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
-
-REPO = Path(__file__).resolve().parent.parent
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +37,7 @@ def test_embedding_single_model_post_adr019():
 def test_kill_criteria_removed_per_adr019():
     """ADR-019: all kill-criterion thresholds removed. Quantities are reported,
     not gated, because no field-accepted literature anchor exists for the
-    specific cutoffs (NMI 0.40, R^2 0.30, anchor recovery 7/10, etc.)."""
+    specific cutoffs (NMI 0.40, R^2 0.30, etc.)."""
     from mnd.utils.config import load_config
     cfg = load_config()
     assert "min_r_squared" not in cfg["dynamics"], (
@@ -52,14 +46,8 @@ def test_kill_criteria_removed_per_adr019():
     assert "max_r0_ci_width" not in cfg["dynamics"], (
         "max_r0_ci_width kill criterion removed by ADR-019"
     )
-    assert "required_anchors_recovered" not in cfg["validation"], (
-        "required_anchors_recovered kill criterion removed by ADR-019"
-    )
-    assert "min_bootstrap_nmi" not in cfg["validation"], (
+    assert "min_bootstrap_nmi" not in cfg["diagnostics"], (
         "min_bootstrap_nmi kill criterion removed by ADR-019"
-    )
-    assert "lookahead_check" not in cfg["validation"], (
-        "lookahead_check apparatus removed by ADR-019"
     )
 
 
@@ -106,36 +94,6 @@ def test_whitelist_loads_and_has_required_outlets():
 # removed by ADR-020 (2026-05-20). Tier-anchored macro scope is now the only
 # pre-clustering filter; JEL classification is post-clustering. No
 # keyword-coverage test at this stage.
-
-
-# ---------------------------------------------------------------------------
-# Anchor narratives
-# ---------------------------------------------------------------------------
-
-def test_anchor_narratives_jsonl_well_formed():
-    path = REPO / "data" / "anchors" / "anchor_narratives.jsonl"
-    assert path.exists(), f"missing {path}"
-    records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-    assert len(records) == 10, f"expected 10 anchor narratives, got {len(records)}"
-    required = {"id", "name", "category", "reference_date", "tolerance_days", "key_terms",
-                "expected_emergence_speed", "why_anchor", "expected_significance_threshold"}
-    for r in records:
-        missing = required - set(r.keys())
-        assert not missing, f"anchor {r.get('id')} missing fields: {missing}"
-    # IDs are unique
-    ids = [r["id"] for r in records]
-    assert len(ids) == len(set(ids)), "duplicate anchor IDs"
-
-
-def test_fizzled_seed_marked_as_draft():
-    """Fizzled counterparts MUST be marked DRAFT until corpus-confirmed."""
-    path = REPO / "data" / "anchors" / "fizzled_counterparts_seed.jsonl"
-    records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-    assert len(records) >= 3
-    for r in records:
-        assert r.get("_seed_status", "").startswith("DRAFT"), (
-            f"fizzled candidate {r.get('id')} must be DRAFT until corpus-confirmed"
-        )
 
 
 # ---------------------------------------------------------------------------

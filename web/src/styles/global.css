@@ -33,9 +33,9 @@
   --fs-body:  1.0625rem; /* body copy (17px at the 16px root) */
   --fs-h2:    clamp(1.4rem, 2.4vw, 1.9rem); /* section headings */
   --fs-lede:  1.18rem;  /* ledes, hero thesis, h3 / card titles */
-  /* big tabular stat figure (home hero stats + data-page corpus stats); one
-     responsive value so the same role reads identically on every page. */
-  --fs-stat:  clamp(2rem, 3.2vw, 2.4rem);
+  /* tabular stat figure (home hero stats + data-page corpus stats); matches the
+     section subhead size so figures sit level with the headings around them. */
+  --fs-stat:  var(--fs-h2);
   /* one page-title size everywhere (home hero, catalogs, detail pages). */
   --fs-title: clamp(1.9rem, 3.6vw, 2.9rem);
 
@@ -181,11 +181,11 @@ a.card:hover { background: var(--paper-2); padding-left: 0.9rem; padding-right: 
   padding: 0.18rem 0.6rem; border-radius: 999px; line-height: 1.4;
 }
 .dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; display: inline-block; }
-.badge.growth { background: color-mix(in srgb, var(--growth) 14%, var(--paper)); color: var(--growth); }
-.badge.stable { background: color-mix(in srgb, var(--stable) 14%, var(--paper)); color: var(--stable); }
-.badge.decay { background: color-mix(in srgb, var(--decay) 14%, var(--paper)); color: var(--decay); }
-.badge.dormant { background: color-mix(in srgb, var(--dormant) 20%, var(--paper)); color: #57534a; }
-.badge.emerging { background: color-mix(in srgb, var(--ember) 14%, var(--paper)); color: var(--ember); }
+.badge.growth { background: color-mix(in srgb, var(--growth) 14%, var(--paper)); color: var(--growth); border: 1px solid color-mix(in srgb, var(--growth) 45%, var(--paper)); }
+.badge.stable { background: color-mix(in srgb, var(--stable) 14%, var(--paper)); color: var(--stable); border: 1px solid color-mix(in srgb, var(--stable) 45%, var(--paper)); }
+.badge.decay { background: color-mix(in srgb, var(--decay) 14%, var(--paper)); color: var(--decay); border: 1px solid color-mix(in srgb, var(--decay) 45%, var(--paper)); }
+.badge.dormant { background: color-mix(in srgb, var(--dormant) 20%, var(--paper)); color: #57534a; border: 1px solid color-mix(in srgb, var(--dormant) 55%, var(--paper)); }
+.badge.emerging { background: color-mix(in srgb, var(--ember) 14%, var(--paper)); color: var(--ember); border: 1px solid color-mix(in srgb, var(--ember) 45%, var(--paper)); }
 .badge.oos { background: var(--paper-2); color: var(--muted); border: 1px solid var(--line); }
 
 /* ---- tabs + toggles ---- */

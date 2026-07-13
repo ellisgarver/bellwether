@@ -2,7 +2,7 @@
 
 A survey of the published literature relevant to quantitative macro-narrative measurement.
 
-The individual components are field-standard, and most have precedents: epidemic models of idea and rumour spread go back to Goffman & Newill (1964) and Daley & Kendall (1965); SIR and logistic curves have since been fit to news, citations, and online topics; topic-model studies of macro discourse are an established stream. What is uncommon as a single artifact is the combination — a multi-source institutional and academic corpus → BERTopic on transformer embeddings → SIR/logistic/Bass life-cycle fits per narrative cluster → anchor validation → a public dashboard. The contribution is integrative and operational: a tool for reading past and present macro narratives rather than a new method.
+The individual components are field-standard, and most have precedents: epidemic models of idea and rumour spread go back to Goffman & Newill (1964) and Daley & Kendall (1965); SIR and logistic curves have since been fit to news, citations, and online topics; topic-model studies of macro discourse are an established stream. What is uncommon as a single artifact is the combination — a multi-source institutional and academic corpus → BERTopic on transformer embeddings → SIR/logistic/Bass life-cycle fits per narrative cluster → a public dashboard. The contribution is integrative and operational: a tool for reading past and present macro narratives rather than a new method.
 
 ---
 
@@ -71,12 +71,12 @@ Novel relative to vanilla BERTopic:
 
 **Overlap:** HIGH (technical adjacent), MEDIUM (intent), LOW (domain). The closest published BERTopic + temporal-dynamics precedent and the most widely-known open-source library for incremental BERTopic, applied to general weak-signal trend detection rather than economics.
 
-The two approaches differ in their dynamics layer. BERTrend's signal classification rests on dynamically chosen popularity thresholds; the life-cycle staging here is model-free, read from each narrative's own trajectory with a trend test (Mann–Kendall with Hamed–Rao correction). BERTrend reports a popularity trajectory and categorises it; this project fits SIR, logistic, and Bass curves by least squares as interpretive lenses, each reported with its fit quality. BERTrend works from a single popularity signal; this project cross-validates institutional discourse against Media Cloud broad-press volume. BERTrend validates qualitatively on weak-signal recovery; this project validates against 10 documented macro events with ±14d Brown & Warner (1985) event-study windows.
+The two approaches differ in their dynamics layer. BERTrend's signal classification rests on dynamically chosen popularity thresholds; the life-cycle staging here is model-free, read from each narrative's own trajectory with a trend test (Mann–Kendall with Hamed–Rao correction). BERTrend reports a popularity trajectory and categorises it; this project fits SIR, logistic, and Bass curves by least squares as interpretive lenses, each reported with its fit quality. BERTrend works from a single popularity signal; this project reads institutional discourse against a Media Cloud broad-press overlay.
 
 ### Medeiros, Quigley & Revie (2026), "A Statistical Framework for Detecting Emergent Narratives in Longitudinal Text Corpora" — arXiv:2602.20939
 LDA-based framework defining narrative emergence as "sustained increase in topic prominence." Validated on Nobel-Prize-recognized economic ideas 1970-2018.
 
-**Overlap:** HIGH. The most direct contemporary precedent for the emergence-detection half of lifecycle classification; its Nobel-anchor validation is conceptually parallel to the 10-anchor validation here, and it defines emergence statistically without extending through peak and decay.
+**Overlap:** HIGH. The most direct contemporary precedent for the emergence-detection half of lifecycle classification; it defines emergence statistically without extending through peak and decay.
 
 ---
 
@@ -122,7 +122,7 @@ Sentiment scores from Central Bank of Brazil Copom minutes and Inflation Reports
 
 ## 7. Public-facing dashboards and live tools
 
-No published live or public-facing dashboard combines a multi-source institutional/academic corpus, clustered narratives, lifecycle-stage labels, and dynamics curves with documented anchor validation.
+No published live or public-facing dashboard combines a multi-source institutional/academic corpus, clustered narratives, lifecycle-stage labels, and dynamics curves.
 
 Adjacent public tools:
 
@@ -136,8 +136,7 @@ Elements distinctive relative to these comparables:
 
 1. Explicit lifecycle-stage labels read model-free from each narrative's trajectory, with SIR/logistic/Bass fits shown alongside.
 2. An institutional and academic source mix rather than newspapers-only or filings-only.
-3. Anchor-narrative validation as a published artifact.
-4. Shiller-explicit framing as live operationalization.
+3. Shiller-explicit framing as live operationalization.
 
 ---
 
@@ -148,7 +147,7 @@ Elements distinctive relative to these comparables:
 - Fitting SIR/logistic/Bass lifecycle curves to a multi-source institutional and academic macro corpus and labeling per-narrative stages is uncommon. The epidemic-of-ideas lineage (Goffman & Newill 1964; Daley & Kendall 1965) and later news/citation-SIR work establish the model; Bertsch et al. is closest in spirit but reports a single fragmentation index, and Medeiros et al. (2026) defines emergence statistically without extending through peak and decay.
 - Packaging narrative lifecycle measurement as a public, open-source dashboard is uncommon; the main adjacent public artifact, Baker-Bloom-Davis EPU, is a single index rather than a browsable set of staged narratives.
 - The institutional and academic source mix is broader than the published comparables: Bybee = WSJ only; Larsen-Thorsrud = one Norwegian paper; Bertsch = newspapers only; Hansen-McMahon-Prat = FOMC only.
-- Anchor-narrative validation against 10 pre-documented events, with stability tested via bootstrap NMI.
+- Cluster stability is tested with bootstrap NMI (reported, not gated).
 
 ### Shared with field consensus
 
@@ -157,7 +156,6 @@ The following elements are standard in the field:
 - BERTopic-on-transformer-embeddings is standard in non-economics NLP (BERTrend and many adjacent papers).
 - LDA-and-relatives for macro discourse is well-established since Hansen et al. 2014/2018.
 - Shiller as the conceptual anchor is standard (Roos & Reccius 2024).
-- Validating text-based macro measures against known anchor dates is standard since Manela-Moreira (2017) and Baker-Bloom-Davis (2016).
 
 ---
 

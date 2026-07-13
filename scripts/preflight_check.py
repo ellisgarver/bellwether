@@ -3,9 +3,8 @@
 Run this BEFORE any pipeline work to confirm:
   1. Python and core dependencies importable
   2. Config files parse and have the expected schema version
-  3. Anchor and fizzled JSONL files are well-formed
-  4. FRED API key is set (validation data layer)
-  5. Embedding model can be loaded (downloads model weights on first run)
+  3. FRED API key is set (market-overlay data source)
+  4. Embedding model can be loaded (downloads model weights on first run)
 
 This script does NOT require UChicago library access — that gate is checked
 separately. The intent is to surface infrastructure problems before they
@@ -18,7 +17,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -73,29 +71,6 @@ def check_configs() -> tuple[bool, str]:
     return not issues, "all configs OK" if not issues else "; ".join(issues)
 
 
-@_check("Anchor JSONL is valid")
-def check_anchors() -> tuple[bool, str]:
-    repo = Path(__file__).resolve().parent.parent
-    path = repo / "data" / "anchors" / "anchor_narratives.jsonl"
-    if not path.exists():
-        return False, f"missing: {path}"
-    n = 0
-    with path.open() as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError as e:
-                return False, f"invalid JSONL on line {n+1}: {e}"
-            for required in ("id", "name", "reference_date", "tolerance_days", "key_terms"):
-                if required not in obj:
-                    return False, f"anchor {obj.get('id')} missing field {required}"
-            n += 1
-    return n >= 10, f"{n} anchor narratives loaded"
-
-
 @_check("FRED API key")
 def check_fred() -> tuple[bool, str]:
     key = os.environ.get("FRED_API_KEY")
@@ -140,7 +115,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    checks = [check_python, check_imports, check_configs, check_anchors,
+    checks = [check_python, check_imports, check_configs,
               check_fred, check_institutional_ingestor]
     if not args.skip_embedding:
         checks.append(check_embedding)

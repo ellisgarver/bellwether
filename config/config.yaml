@@ -10,7 +10,7 @@
 # =============================================================================
 
 schema_version: "2.0.0"  # bumped by ADR-019 (2026-05-20) — comprehensive methodology lock-in
-project_name: "macro-narrative-dynamics"
+project_name: "bellwether"
 
 # -----------------------------------------------------------------------------
 # Temporal scope
@@ -26,22 +26,12 @@ temporal:
 # -----------------------------------------------------------------------------
 # Embedding (locked — ADR-001, restored by ADR-011)
 # -----------------------------------------------------------------------------
-# Two-model strategy:
-#
-#  PRIMARY (production): Qwen3-Embedding-0.6B
-#    - 32,768 token context — essential for long-form institutional corpus
-#      (FOMC minutes 10-15k words, BIS QR 3-8k words, Jackson Hole 8-15k words)
-#    - Apache 2.0, top-tier MTEB. Instruction-aware.
-#    - Training cutoff ~2025: look-ahead exposure exists; mitigated by formal
-#      sensitivity check (ADR-011). Local MPS: MND_MAX_SEQ_LEN=512 (ADR-006).
-#
-#  COMPARATOR (look-ahead sensitivity check only, not used for production):
-#    - all-mpnet-base-v2, training cutoff ~2020-2021, max 384 tokens.
-#    - Run on the 10 anchor narrative sub-corpora to compare NMI/silhouette
-#      across pre-2021 vs post-2021 windows against primary (ADR-011).
-#    - If Qwen3 Δ_NMI(post-2021 − pre-2021) > 0.15 AND mpnet does not show
-#      the same pattern → document as look-ahead; caveat in pre-registration.
-#
+# Embedding
+# -----------------------------------------------------------------------------
+# One production embedder: Qwen3-Embedding-8B (ADR-036). Apache 2.0, top-tier
+# MTEB, instruction-aware, 32,768-token context for the long-form institutional
+# corpus (FOMC minutes 10-15k words, BIS Quarterly Review 3-8k words). Local MPS:
+# export MND_MAX_SEQ_LEN=512 to avoid OOM (ADR-006).
 embedding:
   primary:
     model: "Qwen/Qwen3-Embedding-8B"  # ADR-036 (was 0.6B); top-tier MTEB, A100-only
@@ -57,10 +47,6 @@ embedding:
     instruction_aware: true
     instruction_prefix: "Instruct: Represent this financial policy document for narrative clustering\nQuery: "
     # No upgrade_path — 8B is the top of the Qwen3-Embedding family.
-  # Comparator (mpnet) look-ahead sensitivity check removed by ADR-019 (2026-05-20).
-  # The negative finding from the prior look-ahead check (ADR-011) is preserved
-  # as historical evidence in the project record; the apparatus itself is not
-  # part of the active methodology under the "anchored or removed" principle.
 
 # -----------------------------------------------------------------------------
 # Document chunking (ADR-019) — pre-embedding processing
@@ -142,7 +128,7 @@ dynamics:
   # stay in clusters.parquet and are reported as an aggregate count
   # (n_clusters_total); clustering is untouched, so this is a post-hoc display
   # selection, not a tuned hyperparameter (ADR-040 holds — fixed a priori, never
-  # adjusted to improve anchor recovery).
+  # adjusted to any target).
   min_articles_to_fit: 42
   # Four lenses shown side by side, not selected by AICc. shape-facts is
   # model-free (no entry here -- always computed). The fits are display lenses
@@ -154,7 +140,7 @@ dynamics:
   # Lens fits are bounded least-squares (ADR-067), not MCMC — no draws/chains. A
   # lens is shown iff the optimizer succeeds AND its R² clears this floor; below it
   # the lens grays out (the fit-quality gate that replaced the MCMC R-hat/ESS gate).
-  # Fixed a priori, not tuned to anchor recovery (ADR-040).
+  # Fixed a priori, not tuned to any target (ADR-040).
   min_fit_r2: 0.3
   priors:
     # Init anchors for the least-squares optimizer (ADR-067; formerly Bayesian
@@ -240,10 +226,10 @@ detection:
 # tuned magnitude. SIR R_0 is a display-only headline for the SIR lens, not a gate.
 stages:
   trend_alpha: 0.05                # significance level for the Mann-Kendall trend test
-  newly_emerging_recency_weeks: 4  # recent window W and emerging flag; sharp-anchor windows + Brown & Warner 1985
+  newly_emerging_recency_weeks: 4  # recent window W and emerging flag; 4-week event window, Brown & Warner 1985
   dormant_peak_fraction: 0.25      # a no-trend narrative is dormant when its recent-window level falls below this
                                    # fraction of its own peak-window level; otherwise stable (ADR-058). A definition,
-                                   # not tuned to anchor recovery (ADR-040).
+                                   # not tuned to any target (ADR-040).
   stale_dormant_weeks: 16          # staleness override (ADR-075): a narrative whose last activity trails the corpus
                                    # frontier by more than this (a quarter) reads dormant regardless of its life-shape.
                                    # The stage window is the tail of each narrative's OWN series, so without this a
@@ -278,15 +264,11 @@ filtering:
     min_content_words: 50          # post-strip articles below this, that were actually stripped, are dropped as content-free shells
 
 # -----------------------------------------------------------------------------
-# Validation (ADR-019)
+# Diagnostics (ADR-019)
 # -----------------------------------------------------------------------------
-# Anchor recovery rate is reported, not gated. No kill criteria with researcher-
-# set thresholds. Bootstrap replicate count bumped from 20 to 1000 per Efron &
-# Tibshirani 1993 ("B >= 500-1000 for confidence intervals"). The look-ahead
-# sensitivity-check apparatus (ADR-011) is removed; the negative finding from
-# the prior run is preserved as historical evidence.
-validation:
-  anchor_tolerance_days: 14        # Brown & Warner 1985 event-study window convention
+# Reported, never gated. Bootstrap replicate count follows Efron & Tibshirani 1993
+# ("B >= 500-1000 for confidence intervals").
+diagnostics:
   bootstrap_replicates: 1000       # Efron & Tibshirani 1993 (B >= 500-1000 for CIs)
   bootstrap_random_seed: 42
   fdr_alpha: 0.05                  # Benjamini & Hochberg 1995

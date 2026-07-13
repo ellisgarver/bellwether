@@ -85,16 +85,17 @@ not a registered plan. Bodies below are preserved verbatim for that defense.
 | 064 | **Media Cloud Premium press layer + press-heating emerging signal — add the premium-press outlet collection (ADR-016: WSJ/Bloomberg/FT/Reuters/…) alongside the broad US-National collection, both via the one Media Cloud module. Wire ADR-057 §2: per already-tracked narrative, `detect_anomalies` on the attention-share ratio over a 4-week window vs a 52-week baseline at k=2σ, surfaced as a SEPARATE "heating in the press" signal beside the institutional recency flag in the Emerging view. Recomputes at bake time from live press against the existing narrative set — no re-embed, no re-cluster, never feeds embedding/clustering/scope (ADR-010/020/046). Degrades to absent when unkeyed.** | Live (implements 057 §2; extends 016/042/048; relates 040) |
 | 065 | **Incremental `analyze` re-bake — per-lens fit cache + JEL-encode cache. The fit cache keyed the whole `cfg["dynamics"]` and stored one pickle per cluster (all 3 lenses), so a one-lens prior change refit logistic+Bass identically; now each lens's `FitResult` is cached under a sig hashing only that lens's priors+inference (+series, window, seed). JEL re-encoded all ~365 reps with the 8B model every run even on unchanged clusters (~1h); now each `ClusterJELAssignment` is cached by representation+prototypes+embedder-id, the embedder loads only if a cluster misses, and an unchanged `clusters.parquet` ⇒ zero encodes. Display-mechanics only, results identical (ADR-040).** | Live (relates 050/055/062/063) |
 | 066 | **Weekly incremental re-cluster via BERTopic `merge_models` (design + prereq). Prereq (accepted): the `cluster` stage now persists the fitted BERTopic model (safetensors → `topic_model/`) — it was discarded, and `merge_models` needs the model object, not just `clusters.parquet`. Mechanism (proposed, pending validation): `update` fits a new-week model and `merge_models([base,new], min_similarity=τ)` to keep existing topic ids/URLs/names and append only genuinely-new topics; gated on an anchor-id-stability test (a synthetic weekly merge must not renumber any of the 10 anchors). τ + split/merge back-test + cron cadence deferred until that passes.** | Proposed (implements 057 §3; relates 050/056/063/065) |
-| 067 | **Simplify the analysis layer — least-squares lens fits, centroid JEL, open-model naming. (1) Retire Bayesian NUTS for all three lenses → bounded `scipy.least_squares` point fits (same displayed numbers + curve, ~1–3 ms vs ~30–60 s); MCMC convergence gate → fit-quality gate (R² ≥ `min_fit_r2`, fixed a priori); posterior CIs dropped; NUTS budgets retired (amends 039). (2) JEL uses existing cluster centroids instead of re-encoding terms+docs with Qwen3-8B (~1 h → seconds; amends 055). (3) Naming swaps Anthropic→OpenAI-compatible/Llama client (key-free/reproducible; amends 056). Analyze now finishes in minutes, fully locally testable; reader-facing output unchanged. Kept: all three lenses, shape facts, all similar measures, Granger lead-lag, markets, press-heating.** | Live (amends 039/055/056; keeps 052/062/065/040/046) |
+| 067 | **Simplify the analysis layer — least-squares lens fits, centroid JEL, open-model naming. (1) Retire Bayesian NUTS for all three lenses → bounded `scipy.least_squares` point fits (same displayed numbers + curve, ~1–3 ms vs ~30–60 s); MCMC convergence gate → fit-quality gate (R² ≥ `min_fit_r2`, fixed a priori); posterior CIs dropped; NUTS budgets retired (amends 039). (2) JEL uses existing cluster centroids instead of re-encoding terms+docs with Qwen3-8B (~1 h → seconds; amends 055). (3) Naming swaps Anthropic→an OpenAI-compatible open-model client (key-free/reproducible; amends 056). Analyze now finishes in minutes, fully locally testable; reader-facing output unchanged. Kept: all three lenses, shape facts, all similar measures, Granger lead-lag, markets, press-heating.** | Live (amends 039/055/056; keeps 052/062/065/040/046) |
 | 068 | **Overlay efficiency — VIX fetched once over the corpus span and sliced per narrative; Media Cloud per-narrative series delta-cached (stable history reused, recent window re-fetched) and fetched in a bounded thread pool** | Live (relates 042/047/048/063/065) |
 | 069 | **Anchor recovery scoped to anchor-relevant articles — window rows filtered by the anchor's fixed `key_terms` (registry, Phase 0), chunks folded to articles (majority topic), concentration = largest single non-noise cluster share with outliers kept in the denominator, threshold 0.50 unchanged. Replaces whole-window concentration, which is unsatisfiable on the full-breadth ADR-020 corpus (0/10 with the outlier bucket winning every plurality — a metric artifact)** | Live (amends 019 validation clause; relates 020/040) |
 | 070 | **Name-cache signature excludes the date span — a continuing narrative's weekly-extending span no longer invalidates its title, so weekly merges (066 Part C) keep display names stable; titles regenerate only when terms/excerpts/sources change. One-time full re-name absorbed into the post-rebuild naming pass** | Live (amends 056; relates 066/067) |
 | 071 | **Forming narratives — the directory bakes a `forming` flag (non-surfaced, onset within the ADR-059 window, ≥ `display.forming.min_articles`=3 articles, so single-document clusters stay out) with terms for terms-only naming; the emerging page lists them compactly and they graduate to full pages past the ADR-051 floor via the weekly merge** | Flag still baked; page surface superseded by ADR-074 |
 | 072 | **NBER not-found detection — a 403 whose final URL is on `www2.nber.org` (reached via redirect off the canonical host) counts toward the consecutive-not-found stop; a direct 403 on `www.nber.org` still aborts loud (real bot-blocking shape). NBER retired 404s at the series head, so the old stop rule could never fire** | Live (amends the ADR-030 fail-loud rule for this one signature) |
 | 073 | **Directory-wide display titles + naming on RCC — every non-surfaced directory entry bakes its c-TF-IDF terms and gets a terms-grounded title (one uniform rule, no new size cutoff); descriptions/fits/pages stay surfaced-only (051 is identifiability, not compute). Naming runs as an `mnd-name` job chained after analyze (user-space Ollama on scratch, GPU), patching artifacts in place; publish.sh pulls the cache and keeps local naming as cache-hit no-op / gap-filler** | Live (amends 067 execution default + 071 scope; display-only) |
-| 076 | **Full-corpus composition on the data page — the bake ships `corpus_composition` (article counts by source and by JEL code over EVERY non-noise cluster, not just the surfaced narratives) in index.json; the "what is in the corpus" charts read it, falling back to surfaced story-card aggregation when absent. Full-corpus JEL is cheap (nearest-prototype cosine over cluster centroids, ADR-067 — no re-encode), so all clusters are classified, not just the fit set** | Live (data-page display; front end falls back pre-bake) |
-| 075 | **Staleness override on the stage — a narrative whose last activity trails the corpus frontier by more than `stages.stale_dormant_weeks`=16 reads `dormant` regardless of its trend shape. The Mann-Kendall window is the tail of each narrative's OWN series, so without the override a narrative that stopped mid-rise reads `growth` forever (e.g. a cluster last active 2013); the site presents stage as "where it sits now", so the calendar must gate it. Decay stays in the taxonomy for genuine sharp mid-collapse; dormant is where post-decline narratives land** | Live (amends 058/059 stage; display-only; ADR-040 discipline intact) |
 | 074 | **Corpus heating replaces onset recency as the emerging page's lead signal — a narrative heats when its trailing-16-week mean weekly volume sits ≥ 2 standard errors (z scaled by √16; counts too sparse for the press's raw weekly σ) above its own trailing-52-week baseline with ≥ 3 recent articles; computed at site build for surfaced narratives, baked into the directory for sub-floor clusters (unlinked, tagged cards). The 059 flag and 071 forming section leave the page: clusters are long-lived narrative families, new events are absorbed rather than founding clusters, so onset recency is structurally empty on surfaced narratives** | Live (supersedes 071 page surface; 059 flag still baked; display-only) |
+| 075 | **Staleness override on the stage — a narrative whose last activity trails the corpus frontier by more than `stages.stale_dormant_weeks`=16 reads `dormant` regardless of its trend shape. The Mann-Kendall window is the tail of each narrative's OWN series, so without the override a narrative that stopped mid-rise reads `growth` forever (e.g. a cluster last active 2013); the site presents stage as "where it sits now", so the calendar must gate it. Decay stays in the taxonomy for genuine sharp mid-collapse; dormant is where post-decline narratives land** | Live (amends 058/059 stage; display-only; ADR-040 discipline intact) |
+| 076 | **Full-corpus composition on the data page — the bake ships `corpus_composition` (article counts by source and by JEL code over EVERY non-noise cluster, not just the surfaced narratives) in index.json; the "what is in the corpus" charts read it, falling back to surfaced story-card aggregation when absent. Full-corpus JEL is cheap (nearest-prototype cosine over cluster centroids, ADR-067 — no re-encode), so all clusters are classified, not just the fit set** | Live (data-page display; front end falls back pre-bake) |
+| 077 | **Remove anchor-recovery validation — the ten-anchor recovery diagnostic (amends 019/069) is deleted outright: the `mnd.validation` module, the `validate` CLI command, the `data/anchors/` fixtures, and the config keys. It was a standalone, never-run diagnostic that no rendered output depended on, and reporting it overstated the pipeline's guarantees. Credibility rests on the anchored-parameter discipline (no tuning toward any target), not on recovery scores; the "anchors validate only" methodology principle retires with it. The bootstrap-NMI stability diagnostic stays under a renamed `diagnostics` config block** | Live (removes 019 validation apparatus + 069 anchors) |
 
 ---
 
@@ -3525,7 +3526,7 @@ Kept deliberately (reviewed, earn their place): all three lenses; model-free sha
 
 1. **Retire NUTS for least-squares/MAP point fits (all three lenses).** Bounded nonlinear least-squares (`scipy.optimize.least_squares`) with data-scaled initial values, the same reported numbers (logistic doubling time/inflection/plateau; SIR rise/decay/asymmetry/peak; Bass total-reach/p/q), the same displayed curve. The MCMC convergence gate (R̂/ESS) is replaced by a **fit-quality gate**: optimizer success AND R² ≥ `dynamics.min_fit_r2` (fixed a priori, not tuned to anchors — ADR-040). Posterior credible intervals are dropped (peak-time CI becomes optional/SE-based or absent); AICc unchanged (Gaussian log-likelihood from residuals). Amends ADR-039; the `dynamics.inference`/`sir_inference` NUTS budgets are retired. No PyMC in the fit path — the fit layer is fully testable off-cluster.
 2. **JEL uses the existing cluster centroids** (mean of member embeddings from `embeddings.npy`), nearest-prototype as before — no 8B re-encode; prototypes still embedded once. Amends ADR-055 (the richer terms+docs representation is dropped for scope; centroids suffice for a display flag). Keeps the ADR-065 cache.
-3. **Open-model naming via an OpenAI-compatible client.** Naming reads `display.naming.{base_url, model}` (env `MND_NAMING_BASE_URL`/`MND_NAMING_MODEL`); default points at a local Ollama Llama endpoint; degrades to the c-TF-IDF label when unreachable. Amends ADR-056 (provider Anthropic → OpenAI-compatible/Llama); titles remain cached/committed for key-free rebuilds.
+3. **Open-model naming via an OpenAI-compatible client.** Naming reads `display.naming.{base_url, model}` (env `MND_NAMING_BASE_URL`/`MND_NAMING_MODEL`); default points at a local Ollama endpoint (`qwen2.5:7b`); degrades to the c-TF-IDF label when unreachable. Amends ADR-056 (provider Anthropic → OpenAI-compatible open model); titles remain cached/committed for key-free rebuilds.
 
 ### Consequences
 
@@ -3793,7 +3794,7 @@ still aborts loud, since that is the shape genuine bot-blocking takes.
 
 ### Context
 
-ADR-067 made naming key-free (open Llama via an OpenAI-compatible endpoint) but
+ADR-067 made naming key-free (an open model via an OpenAI-compatible endpoint) but
 execution stayed on the laptop, only because that is where an Ollama happened to
 be running. ADR-071 then scoped directory naming to forming clusters ("a handful
 per week, not a 7,000-cluster naming run").
@@ -4008,6 +4009,40 @@ CBO, …) rather than spelled-out institution names.
   (JEL chart falls back) without breaking the source chart or the bake.
 - Display-only: composition never feeds the filter, embedding, clustering, or fits
   (ADR-010/020/046 intact).
+
+---
+
+## ADR-077: Remove anchor-recovery validation
+
+- **Status**: Accepted
+- **Date**: 2026-07-13
+
+### Context
+
+The pipeline carried an anchor-recovery diagnostic (ADR-019/069): a `validate`
+CLI command that scored how well ten hand-specified anchor narratives landed in
+single clusters, backed by `mnd.validation` and the `data/anchors/` fixtures. It
+was never part of the bake, no rendered output consumed it, and it was never run
+to report a result. Documenting it as methodology overstated the pipeline's
+guarantees.
+
+### Decision
+
+Remove it entirely: the `mnd.validation` module, the `validate` command, the
+`data/anchors/` fixtures, `tests/test_anchor_recovery.py`, the dead
+`loadValidation` loader on the site, and the `validation.anchor_tolerance_days`
+config key. The remaining bootstrap-NMI stability diagnostic moves to a renamed
+`diagnostics` config block (it is a diagnostic, not validation). METHODOLOGY
+drops its validation section and the "anchors validate only" principle; the
+credibility argument stands on the anchored-parameter discipline (each value is a
+cited default or absent, and none is tuned toward any target).
+
+### Consequences
+
+- The docs claim only what the pipeline does. No held-out or recovery claim.
+- The word "anchor" now means one thing: a parameter tied to cited literature.
+- Suite unchanged in spirit (229 passing); the five anchor-recovery tests go with
+  the feature.
 
 ---
 

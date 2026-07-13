@@ -377,7 +377,7 @@ export function mountMap3d(
   let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 
   let lastEye: { x: number; y: number; z: number } | undefined;
-  el.on("plotly_relayout", (ev: any) => {
+  (el as PlotlyHTMLElement).on("plotly_relayout", (ev: any) => {
     const cam = ev?.["scene.camera"];
     const eye = cam?.eye ?? ev?.["scene.camera.eye"];
     if (eye) lastEye = eye;
@@ -521,12 +521,12 @@ export function mountMap3d(
   });
   if (getComputedStyle(el).position === "static") el.style.position = "relative";
   el.appendChild(resetBtn);
-  el.on("plotly_hover", (ev: any) => {
+  (el as PlotlyHTMLElement).on("plotly_hover", (ev: any) => {
     const cd = ev.points?.[0]?.customdata;
     hoverCid = Array.isArray(cd) ? cd[0] : (cd ?? null);
     pause();
   });
-  el.on("plotly_unhover", () => {
+  (el as PlotlyHTMLElement).on("plotly_unhover", () => {
     hoverCid = null;
     scheduleResume();
   });

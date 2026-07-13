@@ -144,14 +144,14 @@ class BertopicPipeline:
     ) -> dict[str, Any]:
         """NMI + ARI across bootstrap replicates vs. a baseline fit.
 
-        Seeds: config.validation.bootstrap_random_seed through +n_replicates.
-        Replicate count: config.validation.bootstrap_replicates (Efron &
+        Seeds: config.diagnostics.bootstrap_random_seed through +n_replicates.
+        Replicate count: config.diagnostics.bootstrap_replicates (Efron &
         Tibshirani 1993 recommend B >= 500-1000 for confidence intervals).
         Reported as a diagnostic, not a pass/fail gate.
         """
         from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
-        val_cfg = self._cfg["validation"]
+        val_cfg = self._cfg["diagnostics"]
         if n_replicates is None:
             n_replicates = val_cfg["bootstrap_replicates"]
 

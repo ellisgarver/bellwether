@@ -1,6 +1,6 @@
 # bellwether — Methodology
 
-How the system measures the lifecycle of macro-financial narratives, stage by stage. Every parameter is a published library default, a value cited from primary literature, or absent where no field-accepted anchor exists. The standing rules are in §6.
+How the system measures the lifecycle of macro-financial narratives, stage by stage. Every parameter is a published library default, a value cited from primary literature, or absent where no field-accepted anchor exists. The standing rules are in §5.
 
 ---
 
@@ -117,7 +117,7 @@ Each non-noise cluster is fit on its **active lifecycle**: the central 95% of it
 - **Bass diffusion** (Bass 1969) — separates external and internal influence on adoption; reports total reach *m*, innovation *p*, and imitation *q*.
 - **Model-free shape facts** — peak height and date, time to peak, active span, and wave count, read directly off the curve.
 
-The three model lenses are fit by bounded nonlinear least-squares (`scipy.least_squares`), seeded from data-scaled initial values: the SIR from the observed peak and span, the Bass from the Sultan, Farley & Lehmann (1990) meta-analysis means over 213 diffusion studies (p ≈ 0.03 innovation, q ≈ 0.38 imitation). Every reported number is a direct property of the fitted curve; none rests on an unobservable population size or on borrowed epidemiological constants. (An earlier draft fit these curves with Bayesian MCMC and reported an R₀. Both were retired: R₀ is not identifiable from a single attention curve, and once staging became model-free the fits fed only display point estimates, so the sampled posterior was overhead; ADR-062/067.) A fit-quality gate keeps or flags each lens: a lens is shown where the optimizer converges and its R² clears a fixed floor, and marked "no fit" otherwise. In practice SIR and Bass appear on bump-shaped narratives, while the logistic grays out on the rise-and-fall shapes a monotone S-curve cannot describe. AICc is displayed with each fit as a diagnostic and selects no model.
+The three model lenses are fit by bounded nonlinear least-squares (`scipy.least_squares`), seeded from data-scaled initial values: the SIR from the observed peak and span, the Bass from the Sultan, Farley & Lehmann (1990) meta-analysis means over 213 diffusion studies (p ≈ 0.03 innovation, q ≈ 0.38 imitation). Every reported number is a direct property of the fitted curve; none rests on an unobservable population size or on borrowed epidemiological constants. A fit-quality gate keeps or flags each lens: a lens is shown where the optimizer converges and its R² clears a fixed floor, and marked "no fit" otherwise. In practice SIR and Bass appear on bump-shaped narratives, while the logistic grays out on the rise-and-fall shapes a monotone S-curve cannot describe. AICc is displayed with each fit as a diagnostic and selects no model.
 
 ### Stage 8 — Stage classification
 
@@ -128,7 +128,7 @@ Lifecycle stage is read from the trajectory of the smoothed volume series, indep
 - **Stable** — no significant trend, with recent volume at or above a quarter of the peak-window level: a high plateau.
 - **Dormant** — no significant trend, with recent volume under a quarter of the peak-window level: faded. A narrative too short to resolve a separate peak window is treated as not faded.
 
-The trend threshold is α = 0.05 and the dormancy line is a quarter of the narrative's own peak; both are fixed values, not swept. An earlier design compared the recent window to the narrative's quietest window with a Mann–Whitney rank test. On this corpus that comparison was trivially cleared by the low but persistent institutional tail every narrative carries, which collapsed nearly every no-trend narrative to *stable*; comparing levels against the peak restores the faded/plateau distinction (ADR-058). Wallinga & Lipsitch (2007) supply the epidemiological grounding: the sign of the recent growth rate is the sign of R_t − 1, so a rising series is spreading whether or not a clean SIR fit exists.
+The trend threshold is α = 0.05 and the dormancy line is a quarter of the narrative's own peak; both are fixed values, not swept. Splitting no-trend narratives by level against their own peak, rather than against their quietest window, keeps the faded/plateau distinction from collapsing under the low but persistent institutional tail every narrative carries (ADR-058). Wallinga & Lipsitch (2007) supply the epidemiological grounding: the sign of the recent growth rate is the sign of R_t − 1, so a rising series is spreading whether or not a clean SIR fit exists.
 
 The recent window is the tail of each narrative's own series, so the trend describes its final chapter wherever that fell in time. A narrative that stopped while still rising would otherwise read *growth* indefinitely. A staleness override corrects this: a narrative whose last activity trails the corpus frontier by more than 16 weeks (a quarter, matching the heating horizon below) reads *dormant* regardless of trend shape, so the stage the site presents as "where it sits now" is honest to the calendar (ADR-075). The underlying trend is retained in the narrative's detail record. *Decay* stays a defined state for a genuine sharp mid-collapse, but it is rare to absent on this corpus: institutional narratives typically stop rather than decline gradually — a fall shows up as absence, and zeros carry no rank signal for a Mann–Kendall test — so a faded narrative lands in *dormant* rather than passing through a visible *decay*.
 
@@ -138,15 +138,7 @@ In practice the onset flag almost never fires on surfaced narratives, and the re
 
 ---
 
-## 4. Validation against anchor narratives
-
-A fixed set of ten anchor narratives spans 2010–2023, each with a documented ignition date and primary-source citation: SVB collapse (2023-03-09), COVID market crash (2020-02-24), Brexit aftermath (2016-06-24), the transitory-inflation debate (2021-Q2), Credit Suisse stress (2023-03-15), regional banking contagion (2023-03-13), the 2022 inflation peak (Q2–Q3), soft-landing emergence (2023-Q3–Q4), the 2013 taper tantrum (2013-05-22), and the 2015 China devaluation scare (2015-08-11).
-
-For each anchor, validation collects the articles published within ±14 days of the documented ignition date (the event-study window of Brown & Warner 1985) whose title or body matches any of the anchor's fixed `key_terms`, recorded when the anchor was specified and never edited since (ADR-069). Chunks fold to articles by majority topic. The anchor counts as recovered when at least half of the matching articles land in a single non-noise cluster; outlier-assigned articles stay in the denominator. The recovery rate is reported per anchor and in aggregate as a face-validity diagnostic. No pass/fail threshold is applied to it, and it never informs the filter, the embedding, the clustering, or any hyperparameter.
-
----
-
-## 5. Similar past narratives
+## 4. Similar past narratives
 
 For each narrative, the tool surfaces the most similar past narratives from the full historical set by three measures.
 
@@ -160,39 +152,35 @@ Each measure returns its own top-5 ranking. The measures are complementary: morp
 
 ---
 
-## 6. Methodological principles
+## 5. Methodological principles
 
 The rules below govern every parameter choice.
 
 1. **Anchored or removed.** Each value is a published library default (cited), a primary-literature value (cited), or absent because no field-accepted anchor exists.
 2. **Single field-accepted values.** Each parameter is fixed at one field-accepted value; the pipeline runs no sensitivity sweeps.
-3. **Reported, not gated.** Diagnostics — anchor recovery rate, clustering NMI, fit R², AICc — are reported for the reader to judge; none is a pass/fail gate.
+3. **Reported, not gated.** Diagnostics — clustering NMI, fit R², AICc — are reported for the reader to judge; none is a pass/fail gate.
 4. **Scope assigned after clustering, never gated.** The post-clustering JEL classifier (`jel_classifier.py`) assigns each cluster to its nearest AEA prototype; the resulting code is a per-narrative display flag, so clusters outside {E, F, G, H} are labeled rather than dropped. The only ingest-time filters are the 2010-present window and URL/content dedup.
 5. **Single clustering granularity.** The pipeline reports BERTopic's default output without hierarchical merging.
-6. **Anchors validate only.** They never influence the filter, the embedding, the clustering, or any hyperparameter.
-7. **Field-standard taxonomies.** The JEL classification anchors topical scope; the BEIR convention anchors chunk size; BERTopic defaults anchor the clustering.
-8. **Abandoned components are deleted.** Retired ingestors, code paths, and configuration are removed from the pipeline, not retained inactive.
-9. **Full corpus, no split, no pre-registration.** No parameter is tuned, and none is tuned toward anchor recovery, so there is no train-fitted quantity for a held-out boundary to test; the pipeline runs over the full 2010-present corpus without a temporal split or a registered analysis plan. Credibility rests on principles 1–8.
-10. **Four dynamics lenses, model-free staging.** Every non-noise cluster is fit by the logistic, SIR, and Bass models alongside model-free shape facts, reported side by side as interpretive lenses. Lifecycle stage is read directly from the volume trajectory (Stage 8) and does not depend on any fitted model.
+6. **Field-standard taxonomies.** The JEL classification anchors topical scope; the BEIR convention anchors chunk size; BERTopic defaults anchor the clustering.
+7. **Abandoned components are deleted.** Retired ingestors, code paths, and configuration are removed from the pipeline, not retained inactive.
+8. **Full corpus, no split, no pre-registration.** No parameter is tuned, so there is no train-fitted quantity for a held-out boundary to test; the pipeline runs over the full 2010-present corpus without a temporal split or a registered analysis plan. Credibility rests on principles 1–7.
+9. **Four dynamics lenses, model-free staging.** Every non-noise cluster is fit by the logistic, SIR, and Bass models alongside model-free shape facts, reported side by side as interpretive lenses. Lifecycle stage is read directly from the volume trajectory (Stage 8) and does not depend on any fitted model.
 
 ---
 
-## 7. References (cited methodology anchors)
+## 6. References (cited methodology anchors)
 
-- **Embedding & retrieval**: Thakur et al. 2021 *BEIR* (NeurIPS); Reimers & Gurevych 2019 *SBERT*; Qwen3-Embedding-8B model card.
+- **Embedding & retrieval**: Thakur et al. 2021 *BEIR* (NeurIPS); Qwen3-Embedding-8B model card.
 - **Clustering**: Grootendorst 2022 *BERTopic* (arXiv:2203.05794); McInnes et al. 2018 *UMAP*; McInnes & Healy 2017 *HDBSCAN*.
-- **Published topic-model narrative studies**: Bybee, Kelly, Manela & Xiu 2024 (*Journal of Finance* 79(5), 3105–3147); Hansen, McMahon & Prat 2018 (*QJE* 133(2), 801–870); Larsen & Thorsrud 2019 (*Journal of Econometrics* 210(1), 203–218); Larsen, Thorsrud & Zhulanova 2021 (*JME*); Bertsch, Hull, Lumsdaine & Zhang 2021 (*Economics Letters*).
-- **Narrative-economics framing & related work**: Shiller 2017 (AEA Presidential Address); Shiller 2019 *Narrative Economics*; Roos & Reccius 2024 (*Journal of Economic Surveys*); Flynn & Sastry 2024 (NBER WP 32602); Andre, Haaland, Roth, Wiederholt & Wohlfart (2025, *RES*, advance article).
-- **Adjacent technical precedents**: Boutaleb, Picault & Grosjean 2024 *BERTrend* (ACL FuturED); Medeiros, Quigley & Revie 2026 (arXiv:2602.20939).
-- **Text-as-data surveys**: Ash & Hansen 2023 (*Annual Review of Economics*); Gentzkow, Kelly & Taddy 2019 (*JEL* 57(3), 535–574).
+- **Published topic-model narrative studies**: Bybee, Kelly, Manela & Xiu 2024 (*Journal of Finance* 79(5), 3105–3147); Hansen, McMahon & Prat 2018 (*QJE* 133(2), 801–870); Larsen & Thorsrud 2019 (*Journal of Econometrics* 210(1), 203–218); Bertsch, Hull, Lumsdaine & Zhang 2021 (*Economics Letters*).
+- **Narrative-economics framing**: Shiller 2017 (AEA Presidential Address); Shiller 2019 *Narrative Economics*; Roos & Reccius 2024 (*Journal of Economic Surveys*); Flynn & Sastry 2024 (NBER WP 32602); Andre, Haaland, Roth, Wiederholt & Wohlfart (2025, *RES*, advance article).
 - **Epidemic / diffusion models**: Kermack & McKendrick 1927; Schlickeiser & Kröger 2020 (closed-form SIR solution, *J. Phys. A* 53:505601); Verhulst 1838 (logistic); Bass 1969 (diffusion of innovations); Sultan, Farley & Lehmann 1990 (Bass meta-analysis).
-- **Epidemic models of idea/information spread**: Goffman & Newill 1964 (*Nature*); Daley & Kendall 1965 (*Nature*, rumor model); Rogers 2003 *Diffusion of Innovations* 5th ed.
+- **Epidemic models of idea spread**: Goffman & Newill 1964 (*Nature*); Daley & Kendall 1965 (*Nature*, rumor model).
 - **Lead-lag testing**: Granger 1969 — markets-vs-narrative timing overlay.
-- **Trend & stage classification**: Mann 1945, Kendall 1948 (rank trend test); Hamed & Rao 1998 (autocorrelation variance correction); Sen 1968 (Theil–Sen slope); Mann & Whitney 1947 (rank-sum test); Wallinga & Lipsitch 2007 (growth-rate ↔ R_t correspondence).
+- **Trend & stage classification**: Mann 1945, Kendall 1948 (rank trend test); Hamed & Rao 1998 (autocorrelation variance correction); Sen 1968 (Theil–Sen slope); Wallinga & Lipsitch 2007 (growth-rate ↔ R_t correspondence).
 - **Time-series smoothing**: Shumway & Stoffer 2017, *Time Series Analysis and Its Applications* (4th ed., Springer) — moving-average convention for the weekly series.
-- **Validation & statistics**: Brown & Warner 1985 (event-study windows); Benjamini & Hochberg 1995 (FDR); Efron & Tibshirani 1993 (bootstrap); Strehl & Ghosh 2002 (NMI); Jaccard 1901 (set similarity).
+- **Similarity & clustering metrics**: Strehl & Ghosh 2002 (NMI); Jaccard 1901 (set similarity).
 - **Deduplication**: Broder 1997 (MinHash); Henzinger 2006 (near-duplicate web pages).
-- **Related LLM-based work (positioning)**: Schmidt et al. 2025; Hartley 2025; Gueta et al. 2025.
 - **Taxonomy**: JEL Classification System, American Economic Association.
 
 The full literature survey, with overlap assessment and differentiation, is in `docs/related_work.md`.

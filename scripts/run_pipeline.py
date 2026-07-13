@@ -7,7 +7,6 @@ Dispatches pipeline stages:
   embed               — encode articles (Qwen3-Embedding-8B)
   cluster             — BERTopic single-granularity clustering
   stability           — bootstrap stability diagnostic (mean NMI reported, not gated)
-  validate            — anchor narrative recovery (reported as rate, not gated)
   analyze             — clusters → normalize → JEL → dynamics → stages →
                         similar → dashboard artifacts (the pipeline→front-end seam)
   name                — resolve display names for baked artifacts in place (ADR-056)
@@ -25,7 +24,6 @@ The per-stage commands below are for local spot-runs / manual re-runs:
   python scripts/run_pipeline.py embed --role primary
   python scripts/run_pipeline.py cluster
   python scripts/run_pipeline.py stability
-  python scripts/run_pipeline.py validate --anchors all
   python scripts/run_pipeline.py corpus-composition
 """
 from __future__ import annotations
@@ -985,76 +983,6 @@ def stability(
     click.echo("\n  Per-replicate NMI scores:")
     for i, nmi in enumerate(all_nmi, 1):
         click.echo(f"    [{i:02d}] {nmi:.3f}")
-
-
-# ---------------------------------------------------------------------------
-# validate
-# ---------------------------------------------------------------------------
-
-@cli.command()
-@click.option(
-    "--anchors", default="all",
-    help="Comma-separated anchor IDs or 'all'",
-)
-@click.option("--clusters", default=None, help="Clusters parquet path")
-@click.option("--output", default=None,
-              help="Also write a JSON summary (e.g. into the dashboard artifacts "
-                   "dir so the site can report the score).")
-@click.pass_context
-def validate(
-    ctx: click.Context, anchors: str, clusters: str | None, output: str | None
-) -> None:
-    """Anchor recovery validation -- rate reported, not gated (ADR-019)."""
-    from datetime import datetime, timezone
-
-    from mnd.validation import validate_anchor_recovery
-
-    cfg = ctx.obj["cfg"]
-    root = data_root()
-    clusters_path = (
-        Path(clusters) if clusters else root / cfg["paths"]["processed_clusters"]
-    )
-
-    df = pd.read_parquet(clusters_path)
-    anchor_ids = None if anchors == "all" else [a.strip() for a in anchors.split(",")]
-
-    results = validate_anchor_recovery(df, anchor_ids=anchor_ids, cfg=cfg)
-    n_recovered = sum(1 for r in results if r["recovered"])
-
-    click.echo("\nAnchor Recovery Results")
-    for r in results:
-        mark = "+" if r["recovered"] else "-"
-        click.echo(f"  {mark} {r['anchor_id']}: {r['note']}")
-
-    click.echo(f"\n  Recovered : {n_recovered}/{len(results)}  (reported, not gated -- ADR-019)")
-
-    if output:
-        out_path = Path(output)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
-            json.dumps(
-                {
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                    "n_recovered": n_recovered,
-                    "n_total": len(results),
-                    "results": [
-                        {
-                            "anchor_id": r["anchor_id"],
-                            "recovered": bool(r["recovered"]),
-                            "dominant_cluster": r["dominant_cluster"],
-                            "concentration": r["concentration"],
-                            "n_articles": r["n_articles"],
-                            "note": r["note"],
-                        }
-                        for r in results
-                    ],
-                },
-                ensure_ascii=False,
-                indent=1,
-            ),
-            encoding="utf-8",
-        )
-        click.echo(f"  Wrote summary -> {out_path}")
 
 
 # ---------------------------------------------------------------------------

@@ -178,18 +178,6 @@ export function loadNarrative(clusterId: number): Narrative {
 
 // ---- optional artifacts (absent in older bakes; pages degrade gracefully) ----
 
-export interface ValidationSummary {
-  generated_at: string;
-  n_recovered: number;
-  n_total: number;
-  results: { anchor_id: string; recovered: boolean; note: string }[];
-}
-
-export function loadValidation(): ValidationSummary | null {
-  const p = path.join(DATA_DIR, "validation.json");
-  return fs.existsSync(p) ? (JSON.parse(fs.readFileSync(p, "utf-8")) as ValidationSummary) : null;
-}
-
 export interface CorpusHeating {
   is_heating: boolean;
   z: number;
