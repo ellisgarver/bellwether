@@ -4,6 +4,7 @@
 data/raw/
 data/processed/
 data/snapshots/
+data/naming_cache/*.json
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/snapshots/.gitkeep
