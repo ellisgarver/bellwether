@@ -514,8 +514,9 @@ const direction = (d: any) =>
   /* heating pill — shared by the page-meta badges and the callout labels;
      corpus and press heating use the identical pill, only the wording differs. */
   .heat {
-    font-size: var(--fs-micro); font-weight: 600;
-    padding: 0.1rem 0.45rem; border-radius: 999px;
+    display: inline-flex; align-items: center;
+    font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.01em;
+    padding: 0.18rem 0.6rem; border-radius: 999px; line-height: 1.4;
     border: 1px solid color-mix(in srgb, #c2410c 45%, var(--paper));
     color: #c2410c; background: color-mix(in srgb, #c2410c 12%, var(--paper));
     margin-right: 0.35rem; white-space: nowrap;

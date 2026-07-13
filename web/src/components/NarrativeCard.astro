@@ -98,8 +98,9 @@ const col = STAGE_COLOR[entry.stage];
      out-of-scope) widens the row instead of stacking and lengthening the cell. */
   .badges { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
   .heat {
-    font-size: var(--fs-micro); font-weight: 600;
-    padding: 0.1rem 0.45rem; border-radius: 999px;
+    display: inline-flex; align-items: center;
+    font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.01em;
+    padding: 0.18rem 0.6rem; border-radius: 999px; line-height: 1.4;
     border: 1px solid color-mix(in srgb, #c2410c 45%, var(--paper));
     color: #c2410c; background: color-mix(in srgb, #c2410c 12%, var(--paper));
     white-space: nowrap;
