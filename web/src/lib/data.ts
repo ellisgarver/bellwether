@@ -152,6 +152,13 @@ export interface DashboardIndex {
   // Unique articles in the full clustered corpus (including sub-floor clusters),
   // so the data page can report the whole corpus next to what is surfaced.
   n_articles_corpus?: number | null;
+  // Full-corpus composition over every clustered article, not just the surfaced
+  // narratives (ADR-076). Absent in older bakes → the data page falls back to
+  // aggregating the surfaced story cards.
+  corpus_composition?: {
+    by_source?: Record<string, number>;
+    by_jel?: Record<string, number>;
+  } | null;
   schema_version: string;
 }
 
@@ -183,6 +190,15 @@ export function loadValidation(): ValidationSummary | null {
   return fs.existsSync(p) ? (JSON.parse(fs.readFileSync(p, "utf-8")) as ValidationSummary) : null;
 }
 
+export interface CorpusHeating {
+  is_heating: boolean;
+  z: number;
+  recent_articles: number;
+  recent_weeks: number;
+  baseline_weeks: number;
+  k: number;
+}
+
 export interface DirectoryEntry {
   cluster_id: number;
   label: string;
@@ -194,6 +210,10 @@ export interface DirectoryEntry {
   // emerging page. Forming entries carry their c-TF-IDF terms for naming.
   forming?: boolean;
   terms?: string[];
+  // Corpus heating (ADR-074): baked for sub-floor clusters only (their weekly
+  // series never ships); present only where it fires. Surfaced narratives get
+  // the same signal computed here in corpusHeating().
+  heating?: CorpusHeating;
 }
 
 export interface ClusterDirectory {
@@ -205,6 +225,137 @@ export interface ClusterDirectory {
 export function loadDirectory(): ClusterDirectory | null {
   const p = path.join(DATA_DIR, "clusters_all.json");
   return fs.existsSync(p) ? (JSON.parse(fs.readFileSync(p, "utf-8")) as ClusterDirectory) : null;
+}
+
+// ---- corpus heating (ADR-074) ----
+
+// "Heating in the corpus": the narrative's mean weekly article count over the
+// most-recent window sits >= kSigma standard errors above its own trailing
+// yearly baseline, with at least minArticles in the window. Same shape as the
+// baked press-heating signal (recent window vs. own yearly baseline); the z is
+// scaled by sqrt(recentWeeks) because institutional volume is single-digit
+// weekly counts. Computed here for surfaced narratives from their shipped
+// volume series; sub-floor directory clusters carry the equivalent baked blob
+// (src/mnd/dashboard/build_artifacts.py — keep parameters in sync with config
+// display.corpus_heating).
+export const CORPUS_HEATING = {
+  recentWeeks: 16,
+  baselineWeeks: 52,
+  kSigma: 2,
+  minArticles: 3,
+};
+
+export function corpusHeating(
+  volume: Series,
+  frontierMs: number,
+): { z: number; recent_articles: number } | null {
+  const { recentWeeks, baselineWeeks, kSigma, minArticles } = CORPUS_HEATING;
+  const WEEK = 7 * 86400e3;
+  const times = volume.dates.map((d) => Date.parse(d));
+  if (!times.length) return null;
+  // Weekly buckets counted back from the corpus frontier; silent weeks are
+  // zero (a narrative that went quiet should read as quiet, not be skipped).
+  const nWeeks = Math.floor((frontierMs - Math.min(...times)) / WEEK) + 1;
+  if (nWeeks < recentWeeks + baselineWeeks) return null;
+  const weekly = new Array<number>(nWeeks).fill(0);
+  times.forEach((t, i) => {
+    const w = Math.floor((frontierMs - t) / WEEK);
+    if (w >= 0 && w < nWeeks) weekly[nWeeks - 1 - w] += volume.values[i];
+  });
+  const recent = weekly.slice(-recentWeeks);
+  const base = weekly.slice(-(recentWeeks + baselineWeeks), -recentWeeks);
+  const mean = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length;
+  const bm = mean(base);
+  const sd = Math.sqrt(
+    base.reduce((s, v) => s + (v - bm) ** 2, 0) / (base.length - 1),
+  );
+  if (sd <= 0) return null;
+  const z = (mean(recent) - bm) / (sd / Math.sqrt(recentWeeks));
+  const recentSum = recent.reduce((s, v) => s + v, 0);
+  if (z < kSigma || recentSum < minArticles) return null;
+  return { z, recent_articles: recentSum };
+}
+
+// ---- press heating (ADR-064 / ADR-074) ----
+
+// "Heating in the press", the symmetric partner of corpus heating: the broad
+// press's attention share for a narrative over the recent window sits >= kSigma
+// above its own trailing yearly baseline. Same quarterly window as corpus
+// heating, so the two panels compare like for like. The z is a raw sigma (no
+// sqrt(recentWeeks) scale): press attention share is a dense daily ratio, not
+// the sparse integer counts the corpus signal has to correct for. Mirrors the
+// baked mnd.detection.mediacloud.press_heating; computed here at build time from
+// the shipped ratio series so the window can change without a re-bake (keep in
+// sync with config detection.mediacloud.press_heating).
+export const PRESS_HEATING = {
+  recentWeeks: 16,
+  baselineWeeks: 52,
+  kSigma: 2,
+};
+
+export function pressHeating(
+  mc: MediaCloud | undefined,
+  frontierMs: number,
+): { z: number } | null {
+  if (!mc || !mc.dates?.length) return null;
+  const { recentWeeks, baselineWeeks, kSigma } = PRESS_HEATING;
+  const WEEK = 7 * 86400e3;
+  // Weekly means of the attention-share ratio, over reliable years only; silent
+  // weeks stay absent (a ratio has no meaningful zero-fill), matching the baked
+  // signal's dropna() on the weekly resample.
+  const buckets = new Map<number, { sum: number; n: number }>();
+  mc.dates.forEach((d, i) => {
+    const t = Date.parse(d);
+    if (new Date(t).getUTCFullYear() < mc.reliable_since_year) return;
+    const w = Math.floor((frontierMs - t) / WEEK);
+    if (w < 0) return;
+    const b = buckets.get(w) ?? { sum: 0, n: 0 };
+    b.sum += mc.ratio[i];
+    b.n += 1;
+    buckets.set(w, b);
+  });
+  if (!buckets.size) return null;
+  const maxW = Math.max(...buckets.keys());
+  const weekly: number[] = [];
+  for (let w = maxW; w >= 0; w--) {
+    const b = buckets.get(w);
+    if (b) weekly.push(b.sum / b.n); // oldest-to-newest, gaps dropped
+  }
+  if (weekly.length < recentWeeks + baselineWeeks) return null;
+  const recent = weekly.slice(-recentWeeks);
+  const base = weekly.slice(-(recentWeeks + baselineWeeks), -recentWeeks);
+  const mean = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length;
+  const bm = mean(base);
+  const sd = Math.sqrt(
+    base.reduce((s, v) => s + (v - bm) ** 2, 0) / (base.length - 1),
+  );
+  if (sd <= 0) return null;
+  const z = (mean(recent) - bm) / sd;
+  if (z < kSigma) return null;
+  return { z };
+}
+
+// Which surfaced narratives are heating, by signal — one build-time pass so the
+// cards, the emerging page, and the narrative pages all badge the same set (the
+// baked is_press_heating flag is a 4-week signal; this is the 16-week one the
+// emerging page ranks on). Sub-floor clusters are not included (no shipped
+// series); their heating is handled from the directory blob on the emerging page.
+export function heatingSets(index: DashboardIndex): {
+  corpus: Set<number>;
+  press: Set<number>;
+  frontierMs: number;
+} {
+  const frontierMs = Math.max(
+    ...index.narratives.map((e) => (e.date_range ? Date.parse(e.date_range[1]) : 0)),
+  );
+  const corpus = new Set<number>();
+  const press = new Set<number>();
+  for (const e of index.narratives) {
+    const n = loadNarrative(e.cluster_id);
+    if (corpusHeating(n.volume, frontierMs)) corpus.add(e.cluster_id);
+    if (pressHeating(n.mediacloud, frontierMs)) press.add(e.cluster_id);
+  }
+  return { corpus, press, frontierMs };
 }
 
 // Human-readable display name with graceful fallback (ADR-056): the LLM title
@@ -224,11 +375,13 @@ export function labelMap(index: DashboardIndex): Record<number, string> {
 
 // ---- shared display helpers ----
 
+// mirrors the CSS stage palette in styles/global.css (--growth/--stable/
+// --decay/--dormant) — keep the two in lockstep.
 export const STAGE_COLOR: Record<Stage, string> = {
-  growth: "#2e7d32",
-  stable: "#1565c0",
-  decay: "#c62828",
-  dormant: "#78909c",
+  growth: "#1f9d6b",
+  stable: "#3a5a93",
+  decay: "#d1495b",
+  dormant: "#9a958a",
 };
 
 export const STAGE_LABEL: Record<Stage, string> = {

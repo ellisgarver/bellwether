@@ -211,13 +211,17 @@ detection:
     # operator supplies collection id(s) for their premium-press outlets here; empty
     # -> premium overlay absent, falls back to the broad collection.
     premium_collection_ids: []
-    # Press-heating emerging signal (ADR-064 / ADR-057 §2). Fires when a narrative's
-    # most-recent `recent_weeks` of press attention-share sits >= `k_sigma` σ above
-    # its own trailing `baseline_weeks` baseline. Fixed a priori, not tuned (ADR-040):
-    # recent window matches the institutional emerging horizon (4 weeks), baseline is
-    # a year (seasonality), k=2 is the deliberately sensitive start (~upper 2.3%).
+    # Press-heating emerging signal (ADR-064 / ADR-057 §2; window ADR-074). Fires
+    # when a narrative's most-recent `recent_weeks` of press attention-share sits
+    # >= `k_sigma` σ above its own trailing `baseline_weeks` baseline. Fixed a
+    # priori, not tuned (ADR-040): the recent window matches the corpus-heating
+    # horizon (16 weeks / a quarter) so the two emerging panels read the same span,
+    # baseline is a year (seasonality), k=2 is the deliberately sensitive start
+    # (~upper 2.3%). The site recomputes this at build time from the shipped ratio
+    # series (web/src/lib/data.ts pressHeating) so the window can change without a
+    # re-bake; keep the two in sync.
     press_heating:
-      recent_weeks: 4
+      recent_weeks: 16
       baseline_weeks: 52
       k_sigma: 2.0
 
@@ -240,6 +244,11 @@ stages:
   dormant_peak_fraction: 0.25      # a no-trend narrative is dormant when its recent-window level falls below this
                                    # fraction of its own peak-window level; otherwise stable (ADR-058). A definition,
                                    # not tuned to anchor recovery (ADR-040).
+  stale_dormant_weeks: 16          # staleness override (ADR-075): a narrative whose last activity trails the corpus
+                                   # frontier by more than this (a quarter) reads dormant regardless of its life-shape.
+                                   # The stage window is the tail of each narrative's OWN series, so without this a
+                                   # narrative that stopped mid-rise would read "growth" forever. Matches the 16-week
+                                   # corpus/press heating horizon (ADR-074).
 
 # -----------------------------------------------------------------------------
 # Filtering & deduplication (ADR-020)
@@ -338,6 +347,21 @@ display:
     # onset falls within stages.newly_emerging_recency_weeks and they span at
     # least this many distinct articles (excludes single-document clusters;
     # ADR-071). Display-only.
+    min_articles: 3
+  corpus_heating:
+    # "Heating in the corpus" (emerging page, ADR-074): a cluster fires when its
+    # mean weekly article count over the recent window sits k_sigma standard
+    # errors above its own trailing yearly baseline, with at least min_articles
+    # in the window. Mirrors detection.mediacloud.press_heating in shape but
+    # scales the z by sqrt(recent_weeks): institutional volume is single-digit
+    # weekly counts, so a raw weekly sigma (the press formula) can never fire.
+    # Surfaced narratives are computed at site build time from their shipped
+    # volume series (web/src/lib/data.ts corpusHeating — keep in sync); the
+    # sub-floor directory clusters get the blob baked into clusters_all.json
+    # here since their series never ship. Display-only.
+    recent_weeks: 16
+    baseline_weeks: 52
+    k_sigma: 2.0
     min_articles: 3
 
 # -----------------------------------------------------------------------------

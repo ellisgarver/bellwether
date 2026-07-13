@@ -19,7 +19,7 @@ const fmt = (n: number) => n.toLocaleString("en-US");
       <p class="hero-thesis reveal">
         years of institutional and academic writing from the Fed, IMF, BIS, NBER and
         their peers, clustered into narratives then analyzed and mapped. every point is
-        one of the {index.n_narratives} charted economic stories, placed among its
+        a charted economic story, placed among its
         nearest neighbors.
       </p>
     </div>
@@ -32,8 +32,9 @@ const fmt = (n: number) => n.toLocaleString("en-US");
         <div><span class="num">2010</span><span class="lbl">since</span></div>
       </div>
       <div class="hero-cta">
-        <a href={`${base}/narratives`}>browse all narratives →</a>
+        <a href={`${base}/narratives`}>browse narratives →</a>
         <a href={`${base}/emerging`}>see what's emerging →</a>
+        <a href={`${base}/directory`}>view the full directory →</a>
       </div>
     </div>
 
@@ -47,7 +48,7 @@ const fmt = (n: number) => n.toLocaleString("en-US");
           <span style="color:var(--stable)">stable</span>,
           <span style="color:var(--decay)">decay</span>,
           <span style="color:var(--dormant)">dormant</span>).
-          size is the volume written. shape is the JEL economics field.
+          size is the volume written. shape is the JEL economics field (X's are out of macro scope).
         </p>
       </>
     )}
@@ -55,6 +56,8 @@ const fmt = (n: number) => n.toLocaleString("en-US");
 
   <script>
     import { mountMap3d } from "@lib/chart";
+    import { countUp } from "@lib/countup";
+    countUp(document.querySelectorAll(".hero-stats .num"));
     const el = document.getElementById("map");
     const dataEl = document.getElementById("map-data");
     if (el && dataEl) {

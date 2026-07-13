@@ -28,6 +28,13 @@ fully done and the site is live; then remove in one reviewed commit per group.
   Action; full mode commits `data/naming_cache` to main, which can wedge the
   RCC checkout through the `data/` → /home symlink.
 
+- Bake-side `forming` flag + `display.forming` config (ADR-071) — the emerging
+  page no longer renders forming (ADR-074 corpus heating replaced it,
+  2026-07-12); the flag is still baked into `clusters_all.json` with no
+  front-end consumer. Remove from `write_cluster_directory` + config + test
+  once ADR-074 has survived a few weekly bakes. The ADR-059 `is_emerging` flag
+  STAYS (badged on cards; fires on any genuinely new family).
+
 ## 3. Coordinated RCC rename (one commit + one RCC session; NOT before the
 ##    naming job and first weekly cycle complete)
 

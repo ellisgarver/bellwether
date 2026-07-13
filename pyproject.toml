@@ -27,7 +27,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
-addopts = "-ra -q --strict-markers"
+# integration tests hit live upstream sources; a bare `pytest` must stay
+# offline. `pytest -m integration` overrides the deselection.
+addopts = "-ra -q --strict-markers -m 'not integration'"
 markers = [
     "integration: network-dependent coverage tests against live upstream sources; not run by default. Invoke with `pytest -m integration`.",
 ]

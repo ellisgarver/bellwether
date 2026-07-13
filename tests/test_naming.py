@@ -131,6 +131,55 @@ def test_prompt_is_grounded_in_supplied_material():
     assert "SVB" not in user and "taper tantrum" not in user.lower()
 
 
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        # first-letter capital + acronym up-casing (pre-existing behavior)
+        ("gdp and inflation dynamics", "GDP and inflation dynamics"),
+        ("detroit municipal finance", "Detroit municipal finance"),
+        # proper nouns mid-title: countries, demonyms, cities, institutions
+        ("south sudan crisis and african politics", "South Sudan crisis and African politics"),
+        ("chinas real estate market adjustment", "China's real estate market adjustment"),
+        ("low interest rates and german savers", "Low interest rates and German savers"),
+        # apostrophe-less possessive: capitalize the name, but never invent an apostrophe
+        ("trichets speeches on eurozone stability", "Trichets speeches on eurozone stability"),
+        ("ieepa tariffs supreme court", "IEEPA tariffs Supreme Court"),
+        ("cross-strait relations with china", "Cross-strait relations with China"),
+        # glued country pairs recover via hyphen split; ordinary hyphenates don't
+        ("us-india relations under modi", "US-India relations under Modi"),
+        ("bank of japan monetary easing", "Bank of Japan monetary easing"),
+        # possessive on a proper noun is preserved and capitalized
+        ("iran's nuclear program", "Iran's nuclear program"),
+        # multi-word fixups win before per-word handling
+        ("european union budget rules", "European Union budget rules"),
+        # trailing date spans are dropped (shown separately on every card)
+        ("iran sanctions on uav production, 2010-2026", "Iran sanctions on uav production"),
+        ("sanctions against syria, 2011-2024", "Sanctions against Syria"),
+        ("north korea summit diplomacy 2018", "North Korea summit diplomacy"),
+        ("emerging economies' monetary challenges 2022-23", "Emerging economies' monetary challenges"),
+        ("nafta renegotiation, 2017", "NAFTA renegotiation"),
+        # models sometimes glue the two years with no separator
+        ("journalism in washington 19782012", "Journalism in Washington"),
+        # a meaningful leading year and non-year digits are preserved
+        ("2013 taper tantrum", "2013 taper tantrum"),
+        ("covid-19 market response", "COVID-19 market response"),
+    ],
+)
+def test_polish_title_capitalizes_proper_nouns(raw, expected):
+    from mnd.dashboard.naming import _polish_title
+
+    assert _polish_title(raw) == expected
+
+
+def test_polish_title_leaves_common_words_lowercase():
+    """The proper-noun list must not touch ordinary vocabulary (sentence case)."""
+    from mnd.dashboard.naming import _polish_title
+
+    assert _polish_title("bond market liquidity and funding stress") == (
+        "Bond market liquidity and funding stress"
+    )
+
+
 def test_signature_stable_across_date_span_extension():
     """ADR-070: a continuing narrative's weekly-extending span must not
     invalidate its cached title; only substance changes may."""

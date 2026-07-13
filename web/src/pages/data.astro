@@ -5,9 +5,12 @@ import { loadIndex, loadNarrative, JEL_NAME } from "@lib/data";
 const index = loadIndex();
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-// Aggregate the corpus at build time from the artifact contract — no hard-coded
-// totals. Article counts come from each narrative's index entry; the per-source
-// breakdown comes from each story card's source_mix.
+// The "what is in the corpus" charts describe the FULL clustered corpus, not
+// just the surfaced narratives. When the bake ships a full-corpus composition
+// (ADR-076) we use it; older bakes fall back to aggregating the surfaced story
+// cards, which only covers the charted subset.
+const comp = index.corpus_composition ?? null;
+const fullCorpus = !!(comp?.by_source || comp?.by_jel);
 const totalArticles = index.narratives.reduce((s, e) => s + e.n_articles, 0);
 
 // the four regional Federal Reserve banks are distinct source ids but roll up
@@ -16,28 +19,35 @@ const REGIONAL_FED = new Set(["fed_ny", "fed_sf", "fed_chicago", "fed_atlanta"])
 const groupSource = (s: string) => (REGIONAL_FED.has(s) ? "regional_fed" : s);
 
 const sourceTotals = new Map<string, number>();
-for (const e of index.narratives) {
-  const card = loadNarrative(e.cluster_id).card;
-  for (const [src, n] of card.source_mix) {
+if (comp?.by_source) {
+  for (const [src, n] of Object.entries(comp.by_source)) {
     const key = groupSource(src);
     sourceTotals.set(key, (sourceTotals.get(key) ?? 0) + n);
   }
+} else {
+  for (const e of index.narratives) {
+    const card = loadNarrative(e.cluster_id).card;
+    for (const [src, n] of card.source_mix) {
+      const key = groupSource(src);
+      sourceTotals.set(key, (sourceTotals.get(key) ?? 0) + n);
+    }
+  }
 }
-// source labels (codes → full institution names, acronyms spelled out); unknown
-// codes fall back to a de-underscored form so a new feed still renders sensibly.
+// source labels — acronyms / short institution names; unknown codes fall back to
+// a de-underscored form so a new feed still renders sensibly.
 const SOURCE_LABEL: Record<string, string> = {
-  federalreserve: "Federal Reserve Board",
-  regional_fed: "Regional Federal Reserve Banks",
-  imf: "Int'l Monetary Fund",
-  bis: "Bank for Int'l Settlements",
-  cbo: "Congressional Budget Office",
-  cea: "Council of Economic Advisers",
-  treasury_ofr: "Treasury Office of Financial Research",
-  brookings: "Brookings Institution",
-  piie: "Peterson Inst. for Int'l Economics",
-  nber: "Nat'l Bureau of Economic Research",
-  voxeu: "VoxEU (Centre for Econ. Policy Research)",
-  congressional: "Congressional Testimony",
+  federalreserve: "Fed Board",
+  regional_fed: "Regional Fed",
+  imf: "IMF",
+  bis: "BIS",
+  cbo: "CBO",
+  cea: "CEA",
+  treasury_ofr: "OFR",
+  brookings: "Brookings",
+  piie: "PIIE",
+  nber: "NBER",
+  voxeu: "VoxEU",
+  congressional: "Congress",
 };
 const sourceLabel = (s: string) => SOURCE_LABEL[s] ?? s.replace(/_/g, " ");
 const sourceBars = [...sourceTotals.entries()]
@@ -47,9 +57,15 @@ const sourceBars = [...sourceTotals.entries()]
 // JEL-field totals (article-weighted), with in-scope flag for color.
 const IN_SCOPE = new Set(["E", "F", "G", "H"]);
 const jelTotals = new Map<string, number>();
-for (const e of index.narratives) {
-  const code = e.jel_code ?? "?";
-  jelTotals.set(code, (jelTotals.get(code) ?? 0) + e.n_articles);
+if (comp?.by_jel) {
+  for (const [code, n] of Object.entries(comp.by_jel)) {
+    jelTotals.set(code, (jelTotals.get(code) ?? 0) + n);
+  }
+} else {
+  for (const e of index.narratives) {
+    const code = e.jel_code ?? "?";
+    jelTotals.set(code, (jelTotals.get(code) ?? 0) + e.n_articles);
+  }
 }
 const jelBars = [...jelTotals.entries()]
   .map(([code, n]) => ({
@@ -108,24 +124,24 @@ const corpusStats: [string, string][] = [
     ? ([[fmt(index.n_articles_corpus), "articles"]] as [string, string][])
     : []),
   ...(index.n_clusters_total
-    ? ([[fmt(index.n_clusters_total), "clusters detected"]] as [string, string][])
+    ? ([[fmt(index.n_clusters_total), "clusters"]] as [string, string][])
     : []),
   ["12", "feeds"],
-  ["2010", "tracked since"],
+  ["2010", "since"],
 ];
 const shownStats: [string, string][] = [
   [fmt(index.n_narratives), "narratives"],
-  [fmt(totalArticles), "articles within them"],
+  [fmt(totalArticles), "articles"],
   ...(index.median_article_words
-    ? ([[fmt(index.median_article_words), "median words / article"]] as [string, string][])
+    ? ([[fmt(index.median_article_words), "median words"]] as [string, string][])
     : []),
 ];
 ---
 
 <Base title="data" active="data">
-  <h1 class="reveal">the corpus behind bellwether</h1>
+  <h1 class="reveal">the records behind bellwether</h1>
   <p class="lede reveal">
-    a fixed, complete body of institutional and academic macro writing.
+    a fixed, complete basis set of institutional and academic macroeconomic writing.
   </p>
 
   <div class="stat-band reveal">
@@ -138,7 +154,7 @@ const shownStats: [string, string][] = [
       </div>
     </div>
     <div class="stat-group">
-      <p class="stat-group-lbl">shown on the site</p>
+      <p class="stat-group-lbl">explicitly analyzed here</p>
       <div class="stat-row">
         {shownStats.map(([num, lbl]) => (
           <div class="stat"><span class="num">{num}</span><span class="lbl">{lbl}</span></div>
@@ -147,9 +163,9 @@ const shownStats: [string, string][] = [
     </div>
   </div>
   {floor && (
-    <p class="caption reveal">
-      clustering keeps every topic the corpus contains; the site charts the
-      narratives with at least {floor} articles. the rest are browsable in
+    <p class="muted reveal corpus-note">
+      clustering keeps every topic;
+      narratives with at least {floor} articles are charted. the rest are available in
       <a href={`${base}/directory`}>the full directory</a>.
     </p>
   )}
@@ -192,10 +208,10 @@ const shownStats: [string, string][] = [
   <section class="section reveal">
     <h2>what is in the corpus</h2>
     <p>
-      every clustered article counts toward one source and one JEL economics field.
-      the left chart is how the corpus splits across the twelve feeds; the right is
-      how it splits across fields, with the macro-finance core (E, F, G, H) in accent
-      and everything else flagged but still tracked.
+      every clustered article across the {fullCorpus ? "full corpus" : "charted narratives"} counts
+      toward one source and one JEL economics field. the left chart is how it splits
+      across the twelve feeds; the right is how it splits across fields, with the
+      macro-finance core (E, F, G, H) in accent and everything else flagged but still tracked.
     </p>
     <div class="charts">
       <figure class="chart-fig">
@@ -214,6 +230,8 @@ const shownStats: [string, string][] = [
 
   <script>
     import { Plotly, baseLayout, COL, CONFIG } from "@lib/chart";
+    import { countUp } from "@lib/countup";
+    countUp(document.querySelectorAll(".stat .num"));
 
     const read = (id: string) => {
       const el = document.getElementById(id);
@@ -290,11 +308,14 @@ const shownStats: [string, string][] = [
 </Base>
 
 <style>
+  /* note under the stat band — body size, matching the muted asides elsewhere. */
+  .corpus-note { margin: var(--space-1) 0 0; }
+
   /* corpus stat band: two labeled groups — the full corpus vs what the site
      surfaces — with the same tabular figures as the home hero stats. */
   .stat-band {
     display: flex; flex-wrap: wrap; gap: 1.6rem 4.5rem;
-    margin: 1.8rem 0 0; padding: 1.2rem 0 0; border-top: 1px solid var(--line);
+    margin: var(--space-section) 0 0; padding: 1.2rem 0 0; border-top: 1px solid var(--line);
   }
   .stat-group-lbl {
     font-size: var(--fs-label); letter-spacing: 0.08em; color: var(--faint);

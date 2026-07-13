@@ -223,6 +223,29 @@ def run_analysis(
     # fixed JEL prototype vectors aren't cached yet.
     jel = _jel_scope(centroid_by_cid, cfg, Path(out_dir) / ".jel_cache", embedder=embedder)
 
+    # Full-corpus JEL (ADR-076): classify EVERY non-noise cluster, not just the
+    # surfaced ones, so the data-page composition chart describes the whole corpus.
+    # Cheap — the classifier is a cosine over centroids (no 8B re-encode, ADR-067),
+    # and prototypes are already cached from the surfaced scope above. Reuse the
+    # surfaced assignments; classify only the remaining (sub-floor) clusters.
+    corpus_jel: dict[int, str] = {
+        int(cid): a.primary_code for cid, a in jel.items() if getattr(a, "primary_code", None)
+    }
+    try:
+        rest = [cid for cid in all_ids if cid not in centroid_by_cid]
+        if rest:
+            rest_centroids = _cluster_centroids(clusters_df, embeddings, rest)
+            rest_jel = _jel_scope(
+                {cid: rest_centroids[i] for i, cid in enumerate(rest)},
+                cfg, Path(out_dir) / ".jel_cache", embedder=embedder,
+            )
+            corpus_jel.update(
+                {int(cid): a.primary_code for cid, a in rest_jel.items()
+                 if getattr(a, "primary_code", None)}
+            )
+    except Exception as exc:  # non-fatal: the data page falls back to surfaced JEL
+        log.warning("Full-corpus JEL composition skipped (%s); by_jel omitted", exc)
+
     # Story cards (extractive) built once here and shared with naming + artifacts,
     # so the panels the reader sees and the excerpts the namer titles from are the
     # same central articles (ADR-061).
@@ -279,6 +302,7 @@ def run_analysis(
         mediacloud=mediacloud,
         names=names,
         n_clusters_total=len(all_ids),
+        corpus_jel=corpus_jel,
         cfg=cfg,
         cards=cards,
     )

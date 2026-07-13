@@ -10,9 +10,9 @@ export const COL = {
   ink: "#16140f",
   muted: "#6f6a60",
   faint: "#908a7e",
-  line: "#e2dccf",
-  paper: "#edece8",
-  paper2: "#e6e4de",
+  line: "#e4e2db",
+  paper: "#ffffff",
+  paper2: "#f5f4f1",
   accent: "#3a5a93",
   accentBright: "#4a7ac4",
   ember: "#c2410c",
@@ -126,28 +126,111 @@ export function mountMap3d(
     showlegend: false,
   };
 
-  const nodeTrace = {
+  // Click-locked position lines: three gray segments from the selected node to
+  // the walls, standing in for the native hover spikes (which vanish the moment
+  // the pointer leaves the point and so can't persist through a selection).
+  const spikeTrace = {
+    type: "scatter3d",
+    mode: "lines",
+    x: [] as (number | null)[],
+    y: [] as (number | null)[],
+    z: [] as (number | null)[],
+    line: { color: "rgba(111,106,96,0.6)", width: 1.5 },
+    hoverinfo: "skip",
+    showlegend: false,
+  };
+  // wall anchors for those lines: the data minima on each axis (the three
+  // planes the default camera looks toward).
+  const mins = [0, 1, 2].map((i) => Math.min(...pts.map((p) => xyz(p)[i])));
+  const spikesFor = (cid: number) => {
+    const [x, y, z] = xyz(byId[cid]);
+    return {
+      x: [x, mins[0], null, x, x, null, x, x],
+      y: [y, y, null, y, mins[1], null, y, y],
+      z: [z, z, null, z, z, null, z, mins[2]],
+    };
+  };
+
+  // every out-of-scope cluster renders as an "x" (matching the map key), not
+  // just JEL J; in-scope fields keep their per-field shapes.
+  const symbolOf = (p: any) =>
+    p.in_scope === false ? "x" : (JEL_SYMBOL[p.jel_code] ?? "circle");
+  // gl3d renders each symbol as a font glyph (● ■ ◆ + ❌) whose visual extent
+  // differs for the same size value. normalize every glyph to the square's box
+  // so one rendered size means one article count across shapes.
+  const SYMBOL_SCALE: Record<string, number> = {
+    circle: 1, square: 1, diamond: 1, cross: 1.1, x: 0.6,
+  };
+  // stroke-only glyphs (x, cross) carry no fill mass, so at equal box size
+  // they read thinner than the solid shapes; they get a self-colored outline
+  // below to fatten their lines without growing their box.
+  const strokeGlyph = (p: any) => {
+    const s = symbolOf(p);
+    return s === "x" || s === "cross";
+  };
+  // size tracks article count on a log scale — a linear map let the biggest
+  // stories dwarf everything near the 42-article floor — with a hard visual
+  // minimum so the smallest clusters stay findable after glyph normalization.
+  // the exponent (< 1) bends the ramp concave: growth in size is spent early,
+  // so small clusters differentiate from each other while the big ones bunch
+  // up near SIZE_MAX instead of towering over the mid-field.
+  const counts = pts.map((p) => Math.max(1, p.n_articles ?? 1));
+  const nLo = Math.min(...counts);
+  const nHi = Math.max(nLo * 1.0001, Math.max(...counts));
+  const SIZE_MIN = 6;
+  const SIZE_MAX = 18;
+  const SIZE_FLOOR = 3;
+  const SIZE_EXP = 0.67;
+  const sizeOf = (p: any) => {
+    const t =
+      (Math.log(Math.max(1, p.n_articles ?? 1)) - Math.log(nLo)) /
+      (Math.log(nHi) - Math.log(nLo));
+    return Math.max(
+      SIZE_FLOOR,
+      (SIZE_MIN + Math.pow(t, SIZE_EXP) * (SIZE_MAX - SIZE_MIN)) *
+        (SYMBOL_SCALE[symbolOf(p)] ?? 1),
+    );
+  };
+
+  // gl3d accepts marker.line.width only as a per-trace scalar (border *color*
+  // is per-point, width is not — a width array silently misrenders), so each
+  // border class gets its own trace: solid shapes with a hairline ink border
+  // so neighbors don't blend, stroke glyphs (x, +) with their self-colored
+  // fattening outline, and emerging clusters with the ember ring.
+  const nodeClass = (p: any) =>
+    p.is_emerging ? "emerging" : strokeGlyph(p) ? "glyph" : "solid";
+  const nodeTraceFor = (
+    sel: any[],
+    borderWidth: number,
+    borderColor: (p: any) => string,
+  ) => ({
     type: "scatter3d",
     mode: "markers",
-    x: pts.map((p) => xyz(p)[0]),
-    y: pts.map((p) => xyz(p)[1]),
-    z: pts.map((p) => xyz(p)[2]),
-    customdata: pts.map((p) => [p.cluster_id, p.n_articles, p.stage]),
-    text: pts.map((p) => p.label_human || p.label),
+    x: sel.map((p) => xyz(p)[0]),
+    y: sel.map((p) => xyz(p)[1]),
+    z: sel.map((p) => xyz(p)[2]),
+    customdata: sel.map((p) => [p.cluster_id, p.n_articles, p.stage]),
+    text: sel.map((p) => p.label_human || p.label),
     hovertemplate:
       "%{text}<br>%{customdata[1]} articles · %{customdata[2]}<extra></extra>",
     marker: {
-      size: pts.map((p) => 4.5 + Math.sqrt(p.n_articles) * 0.62),
-      color: pts.map((p) => STAGE_COLOR[p.stage] ?? COL.dormant),
-      symbol: pts.map((p) => JEL_SYMBOL[p.jel_code] ?? "circle"),
+      size: sel.map(sizeOf),
+      color: sel.map((p) => STAGE_COLOR[p.stage] ?? COL.dormant),
+      symbol: sel.map(symbolOf),
       opacity: 1,
-      line: {
-        width: pts.map((p) => (p.is_emerging ? 2.5 : 1)),
-        color: pts.map((p) => (p.is_emerging ? COL.ember : "rgba(255,255,255,0.9)")),
-      },
+      line: { width: borderWidth, color: sel.map(borderColor) },
     },
     showlegend: false,
-  };
+  });
+  const nodeTraces = [
+    nodeTraceFor(pts.filter((p) => nodeClass(p) === "solid"), 1, () => "rgba(255,255,255,0.9)"),
+    nodeTraceFor(
+      pts.filter((p) => nodeClass(p) === "glyph"),
+      2,
+      (p) => STAGE_COLOR[p.stage] ?? COL.dormant,
+    ),
+    nodeTraceFor(pts.filter((p) => nodeClass(p) === "emerging"), 2.5, () => COL.ember),
+  ].filter((t) => t.x.length > 0);
 
   const axis = {
     showgrid: true,
@@ -178,7 +261,7 @@ export function mountMap3d(
   // Wheel zoom is handled by our own dolly (below) — plotly's built-in scroll
   // zoom clamps the camera distance and reads as "resistance" when zooming in
   // deep, so it stays off. Touch pinch keeps plotly's native handling.
-  Plotly.newPlot(el, [edgeTrace, nodeTrace], layout, {
+  Plotly.newPlot(el, [edgeTrace, spikeTrace, ...nodeTraces], layout, {
     displayModeBar: false, responsive: true, scrollZoom: false,
   });
 
@@ -224,15 +307,57 @@ export function mountMap3d(
   // Selection keys off the hover pick (gl3d's one reliable picking signal): a
   // pointerup with minimal travel selects whatever point is under the cursor.
   // Travel gating means an orbit-drag release never selects.
+  //
+  // Click-lock contract:
+  //  - clicking a cluster locks it: name tag + blue edges + its own gray
+  //    position lines stay up, auto-rotation stays off, and other clusters
+  //    produce no hover effects (no chip, no wall spikes).
+  //  - the chip is hidden with CSS (.map-locked in global.css) rather than
+  //    hoverinfo, because gl3d keeps drawing hovertemplate chips regardless of
+  //    a restyled hoverinfo. hover *events* keep firing either way, which the
+  //    click handler needs to tell "same cluster" from "anywhere else".
+  //  - clicking the locked cluster or its tag keeps the lock; clicking
+  //    anywhere else releases it and restores normal hover.
   let hoverCid: number | null = null;
+  let selectedCid: number | null = null;
   const select = (cid: number) => {
-    Plotly.restyle(el, edgesFor(cid), [0]);
-    Plotly.relayout(el, { "scene.annotations": [tagFor(cid)] });
+    selectedCid = cid;
+    pause();
+    el.classList.add("map-locked");
+    const e = edgesFor(cid);
+    const s = spikesFor(cid);
+    Plotly.restyle(el, { x: [e.x[0], s.x], y: [e.y[0], s.y], z: [e.z[0], s.z] }, [0, 1]);
+    Plotly.relayout(el, {
+      "scene.annotations": [tagFor(cid)],
+      "scene.xaxis.showspikes": false,
+      "scene.yaxis.showspikes": false,
+      "scene.zaxis.showspikes": false,
+    });
+  };
+  const deselect = () => {
+    if (selectedCid === null) return;
+    selectedCid = null;
+    el.classList.remove("map-locked");
+    Plotly.restyle(el, { x: [[], []], y: [[], []], z: [[], []] }, [0, 1]);
+    Plotly.relayout(el, {
+      "scene.annotations": [],
+      "scene.xaxis.showspikes": true,
+      "scene.yaxis.showspikes": true,
+      "scene.zaxis.showspikes": true,
+    });
+    scheduleResume();
   };
   let downX = 0, downY = 0;
   el.addEventListener("pointerdown", (ev) => { downX = ev.clientX; downY = ev.clientY; }, true);
   el.addEventListener("pointerup", (ev) => {
     if (Math.hypot(ev.clientX - downX, ev.clientY - downY) > 6) return;
+    // a click on the tag's link must reach the anchor, not clear the selection
+    if ((ev.target as Element | null)?.closest?.("a")) return;
+    if (selectedCid !== null) {
+      // locked: re-clicking the same cluster keeps it; anything else releases
+      if (hoverCid !== selectedCid) deselect();
+      return;
+    }
     if (hoverCid !== null && byId[hoverCid]) select(hoverCid);
   }, true);
 
@@ -282,6 +407,7 @@ export function mountMap3d(
     if (resumeTimer) clearTimeout(resumeTimer);
   };
   const resume = () => {
+    if (selectedCid !== null) return; // a click-lock keeps the stage still
     if (lastEye) {
       radius = Math.hypot(lastEye.x - orbitCenter.x, lastEye.y - orbitCenter.y);
       angle = Math.atan2(lastEye.y - orbitCenter.y, lastEye.x - orbitCenter.x);
@@ -386,11 +512,10 @@ export function mountMap3d(
     radius = Math.hypot(DEFAULT_EYE.x - DEFAULT_CENTER.x, DEFAULT_EYE.y - DEFAULT_CENTER.y);
     relZ = DEFAULT_EYE.z - DEFAULT_CENTER.z;
     hoverCid = null;
-    Plotly.restyle(el, { x: [[]], y: [[]], z: [[]] }, [0]);
+    deselect();
     Plotly.relayout(el, {
       "scene.camera.eye": { ...DEFAULT_EYE },
       "scene.camera.center": { ...DEFAULT_CENTER },
-      "scene.annotations": [],
     });
     spinning = true;
   });

@@ -18,6 +18,13 @@ tenth of peak fail to separate), so the recent-window mean is compared to the
 peak-window mean against a definitional fraction (stages.dormant_peak_fraction),
 not tuned to anchor recovery (ADR-040).
 
+On top of the four states, a staleness override (ADR-075) forces *dormant* when a
+narrative's last activity trails the corpus frontier by more than
+``stages.stale_dormant_weeks``. The recent window is the tail of the narrative's
+own series, so the trend describes its final chapter wherever that fell in time;
+the override keeps the stage the site presents as "where it sits now" honest to
+the calendar rather than to a years-old high note.
+
 The fitted lenses (logistic / SIR / Bass) are display-only and do not drive the
 stage. This was always the right call: a reproduction number R_0 describes whether
 a narrative ever spread, not its current phase — a present-day decline is an R_t
@@ -96,12 +103,21 @@ def classify_stage(
     fit_result: Any,          # FitResult from dynamics.fitting (display lens only)
     daily_counts: pd.Series,  # smoothed counts indexed by date
     cfg: dict[str, Any] | None = None,
+    frontier: Any = None,     # corpus frontier (latest last-active across narratives)
 ) -> StageClassification:
     """Classify the current lifecycle stage from the narrative's volume curve.
 
     Model-free: a Mann-Kendall trend test plus a peak-relative level test over the
     recent window decide the stage. ``fit_result`` is carried through for SIR-lens
     display values only.
+
+    The recent window is the tail of the narrative's *own* series, so the trend
+    test describes the final chapter of the narrative's life wherever it fell in
+    time — a narrative that stopped mid-rise would otherwise read *growth*
+    indefinitely. When ``frontier`` is supplied, a narrative whose last activity
+    trails it by more than ``stages.stale_dormant_weeks`` is forced to *dormant*
+    (ADR-075): the stage the site presents as "where it sits now" must reflect the
+    calendar, not a years-old high note.
     """
     from mnd.utils.config import load_config
 
@@ -114,6 +130,7 @@ def classify_stage(
     alpha = float(sc.get("trend_alpha", 0.05))
     dormant_fraction = float(sc.get("dormant_peak_fraction", 0.25))
     window = int(sc["newly_emerging_recency_weeks"]) * 7
+    stale_weeks = int(sc.get("stale_dormant_weeks", 16))
 
     y = np.asarray(daily_counts.to_numpy(), dtype=float)
     n = y.size
@@ -133,6 +150,16 @@ def classify_stage(
     else:
         stage = "dormant"
 
+    # Staleness override (ADR-075): a narrative silent for more than stale_weeks
+    # relative to the corpus frontier is dormant regardless of its life-shape.
+    days_since_active: int | None = None
+    if frontier is not None and n and len(daily_counts):
+        days_since_active = int(
+            (pd.to_datetime(frontier) - pd.to_datetime(daily_counts.index[-1])).days
+        )
+        if days_since_active > stale_weeks * 7:
+            stage = "dormant"
+
     # Representative fit carried through for display only -- no longer drives the
     # stage (ADR-052), and no longer carries R_0 (dropped, ADR-062).
     peak_t = getattr(fit_result, "peak_time_mean", None) if fit_result is not None else None
@@ -151,6 +178,9 @@ def classify_stage(
         "peak_level": peak_level,
         "dormant_peak_fraction": dormant_fraction,
         "alpha": alpha,
+        # staleness override (ADR-075): days since last active vs. the frontier
+        "days_since_active": days_since_active,
+        "stale": bool(days_since_active is not None and days_since_active > stale_weeks * 7),
         # representative lens (display only)
         "peak_time_mean": peak_t,
         "converged": getattr(fit_result, "converged", None) if fit_result is not None else None,
@@ -174,8 +204,16 @@ def classify_all(
 
     if cfg is None:
         cfg = load_config()
+    # Corpus frontier = latest last-active date across every narrative's series;
+    # the per-narrative staleness override (ADR-075) is measured against it.
+    lasts = [
+        cd.time_series.index[-1]
+        for cd in cluster_dynamics_list
+        if cd.time_series is not None and len(cd.time_series)
+    ]
+    frontier = max(lasts) if lasts else None
     return [
-        classify_stage(cd.cluster_id, cd.staging_fit, cd.time_series, cfg)
+        classify_stage(cd.cluster_id, cd.staging_fit, cd.time_series, cfg, frontier=frontier)
         for cd in cluster_dynamics_list
         if cd.time_series is not None
     ]

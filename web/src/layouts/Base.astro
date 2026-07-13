@@ -24,6 +24,8 @@ const asOf = loadIndex().generated_at?.slice(0, 10) ?? "";
       content="bellwether tracks how macro-finance narratives form, spread, and fade across sixteen years of institutional and academic writing, mapped and charted against the press and the markets."
     />
     <link rel="icon" type="image/svg+xml" href={href("/favicon.svg")} />
+    <link rel="icon" type="image/png" sizes="32x32" href={href("/favicon-32.png")} />
+    <link rel="apple-touch-icon" sizes="180x180" href={href("/apple-touch-icon.png")} />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="bellwether" />
     <meta property="og:title" content={`${title} · bellwether`} />
@@ -55,9 +57,8 @@ const asOf = loadIndex().generated_at?.slice(0, 10) ?? "";
     </main>
     <footer class="site-footer">
       <div class="wrap">
-        <span>bellwether · by ellis garver</span>
+        <span> bellwether · by ellis garver</span>
         <span>
-          {asOf && <>data as of {asOf} · </>}
           <a href="https://github.com/ellisgarver/bellwether" target="_blank" rel="noopener">github</a>
           · <a href="mailto:ehgarver@uchicago.edu">ehgarver@uchicago.edu</a>
         </span>

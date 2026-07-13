@@ -307,3 +307,78 @@ def test_cluster_directory_flags_forming(tmp_path):
     assert by_id[2]["forming"] and by_id[2]["terms"] == ["c", "d"]
     assert not by_id[3]["forming"]  # single document
     assert by_id[3]["terms"] == ["e", "f"]  # non-surfaced entries all carry terms
+
+
+def test_corpus_composition_full_corpus():
+    """ADR-076: by_source and by_jel aggregate over every non-noise cluster."""
+    import pandas as pd
+
+    from mnd.dashboard.build_artifacts import _corpus_composition
+
+    df = pd.DataFrame([
+        {"topic": 1, "article_id": "a1", "source_id": "fed"},
+        {"topic": 1, "article_id": "a1", "source_id": "fed"},  # dup chunk, one article
+        {"topic": 1, "article_id": "a2", "source_id": "imf"},
+        {"topic": 2, "article_id": "a3", "source_id": "fed"},   # sub-floor cluster
+        {"topic": -1, "article_id": "a4", "source_id": "fed"},   # noise — excluded
+    ])
+    comp = _corpus_composition(df, corpus_jel={1: "E", 2: "G"})
+    assert comp["by_source"] == {"fed": 2, "imf": 1}  # noise dropped; a1 counted once
+    assert comp["by_jel"] == {"E": 2, "G": 1}         # cluster 2 (sub-floor) included
+
+    # without a full-corpus JEL map, by_jel is omitted (front end falls back)
+    comp2 = _corpus_composition(df, corpus_jel=None)
+    assert "by_jel" not in comp2 and comp2["by_source"] == {"fed": 2, "imf": 1}
+
+
+def test_cluster_directory_bakes_heating(tmp_path):
+    """ADR-074: a sub-floor cluster whose recent volume spikes against its own
+    yearly baseline carries a heating blob; surfaced clusters, quiet clusters,
+    and clusters with too little history do not."""
+    import json
+
+    import pandas as pd
+
+    from mnd.dashboard.build_artifacts import write_cluster_directory
+
+    rows = []
+    # Anchor the corpus frontier (surfaced cluster 1, no heating expected).
+    rows.append({"topic": 1, "article_id": "anchor", "published_at": "2026-07-01"})
+    # Heating candidate (id 2): ~2 years of sparse history (1 article / 8 weeks),
+    # then a 5-article burst inside the 16-week recent window.
+    hist = pd.date_range("2024-06-01", "2026-02-01", freq="8W")
+    for i, d in enumerate(hist):
+        rows.append({"topic": 2, "article_id": f"h{i}", "published_at": d.date().isoformat()})
+    for i, d in enumerate(pd.date_range("2026-05-01", periods=5, freq="W")):
+        rows.append({"topic": 2, "article_id": f"b{i}", "published_at": d.date().isoformat()})
+    # Quiet cluster (id 3): same history, no burst.
+    for i, d in enumerate(hist):
+        rows.append({"topic": 3, "article_id": f"q{i}", "published_at": d.date().isoformat()})
+    # Too-young cluster (id 4): a burst but under recent+baseline weeks of span.
+    for i, d in enumerate(pd.date_range("2026-04-01", periods=5, freq="W")):
+        rows.append({"topic": 4, "article_id": f"y{i}", "published_at": d.date().isoformat()})
+    df = pd.DataFrame(rows)
+    ti = pd.DataFrame(
+        {
+            "Topic": [1, 2, 3, 4],
+            "Name": ["1_a_b", "2_c_d", "3_e_f", "4_g_h"],
+            "Representation": [["a", "b"], ["c", "d"], ["e", "f"], ["g", "h"]],
+        }
+    )
+    cfg = {
+        "stages": {"newly_emerging_recency_weeks": 4},
+        "display": {
+            "forming": {"min_articles": 3},
+            "corpus_heating": {
+                "recent_weeks": 16, "baseline_weeks": 52, "k_sigma": 2.0, "min_articles": 3,
+            },
+        },
+    }
+    path = write_cluster_directory(df, ti, fit_ids=[1], names={}, out_dir=tmp_path, cfg=cfg)
+    by_id = {c["cluster_id"]: c for c in json.loads(path.read_text())["clusters"]}
+    heat = by_id[2].get("heating")
+    assert heat and heat["is_heating"] and heat["z"] >= 2.0
+    assert heat["recent_articles"] >= 3
+    assert "heating" not in by_id[1]  # surfaced: site computes from its series
+    assert "heating" not in by_id[3]  # no burst
+    assert "heating" not in by_id[4]  # too little history to judge

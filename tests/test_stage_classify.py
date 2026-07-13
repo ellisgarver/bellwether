@@ -128,6 +128,73 @@ class TestFitIsDisplayOnly:
         assert result.detail["converged"] is None
 
 
+class TestStalenessOverride:
+    """ADR-075: a narrative silent past stale_dormant_weeks reads dormant."""
+
+    CFG_STALE = {
+        "stages": {
+            "trend_alpha": 0.05,
+            "newly_emerging_recency_weeks": 4,
+            "dormant_peak_fraction": 0.25,
+            "stale_dormant_weeks": 16,
+        }
+    }
+
+    def test_stale_growth_forced_dormant(self):
+        # a rising series that ended long before the frontier: growth by shape,
+        # dormant by the calendar.
+        counts = _series([float(i + 1) for i in range(60)])  # ends 2023-03-01
+        frontier = pd.Timestamp("2026-07-02")
+        result = classify_stage(0, _FitResult(), counts, cfg=self.CFG_STALE, frontier=frontier)
+        assert result.stage == "dormant"
+        assert result.detail["stale"] is True
+        assert result.detail["trend"] == "increasing"  # underlying shape preserved
+
+    def test_recent_growth_survives(self):
+        # same rising shape, but active right up to the frontier: still growth.
+        counts = _series([float(i + 1) for i in range(60)])
+        frontier = counts.index[-1]
+        result = classify_stage(0, _FitResult(), counts, cfg=self.CFG_STALE, frontier=frontier)
+        assert result.stage == "growth"
+        assert result.detail["stale"] is False
+
+    def test_no_frontier_no_override(self):
+        counts = _series([float(i + 1) for i in range(60)])
+        result = classify_stage(0, _FitResult(), counts, cfg=self.CFG_STALE)
+        assert result.stage == "growth"
+        assert result.detail["stale"] is False
+        assert result.detail["days_since_active"] is None
+
+    def test_classify_all_derives_frontier(self):
+        from mnd.stages.classify import classify_all
+
+        @dataclass
+        class _CD:
+            cluster_id: int
+            staging_fit: Any
+            time_series: pd.Series
+
+        # cluster 1 ends at the frontier; cluster 2 (same rising shape) ended a
+        # year earlier and must be demoted to dormant.
+        fresh = pd.Series(
+            [float(i + 1) for i in range(60)],
+            index=pd.date_range("2026-05-04", periods=60, freq="D"),
+        )
+        old = pd.Series(
+            [float(i + 1) for i in range(60)],
+            index=pd.date_range("2024-01-01", periods=60, freq="D"),
+        )
+        out = {
+            sc.cluster_id: sc.stage
+            for sc in classify_all(
+                [_CD(1, _FitResult(), fresh), _CD(2, _FitResult(), old)],
+                cfg=self.CFG_STALE,
+            )
+        }
+        assert out[1] == "growth"
+        assert out[2] == "dormant"
+
+
 class TestStageLabels:
     def test_only_four_trajectory_labels_emitted(self):
         cases = [

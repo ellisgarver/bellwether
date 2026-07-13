@@ -105,6 +105,11 @@ The prior text-as-data literature measures intensity (one number per period) rat
 ### Hassan, Hollander, van Lent & Tahoun (2019), "Firm-Level Political Risk" — *QJE*
 Text-mine earnings calls for firm-level political risk exposure via a keyword-in-context measure rather than a topic model — evidence that text-as-data measurement of policy/risk constructs is now standard in top-5 economics journals.
 
+### de Jesus & da Nóbrega Besarria (2025), "Central Bank Narratives and Macroeconomic Forecasting: Using Textual Analysis from Machine Learning" — *IMF Economic Review* (DOI 10.1057/s41308-025-00278-x)
+Sentiment scores from Central Bank of Brazil Copom minutes and Inflation Reports, built with fixed and ML time-varying lexicons, improve GDP and inflation forecasts and explain real-time GDP forecast errors.
+
+**Overlap:** MEDIUM (corpus), LOW (method). Recent top-field evidence that central-bank text carries forecast-relevant signal — the same institutional register this corpus is built on. A sentiment-index measurement rather than narrative topics or lifecycles, and Brazil rather than the U.S.
+
 ---
 
 ## 6. Methodological survey papers
@@ -174,4 +179,5 @@ The following elements are standard in the field:
 | Schmidt et al. (2025); Hartley (2025); Gueta et al. (2025) | LLM-frontier reference set |
 | Tetlock (2007, *JF*); Garcia (2013, *JF*); Loughran-McDonald (2011, *JF*); Manela-Moreira (2017, *JFE*); Baker-Bloom-Davis (2016, *QJE*) | Dictionary/sentiment ancestors |
 | Hassan, Hollander, van Lent & Tahoun (2019, *QJE*) | Text-mining firm political risk |
+| de Jesus & da Nóbrega Besarria (2025, *IMF Economic Review*) | Central-bank text carries forecast-relevant signal |
 | Ash & Hansen (2023, *Annual Review of Economics*); Gentzkow, Kelly & Taddy (2019, *JEL*) | Text-as-data methodological surveys |

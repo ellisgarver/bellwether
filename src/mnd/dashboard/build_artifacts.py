@@ -212,6 +212,7 @@ def build_dashboard_artifacts(
     top_k_edges: int = 3,
     generated_at: str | None = None,
     n_clusters_total: int | None = None,
+    corpus_jel: dict[int, str] | None = None,
     cards: dict[int, "StoryCard"] | None = None,
 ) -> tuple[DashboardIndex, list[NarrativeArtifact]]:
     """Assemble the dashboard index + per-narrative artifacts.
@@ -341,6 +342,7 @@ def build_dashboard_artifacts(
             if "article_id" in clusters_df.columns
             else None
         ),
+        corpus_composition=_corpus_composition(clusters_df, corpus_jel),
         min_articles_to_fit=(
             int(cfg["dynamics"]["min_articles_to_fit"])
             if "min_articles_to_fit" in cfg.get("dynamics", {})
@@ -356,6 +358,96 @@ def build_dashboard_artifacts(
         sum(1 for e in index_rows if e.is_emerging),
     )
     return index, narratives
+
+
+def _corpus_composition(
+    clusters_df: pd.DataFrame,
+    corpus_jel: dict[int, str] | None,
+) -> dict[str, dict[str, int]] | None:
+    """Full-corpus article counts by source and by JEL code (ADR-076).
+
+    Aggregates over every non-noise cluster — the whole corpus, not just the
+    surfaced narratives — so the data page can chart the real composition. ``by_source``
+    is distinct-article counts per ``source_id``; ``by_jel`` maps each cluster's
+    distinct-article count onto its JEL code from ``corpus_jel`` (omitted when no
+    full-corpus JEL was computed, so the front end falls back to surfaced JEL).
+    Returns ``None`` when the frame lacks the needed columns (sample data).
+    """
+    if "article_id" not in clusters_df.columns:
+        return None
+    rows = (
+        clusters_df[clusters_df["topic"] != NOISE_TOPIC]
+        if "topic" in clusters_df.columns
+        else clusters_df
+    )
+    if rows.empty:
+        return None
+
+    comp: dict[str, dict[str, int]] = {}
+    if "source_id" in rows.columns:
+        by_source = rows.groupby("source_id")["article_id"].nunique()
+        comp["by_source"] = {str(k): int(v) for k, v in by_source.items()}
+    if corpus_jel and "topic" in rows.columns:
+        per_cluster = rows.groupby("topic")["article_id"].nunique()
+        by_jel: dict[str, int] = {}
+        for cid, n in per_cluster.items():
+            code = corpus_jel.get(int(cid))
+            if code:
+                by_jel[code] = by_jel.get(code, 0) + int(n)
+        if by_jel:
+            comp["by_jel"] = by_jel
+    return comp or None
+
+
+def _corpus_heating(
+    day_counts: pd.Series,
+    frontier: str,
+    *,
+    recent_weeks: int,
+    baseline_weeks: int,
+    k: float,
+    min_articles: int,
+) -> dict[str, Any] | None:
+    """Corpus-heating blob for one cluster (ADR-074).
+
+    Fires when the cluster's mean weekly article count over the most-recent
+    ``recent_weeks`` sits ``>= k`` standard errors above its own trailing
+    ``baseline_weeks`` baseline, with at least ``min_articles`` in the recent
+    window. Same shape as ``mnd.detection.mediacloud.press_heating`` (recent
+    window vs. the narrative's own yearly baseline), but the z is scaled by
+    ``sqrt(recent_weeks)``: institutional volume is single-digit weekly counts,
+    so a windowed mean can never clear ``k`` raw weekly sigmas. Weeks with no
+    articles count as zero (silence is signal). Returns ``None`` when there is
+    too little history to judge.
+    """
+    if day_counts.empty:
+        return None
+    weekly = (
+        day_counts.resample("W")
+        .sum()
+        .reindex(
+            pd.date_range(day_counts.index.min(), pd.to_datetime(frontier), freq="W"),
+            fill_value=0.0,
+        )
+    )
+    if len(weekly) < recent_weeks + baseline_weeks:
+        return None
+    recent = weekly.iloc[-recent_weeks:]
+    baseline = weekly.iloc[-(recent_weeks + baseline_weeks):-recent_weeks]
+    base_std = float(baseline.std(ddof=1))
+    if base_std <= 0.0:
+        return None
+    z = (float(recent.mean()) - float(baseline.mean())) / (
+        base_std / math.sqrt(recent_weeks)
+    )
+    return {
+        "is_heating": bool(z >= k and int(recent.sum()) >= min_articles),
+        "z": round(z, 3),
+        "recent_articles": int(recent.sum()),
+        "recent_weeks": recent_weeks,
+        "baseline_weeks": baseline_weeks,
+        "k": k,
+    }
 
 
 def write_cluster_directory(
@@ -379,9 +471,12 @@ def write_cluster_directory(
     are titled from their full story cards and need no directory terms.
     Sub-floor clusters whose onset falls within the ADR-059 recency window and
     which span at least ``display.forming.min_articles`` distinct articles are
-    additionally flagged ``forming`` (ADR-071) for the emerging page. Returns
-    the written path, or ``None`` when the frame lacks the needed columns
-    (sample/partial data).
+    additionally flagged ``forming`` (ADR-071) for the emerging page. Sub-floor
+    clusters whose recent volume spikes against their own baseline additionally
+    carry a ``heating`` blob (ADR-074) — their weekly series never ships, so the
+    signal must be baked here; the site computes the same signal for surfaced
+    narratives from their shipped series. Returns the written path, or ``None``
+    when the frame lacks the needed columns (sample/partial data).
     """
     if "topic" not in clusters_df.columns or "article_id" not in clusters_df.columns:
         return None
@@ -392,6 +487,7 @@ def write_cluster_directory(
 
     counts = rows.groupby("topic")["article_id"].nunique()
     date_ranges: dict[int, tuple[str, str]] = {}
+    day_counts: dict[int, pd.Series] = {}
     if "published_at" in rows.columns:
         days = rows.assign(_d=rows["published_at"].astype(str).str.slice(0, 10))
         days = days[days["_d"].str.match(r"\d{4}-\d{2}-\d{2}")]
@@ -401,6 +497,13 @@ def write_cluster_directory(
                 int(cid): (str(lo), str(hi))
                 for cid, lo, hi in zip(g.min().index, g.min(), g.max())
             }
+            # Distinct-article daily counts per cluster, for the heating signal.
+            arts = days.drop_duplicates(subset=["topic", "article_id"])
+            for cid, grp in arts.groupby("topic"):
+                per_day = grp.groupby("_d").size()
+                day_counts[int(cid)] = pd.Series(
+                    per_day.to_numpy(dtype=float), index=pd.to_datetime(per_day.index)
+                ).sort_index()
 
     # Forming window (ADR-071): onset within the ADR-059 recency window of the
     # corpus frontier, measured over the whole corpus.
@@ -414,6 +517,7 @@ def write_cluster_directory(
         if frontier
         else None
     )
+    heat_cfg = (cfg.get("display") or {}).get("corpus_heating") or {}
 
     surfaced = {int(c) for c in fit_ids}
     entries = []
@@ -439,6 +543,18 @@ def write_cluster_directory(
         }
         if cid not in surfaced:
             entry["terms"] = _terms_from_topic_info(topic_info, cid)[1]
+            # Heating blob only where it fires — one compact row per cluster.
+            if frontier and cid in day_counts:
+                heat = _corpus_heating(
+                    day_counts[cid],
+                    frontier,
+                    recent_weeks=int(heat_cfg.get("recent_weeks", 16)),
+                    baseline_weeks=int(heat_cfg.get("baseline_weeks", 52)),
+                    k=float(heat_cfg.get("k_sigma", 2.0)),
+                    min_articles=int(heat_cfg.get("min_articles", 3)),
+                )
+                if heat and heat["is_heating"]:
+                    entry["heating"] = heat
         entries.append(entry)
 
     out = Path(out_dir)

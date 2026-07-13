@@ -133,8 +133,42 @@ _ACRONYMS = {
     "gdp", "cpi", "pce", "ppi", "fomc", "imf", "bis", "cbo", "cea", "ofr",
     "nber", "svb", "vix", "qe", "qt", "ecb", "boe", "boj", "pboc", "snb",
     "fdic", "sec", "occ", "fsoc", "tarp", "btfp", "wto", "nato", "opec",
-    "ai", "uk", "eu", "un", "jel", "zlb", "nairu", "cds", "etf", "ipo",
+    "ai", "uk", "eu", "un", "us", "jel", "zlb", "nairu", "cds", "etf", "ipo",
     "reit", "tips", "sofr", "libor",
+    # added 2026-07-12 from the full-bake title scan
+    "ieepa", "covid", "esg", "cbdc", "oecd", "asean", "brics", "nafta",
+    "usmca", "gdpr", "llm", "llms", "gse", "gses", "sme", "smes", "ppp",
+    "g7", "g20", "oled", "fsb", "bri", "wmd",
+}
+# Single-word proper nouns (countries, demonyms, cities, institutions, people)
+# that the 7B-class models leave lowercase after copying the c-TF-IDF keywords.
+# Capitalized (first letter), not up-cased. Trailing possessive is stripped for
+# the lookup, so "china's" matches "china". Kept to items that actually surfaced
+# in the corpus titles and are unambiguous in a macro-finance context.
+_PROPER = {
+    "america", "american", "africa", "african", "asia", "asian",
+    "europe", "european", "latin", "caribbean", "pacific", "atlantic",
+    "nordic", "mediterranean", "eurasia", "balkans", "scandinavia",
+    "china", "chinese", "japan", "japanese", "india", "indian",
+    "korea", "korean", "germany", "german", "france", "french",
+    "russia", "russian", "ukraine", "ukrainian", "iran", "iranian",
+    "israel", "israeli", "syria", "syrian", "iraq", "iraqi", "turkey",
+    "turkish", "greece", "greek", "italy", "italian", "spain", "spanish",
+    "portugal", "portuguese", "ireland", "irish", "iceland", "brazil",
+    "brazilian", "mexico", "mexican", "canada", "canadian", "argentina",
+    "venezuela", "egypt", "libya", "cyprus", "sudan", "afghanistan",
+    "afghan", "pakistan", "indonesia", "vietnam", "nigeria", "kenya",
+    "australia", "australian", "britain", "british", "swiss", "dutch",
+    "belgian", "swedish", "norwegian", "danish", "finnish", "austrian",
+    "polish", "hungarian", "czech", "slovak", "romanian", "bulgarian",
+    "washington", "beijing", "brussels", "frankfurt", "basel", "davos",
+    "london", "tokyo", "paris", "moscow", "tehran", "gaza", "detroit",
+    "chicago", "shanghai", "geneva", "vienna",
+    "congress", "senate", "treasury", "fed", "brexit",
+    "draghi", "trichet", "bernanke", "yellen", "powell", "lagarde",
+    "greenspan", "volcker", "mnuchin", "goolsbee", "kuroda", "merkel",
+    "macron", "trump", "biden", "obama", "putin", "erdogan", "modi",
+    "lehman", "hezbollah", "hamas", "taliban",
 }
 _FIXUPS = {
     "federal reserve": "Federal Reserve",
@@ -144,19 +178,118 @@ _FIXUPS = {
     "wall street": "Wall Street",
     "white house": "White House",
     "u.s.": "U.S.",
+    # multi-word places and institutions (added 2026-07-12)
+    "united states": "United States",
+    "united kingdom": "United Kingdom",
+    "united nations": "United Nations",
+    "european union": "European Union",
+    "european central bank": "European Central Bank",
+    "world bank": "World Bank",
+    "world trade organization": "World Trade Organization",
+    "international monetary fund": "International Monetary Fund",
+    "supreme court": "Supreme Court",
+    "silicon valley": "Silicon Valley",
+    "middle east": "Middle East",
+    "hong kong": "Hong Kong",
+    "new york": "New York",
+    "north korea": "North Korea",
+    "south korea": "South Korea",
+    "south sudan": "South Sudan",
+    "saudi arabia": "Saudi Arabia",
+    "puerto rico": "Puerto Rico",
+    "latin america": "Latin America",
+    "sub-saharan africa": "Sub-Saharan Africa",
+    "euro area": "euro area",
+    "bank of japan": "Bank of Japan",
+    "bank of england": "Bank of England",
+    "bank of france": "Bank of France",
+    "bank of canada": "Bank of Canada",
+    "bank of italy": "Bank of Italy",
+    "bank of spain": "Bank of Spain",
+    "bank of mexico": "Bank of Mexico",
+    "bank of korea": "Bank of Korea",
+    "reserve bank of india": "Reserve Bank of India",
+    "people's bank of china": "People's Bank of China",
+    "south african reserve bank": "South African Reserve Bank",
+    "east china sea": "East China Sea",
+    "south china sea": "South China Sea",
+    # possessive spelling slips the models introduce from the keyword copy
+    "chinas": "China's",
+    "americas": "Americas",
 }
+
+# Strip a trailing possessive so proper-noun lookup matches ("china's" -> "china").
+_POSSESSIVE = re.compile(r"['’]s$")
+
+# Trailing date stamp the models copy out of the span ("…, 2010-2026", "… 2018",
+# "…, 2022-23", "…2011-present"). The date span is shown separately on every card,
+# so it is redundant in the title. Only a *trailing* date is stripped, never a
+# leading/among one that carries meaning ("2013 taper tantrum", "COVID-19").
+_TRAILING_DATE = re.compile(
+    r"[\s,;:()\[\]]*"                                  # separators before the date
+    r"(?:19|20)\d{2}"                                  # a 4-digit year
+    r"(?:"
+    r"(?:19|20)\d{2}"                                  # a glued second year ("19782012")
+    r"|\s*(?:[-–—/]|to|through)\s*"                    # or a separated range
+    r"(?:(?:19|20)?\d{2}|present|now|onwards?|date|x|\?)"
+    r")?"
+    r"\s*$",
+    re.IGNORECASE,
+)
+
+
+def _cap_proper(word: str) -> str:
+    """Capitalize the first letter of a proper-noun token, leaving the rest."""
+    for i, ch in enumerate(word):
+        if ch.isalpha():
+            return word[:i] + ch.upper() + word[i + 1:]
+    return word
+
+
+def _polish_word(w: str) -> str:
+    """Acronym up-cast or proper-noun capitalization for one whitespace token.
+
+    Applied to each hyphen-separated subpart too, so the models' glued country
+    pairs recover ("us-india" -> "US-India"); ordinary hyphenates are untouched
+    because neither part is in the lists ("cross-strait" stays lowercase)."""
+    core = w.lower().strip(",.:;()'’")
+    if core in _ACRONYMS:
+        return w.upper()
+    # Look up the proper-noun base: drop a possessive ("china's" -> "china"),
+    # then, failing that, a bare trailing "s" ("trichets"/"germans"). Only the
+    # capitalization is applied to the original token — no apostrophe is
+    # fabricated, since "koreas" could be plural rather than possessive.
+    base = _POSSESSIVE.sub("", core)
+    if base not in _PROPER and base.endswith("s"):
+        base = base[:-1]
+    if base in _PROPER:
+        return _cap_proper(w)
+    if "-" in core and "-" in w:
+        parts = w.split("-")
+        if len(parts) > 1:
+            return "-".join(_polish_word(p) for p in parts)
+    return w
 
 
 def _polish_title(title: str) -> str:
-    """Deterministic casing repair: first letter, acronyms, fixed proper nouns."""
+    """Deterministic casing repair: first letter, acronyms, proper nouns.
+
+    Order: multi-word fixups first (so "united states" wins before per-word
+    handling), then per-word acronym up-casing and proper-noun capitalization,
+    then the leading capital. Up-casing/capitalizing a fixed list is safe in a
+    way the reverse (de-Title-Casing, which needs to know which words are proper)
+    is not; the list only grows, and because polish also runs on cache read the
+    growth lands on the next bake with no regeneration (ADR-056).
+    """
     t = title.strip()
+    # Drop a redundant trailing date span, but never the whole title if a date is
+    # somehow all it is.
+    stripped = _TRAILING_DATE.sub("", t).rstrip(" ,;:-–—")
+    if stripped:
+        t = stripped
     for k, v in _FIXUPS.items():
         t = re.sub(rf"\b{re.escape(k)}\b", v, t, flags=re.IGNORECASE)
-    words = [
-        w.upper() if w.lower().strip(",.:;()'’") in _ACRONYMS else w
-        for w in t.split(" ")
-    ]
-    t = " ".join(words)
+    t = " ".join(_polish_word(w) for w in t.split(" "))
     return (t[0].upper() + t[1:]) if t else t
 
 _SCHEMA: dict[str, Any] = {
@@ -429,7 +562,12 @@ def generate_names(
         if path.exists():
             try:
                 d = json.loads(path.read_text(encoding="utf-8"))
-                out[inp.cluster_id] = NarrativeName(d["title"], d["description"])
+                # polish on read as well: idempotent, and it lets _FIXUPS /
+                # _ACRONYMS grow without invalidating the cache — casing-list
+                # changes land on the next bake instead of a full regeneration.
+                out[inp.cluster_id] = NarrativeName(
+                    _polish_title(str(d["title"])), d["description"]
+                )
                 continue
             except Exception as exc:  # partial/corrupt write — regenerate this one
                 log.warning(

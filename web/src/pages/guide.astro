@@ -4,9 +4,11 @@ import { loadIndex, loadNarrative, displayName } from "@lib/data";
 const index = loadIndex();
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-// Walkthrough example: the in-scope narrative whose best converged lens has
-// the highest R², so the reader's first chart shows a curve that clearly
-// tracks the volume.
+// Walkthrough example: a recognizable macro story whose best converged lens
+// also fits well, so the reader's first chart is both familiar and clearly
+// curve-tracked. We bias toward a shortlist of well-known narratives, then pick
+// the highest-R² match; if none are present we fall back to the best-fitting
+// in-scope narrative so the page always has a good example.
 const bestR2 = (cid: number): number => {
   const fits = loadNarrative(cid).fits ?? [];
   return Math.max(
@@ -16,22 +18,45 @@ const bestR2 = (cid: number): number => {
       .map((f) => (typeof f.params?.r2 === "number" ? (f.params.r2 as number) : 0)),
   );
 };
-const pool = index.narratives.filter((e) => e.in_scope);
-let example = index.narratives[0];
+const FAMILIAR = [
+  "china", "trade war", "tariff", "inflation", "eurozone", "sovereign debt",
+  "brexit", "debt ceiling", "quantitative easing", "oil", "infrastructure",
+  "soft landing", "yield curve", "housing",
+];
+const isFamiliar = (e: (typeof index.narratives)[number]): boolean => {
+  const hay = (displayName(e) + " " + e.label + " " + (e.top_terms ?? []).join(" ")).toLowerCase();
+  return FAMILIAR.some((k) => hay.includes(k));
+};
+const inScope = index.narratives.filter((e) => e.in_scope);
+const pool = inScope.length ? inScope : index.narratives;
+const familiar = pool.filter(isFamiliar);
+let example = pool[0] ?? index.narratives[0];
 let exampleScore = -1;
-for (const e of (pool.length ? pool : index.narratives)) {
+for (const e of (familiar.length ? familiar : pool)) {
   const s = bestR2(e.cluster_id);
   if (s > exampleScore) {
     exampleScore = s;
     example = e;
   }
 }
+
+// the walkthrough inventory: everything a narrative page holds, top to bottom.
+// one-line rows that disclose their reading on click, like the data-page feeds.
+const walkthrough: [string, string][] = [
+  ["the bars", "weekly volume, adjusted for how much the whole corpus published that week — the measured story itself."],
+  ["the lens tabs", "one per lens, each carrying its R². the chart opens on the best-fitting lens; grayed tabs are weak fits that stay clickable for comparison, and clicking the active tab clears the curve back to the bars alone."],
+  ["pan & zoom", "drag pans the view; the two sliders zoom time and volume independently."],
+  ["the stage readout", "the numbers behind the stage call: the trend direction, its p-value against α = 0.05, the recent log-slope, and recent volume as a share of the narrative's own peak."],
+  ["the shape facts", "total and peak volume, time to peak, active days, and wave count, read straight off the curve."],
+  ["the overlay checkboxes", "broad-press story counts (Media Cloud, thin before ~2017) and a market series (VIX), each min-max rescaled onto the volume axis — its own low at the floor, its own high at the tallest bar — so an overlay carries timing and shape, never height."],
+  ["the lead-lag readout", "the two Granger verdicts, each direction reported with its significance, p-value, and best lag."],
+];
 ---
 
 <Base title="guide" active="guide">
   <h1 class="reveal">how bellwether works</h1>
   <p class="lede reveal">
-    how the pipeline turns institutional writing into clustered narratives and
+    the pipeline that turns institutional writing into clustered narratives and
     lifecycle analysis.
   </p>
 
@@ -48,7 +73,7 @@ for (const e of (pool.length ? pool : index.narratives)) {
               <line x1="9" y1="17" x2="16" y2="17" />
             </svg>
           </span>
-          <span class="ptext"><strong>articles</strong>every document, whole</span>
+          <span class="ptext"><strong>articles</strong>whole context</span>
         </div>
         <div class="pstep">
           <span class="pglyph">
@@ -98,7 +123,7 @@ for (const e of (pool.length ? pool : index.narratives)) {
       unit from the BEIR benchmark, so long reports are read in coherent pieces.
       each passage becomes a vector from a sentence-embedding model
       (Qwen3-Embedding-8B, 4,096 numbers per passage) in a space where closeness
-      tracks meaning: two passages making the same argument land near each other.
+      tracks meaning: two passages making similar arguments land near each other numerically.
     </p>
     <p>
       those vectors are clustered with BERTopic, which reduces them to a lower
@@ -117,10 +142,19 @@ for (const e of (pool.length ? pool : index.narratives)) {
       the core scope; clusters that fall outside those fields are still fit and
       shown, just flagged with the external JEL field they landed in.
     </p>
+    <p>
+      the display names come from a small language model (llama 3.1-8B)
+      . it reads each cluster's terms, excerpts from
+      its most central articles, its date span, and its source mix, then writes
+      a short title and description. a defined cluster here is a
+      long-lived family of related writing rather than a single news story. new
+      events usually land inside an old family (ex. the
+      2026 Iran war joins sanctions clusters from 2010).
+    </p>
   </section>
 
   <section class="section reveal">
-    <h2>four lenses on one curve</h2>
+    <h2>four lenses, a stage, and statistical analysis</h2>
     <p>
       counting a narrative's articles per week gives a volume curve: a time series
       of how loud the story is. that count is then normalized for how much the whole
@@ -178,42 +212,48 @@ for (const e of (pool.length ? pool : index.narratives)) {
     </p>
     <p>
       the lenses describe shape but don't assign stage. instead, the stage is read
-      directly from the recent curve with a model-free trend test: a modified
+      directly from the recent curve with a known model-free trend test: a modified
       Mann–Kendall test <span class="cite">(Mann, 1945; Kendall, 1948)</span> over
       the most recent four weeks, its variance corrected for the autocorrelation
       that smoothing introduces <span class="cite">(Hamed &amp; Rao, 1998)</span>.
-      see more on the four possible states below:
+      see more on the four narrative stages below:
     </p>
     <ul class="r0">
-      <li class="g"><span class="k">growth</span><span>attention is rising: a significant upward trend</span></li>
-      <li class="s"><span class="k">stable</span><span>no trend, and recent volume is still near the narrative's own peak: a high plateau</span></li>
-      <li class="d"><span class="k">decay</span><span>attention is falling: a significant downward trend</span></li>
-      <li class="z"><span class="k">dormant</span><span>no trend, and recent volume has fallen well below the narrative's own peak: faded out</span></li>
+      <li class="g"><span class="k">growth</span><span>a significant upward trend over the trailing four weeks (Mann–Kendall p &lt; 0.05): attention is rising</span></li>
+      <li class="s"><span class="k">stable</span><span>no significant trend, and recent volume holds at 25% or more of the narrative's own peak level: a high plateau</span></li>
+      <li class="d"><span class="k">decay</span><span>a significant downward trend over the trailing four weeks (p &lt; 0.05): attention is falling</span></li>
+      <li class="z"><span class="k">dormant</span><span>no significant trend, and recent volume has fallen below 25% of the narrative's own peak level: faded out</span></li>
     </ul>
+    <p>
+      the last piece of analysis connects each narrative to the world outside the
+      corpus: two bidirectional Granger tests <span class="cite">(Granger, 1969)</span>,
+      one against broad-press story counts (Media Cloud) and one against a market
+      series (VIX), both computed on the unscaled weekly series. sweeping by
+      lags of one to four weeks in both directions, the tests determine whether past values of one
+      series help predict the other, and reports the strongest lag: whether the
+      discourse moved before or after the press, and before or after the market, and by how much.
+      note that Granger precedence measures timing and not cause. discourse can move first yet not impact press or markets.
+    </p>
   </section>
 
   <section class="section reveal">
     <h2>reading a narrative</h2>
     <p>
       take <a href={`${base}/narratives/${example.cluster_id}`}>{displayName(example)}</a> for
-      example. the bars on the chart are its weekly volume, adjusted for how much the whole
-      corpus published, and the line is the selected lens. each tab carries its
-      lens's R², and the chart opens on the best-fitting one. drag pans the view; the two
-      sliders zoom time and volume independently. the stage readout and the direct
-      shape facts sit below the chart.
+      example. top to bottom, its page holds:
     </p>
-    <p>
-      the checkboxes overlay two external series: broad-press story counts
-      (Media Cloud, thin before ~2017) and a market series (VIX). each is min-max
-      rescaled onto the volume axis — its own low sits at the floor and its own
-      high at the tallest bar — so the overlays carry timing and shape, never
-      height. underneath sit two bidirectional Granger tests, computed on the
-      unscaled weekly series. each sweeps lags of one to four weeks in both
-      directions, asks whether past values of one series help predict the other,
-      and reports the strongest lag: whether discourse moved before or after the
-      press, and before or after the market. note that Granger precedence
-      measures timing, not cause.
-    </p>
+    <div class="read-list">
+      {walkthrough.map(([k, d], i) => (
+        <details class="read-row">
+          <summary class="read-head">
+            <span class="read-n">{String(i + 1).padStart(2, "0")}</span>
+            <span class="read-k">{k}</span>
+            <span class="read-cue">+</span>
+          </summary>
+          <div class="read-detail"><p>{d}</p></div>
+        </details>
+      ))}
+    </div>
     <p>
       further down sits a reading list, three stacked lists linking to
       the source documents: the narrative's core pieces, its earliest writing,
@@ -318,11 +358,34 @@ for (const e of (pool.length ? pool : index.narratives)) {
     .r0 li { grid-template-columns: 1fr; gap: 0.35rem; }
   }
 
+  /* the walkthrough inventory: one-line rows that disclose their reading on
+     click — the same numbered-row disclosure pattern as the data-page feeds. */
+  .read-list { margin: 1.2rem 0; }
+  .read-row { border-bottom: 1px solid var(--line-soft); transition: background 0.2s var(--ease); }
+  .read-row:hover { background: var(--paper-2); }
+  .read-head {
+    display: grid; grid-template-columns: 2.4rem 1fr auto; align-items: center;
+    gap: 0.9rem; padding: 0.8rem 0.5rem; cursor: pointer; list-style: none;
+  }
+  .read-head::-webkit-details-marker { display: none; }
+  .read-n { color: var(--faint); font-variant-numeric: tabular-nums; font-size: var(--fs-meta); }
+  .read-k { font-weight: 600; color: var(--ink); }
+  .read-cue {
+    color: var(--accent); font-weight: 600; font-size: var(--fs-lede); line-height: 1;
+    transition: transform 0.3s var(--ease), color 0.2s var(--ease);
+  }
+  .read-row[open] .read-cue { transform: rotate(45deg); color: var(--accent-bright); }
+  .read-detail p {
+    margin: 0; padding: 0.1rem 0.5rem 0.9rem 3.8rem;
+    color: var(--muted); font-size: var(--fs-ui);
+  }
+
   @media (max-width: 640px) {
     .lenses { grid-template-columns: 1fr; }
   }
   @media (prefers-reduced-motion: reduce) {
     .pglyph { animation: none; }
     .lens-card:hover .mini path { animation: none; }
+    .read-cue { transition: none; }
   }
 </style>

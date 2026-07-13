@@ -1,8 +1,23 @@
 ---
 import StageBadge from "./StageBadge.astro";
 import { JEL_NAME, STAGE_COLOR, displayName, type IndexEntry } from "@lib/data";
-interface Props { entry: IndexEntry; spark?: number[]; }
-const { entry, spark } = Astro.props;
+// linked=false renders the same card without a narrative page behind it (a
+// sub-floor directory cluster, ADR-074): a plain div, tagged so the reader
+// knows there is nothing to click through to.
+// pressHot / corpusHot are the 16-week heating signals (ADR-074), computed once
+// per build and passed in so every surface badges the same set; they fall back
+// to the baked 4-week press flag when a caller doesn't supply them.
+interface Props {
+  entry: IndexEntry;
+  spark?: number[];
+  linked?: boolean;
+  tag?: string;
+  pressHot?: boolean;
+  corpusHot?: boolean;
+}
+const { entry, spark, linked = true, tag, pressHot, corpusHot } = Astro.props;
+const showPress = pressHot ?? entry.is_press_heating ?? false;
+const Root = linked ? "a" : "div";
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 const span = entry.date_range ? `${entry.date_range[0]} → ${entry.date_range[1]}` : "";
 
@@ -18,7 +33,7 @@ if (spark && spark.length > 1) {
 }
 const col = STAGE_COLOR[entry.stage];
 ---
-<a class="card" href={`${base}/narratives/${entry.cluster_id}`}>
+<Root class={`card${linked ? "" : " unlinked"}`} href={linked ? `${base}/narratives/${entry.cluster_id}` : undefined}>
   <div class="card-main">
     <h3>{displayName(entry)}</h3>
     <div class="meta">
@@ -26,24 +41,30 @@ const col = STAGE_COLOR[entry.stage];
       {entry.jel_code && <> · <abbr title={JEL_NAME[entry.jel_code] ?? entry.jel_code}>JEL {entry.jel_code}</abbr></>}
     </div>
     <div class="terms">
-      {entry.top_terms.slice(0, 5).map((t) => <span class="term">{t}</span>)}
+      {(entry.top_terms ?? []).slice(0, 5).map((t) => <span class="term">{t}</span>)}
     </div>
   </div>
   <div class="card-side">
     {path && (
       <svg class="spark" width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
-        <path d={path} fill="none" stroke={col} stroke-width="1.6"
+        <path d={path} pathLength="1" fill="none" stroke={col} stroke-width="1.6"
           stroke-linejoin="round" stroke-linecap="round" />
       </svg>
     )}
     <div class="badges">
-      <StageBadge stage={entry.stage} emerging={entry.is_emerging} inScope={entry.in_scope} />
-      {entry.is_press_heating && (
-        <span class="heat" title="press attention is spiking above this narrative's own yearly baseline">press heating</span>
+      {entry.stage && (
+        <StageBadge stage={entry.stage} emerging={entry.is_emerging} inScope={entry.in_scope} />
       )}
+      {corpusHot && (
+        <span class="heat" title="institutional writing on this narrative is spiking above its own yearly baseline">corpus heating</span>
+      )}
+      {showPress && (
+        <span class="heat" title="broad-press attention on this narrative is spiking above its own yearly baseline">press heating</span>
+      )}
+      {tag && <span class="flag">{tag}</span>}
     </div>
   </div>
-</a>
+</Root>
 
 <style>
   .card-main { min-width: 0; }
@@ -51,13 +72,42 @@ const col = STAGE_COLOR[entry.stage];
     display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;
   }
   .spark { display: block; opacity: 0.9; }
+  /* draw-on: the stroke sweeps left-to-right when the gallery scroll-reveals
+     (the .in class lands on the .reveal ancestor from Base's observer). the
+     entry draw is a transition to the .in state, so it runs exactly once; the
+     hover redraw is an animation, which outranks the transition while it plays
+     and hands back the already-drawn state when it ends — no replay on unhover.
+     a card hidden by the pager starts its entry sweep when its page is shown. */
+  .spark path {
+    stroke-dasharray: 1; stroke-dashoffset: 1;
+    transition: stroke-dashoffset 1s var(--ease) 0.1s;
+  }
+  :global(.in) .spark path { stroke-dashoffset: 0; }
+  .card:hover .spark path { animation: sparkredraw 0.9s var(--ease); }
+  @keyframes sparkredraw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .spark path,
+    .card:hover .spark path {
+      stroke-dasharray: none; stroke-dashoffset: 0; transition: none; animation: none;
+    }
+  }
   /* tags sit in a single row beneath the sparkline so a second tag (emerging /
      out-of-scope) widens the row instead of stacking and lengthening the cell. */
   .badges { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
   .heat {
-    font-size: 0.72rem; padding: 0.1rem 0.45rem; border-radius: 999px;
+    font-size: 0.72rem; font-weight: 600;
+    padding: 0.1rem 0.45rem; border-radius: 999px;
     border: 1px solid color-mix(in srgb, #c2410c 45%, var(--paper));
     color: #c2410c; background: color-mix(in srgb, #c2410c 12%, var(--paper));
     white-space: nowrap;
   }
+  /* neutral tag for cards without a page behind them (sub-floor clusters) */
+  .flag {
+    font-size: 0.72rem; font-weight: 600;
+    padding: 0.1rem 0.45rem; border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--muted); background: var(--paper-2);
+    white-space: nowrap;
+  }
+  .card.unlinked { cursor: default; }
 </style>

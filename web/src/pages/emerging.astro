@@ -1,21 +1,20 @@
 ---
 import Base from "../layouts/Base.astro";
 import NarrativeCard from "@components/NarrativeCard.astro";
-import { loadDirectory, loadIndex, loadNarrative, displayName } from "@lib/data";
+import {
+  CORPUS_HEATING,
+  PRESS_HEATING,
+  corpusHeating,
+  pressHeating,
+  loadDirectory,
+  loadIndex,
+  loadNarrative,
+  displayName,
+  type IndexEntry,
+} from "@lib/data";
 
 const index = loadIndex();
 const hasInScope = index.narratives.some((e) => e.in_scope);
-const floor = index.min_articles_to_fit ?? 42;
-
-// Forming (ADR-071): sub-floor clusters with recent onsets, from the directory
-// artifact — the true frontier, since a brand-new story rarely has enough
-// articles to clear the charting floor yet. Newest onset first.
-const forming = (loadDirectory()?.clusters ?? [])
-  .filter((c) => c.forming)
-  .sort((a, b) => (b.date_range?.[0] ?? "").localeCompare(a.date_range?.[0] ?? ""));
-const formingName = (c: (typeof forming)[number]) =>
-  c.label_human || (c.terms ?? []).slice(0, 5).join(", ") ||
-  c.label.replace(/^-?\d+_/, "").split("_").join(", ");
 
 function spark(values: number[], n = 44): number[] {
   if (values.length <= n) return values;
@@ -30,42 +29,70 @@ function spark(values: number[], n = 44): number[] {
   return out;
 }
 
-// Two distinct signals, shown side by side and never merged (ADR-057/064):
-//  1. institutional onset — a narrative first appeared within the recency window
-//     of the corpus frontier (is_emerging).
-//  2. press heating — the press is spiking on a narrative we already track
-//     (is_press_heating), from live Media Cloud attention-share.
+// Two symmetric signals over the same quarterly window, shown side by side and
+// never merged (ADR-057/064/074):
+//  1. heating in the corpus — our own sources are writing about a narrative
+//     markedly more than usual (recent window vs. its own yearly baseline).
+//  2. heating in the press — the broad press is spiking on the same narrative,
+//     from live Media Cloud attention-share.
 // A narrative can carry either, both, or neither; keeping them separate lets the
-// reader tell "our sources just started on this" from "the press is spiking on it".
-const need = index.narratives.filter((e) => e.is_emerging || e.is_press_heating);
-const narrs = need.map((e) => loadNarrative(e.cluster_id));
-const byId = (id: number) => narrs.find((n) => n.cluster_id === id)!;
-const speed = (n: ReturnType<typeof loadNarrative>): number => {
-  const s = n.stage_detail?.trend_slope;
-  return typeof s === "number" ? s : -Infinity;
-};
-const emerging = index.narratives
-  .filter((e) => e.is_emerging)
-  .sort((a, b) => speed(byId(b.cluster_id)) - speed(byId(a.cluster_id)));
-// heating ordered by the press z-score (how far above baseline), strongest first.
-const heatZ = (id: number) => byId(id).mediacloud?.press_heating?.z ?? -Infinity;
-const heating = index.narratives
-  .filter((e) => e.is_press_heating)
-  .sort((a, b) => heatZ(b.cluster_id) - heatZ(a.cluster_id));
-const sparks: Record<number, number[]> = Object.fromEntries(
-  narrs.map((n) => [n.cluster_id, spark(n.volume.values)]),
+// reader tell "institutions are turning to this" from "the press is spiking on it".
+
+// Corpus frontier = latest last-active date across surfaced narratives — the
+// same reference point the bake uses (ADR-059).
+const frontierMs = Math.max(
+  ...index.narratives.map((e) => (e.date_range ? Date.parse(e.date_range[1]) : 0)),
 );
-// heating threshold shown in the lede (same k for every narrative in a build).
-const kSigma = heating.length
-  ? (byId(heating[0].cluster_id).mediacloud?.press_heating?.k ?? 2)
-  : 2;
+
+const narrs = new Map(index.narratives.map((e) => [e.cluster_id, loadNarrative(e.cluster_id)]));
+const corpusHeat = index.narratives
+  .map((e) => ({ e, heat: corpusHeating(narrs.get(e.cluster_id)!.volume, frontierMs) }))
+  .filter((x) => x.heat !== null)
+  .sort((a, b) => b.heat!.z - a.heat!.z);
+
+// Sub-floor clusters with a baked heating blob (ADR-074): same signal, but no
+// narrative page to click through to — rendered as unlinked, tagged cards.
+const floor = index.min_articles_to_fit ?? 42;
+const subfloorHeat = (loadDirectory()?.clusters ?? [])
+  .filter((c) => !c.surfaced && c.heating?.is_heating)
+  .sort((a, b) => b.heating!.z - a.heating!.z);
+const subfloorEntry = (c: (typeof subfloorHeat)[number]) =>
+  ({
+    cluster_id: c.cluster_id,
+    label: c.label,
+    label_human: c.label_human,
+    n_articles: c.n_articles,
+    date_range: c.date_range,
+    top_terms: c.terms ?? [],
+    in_scope: true,
+  }) as unknown as IndexEntry;
+
+// Press heating (ADR-074): computed at build time over the same quarterly
+// window as corpus heating, from each narrative's shipped Media Cloud ratio
+// series. Strongest deviation first.
+const pressHeat = index.narratives
+  .map((e) => ({ e, heat: pressHeating(narrs.get(e.cluster_id)?.mediacloud, frontierMs) }))
+  .filter((x) => x.heat !== null)
+  .sort((a, b) => b.heat!.z - a.heat!.z);
+const heating = pressHeat.map((x) => x.e);
+// Badge sets so a card in either gallery shows both signals it carries.
+const corpusHotIds = new Set(corpusHeat.map((x) => x.e.cluster_id));
+const pressHotIds = new Set(heating.map((e) => e.cluster_id));
+const sparks: Record<number, number[]> = Object.fromEntries(
+  [...corpusHeat.map((x) => x.e), ...heating].map((e) => [
+    e.cluster_id,
+    spark(narrs.get(e.cluster_id)!.volume.values),
+  ]),
+);
 ---
 
 <Base title="emerging" active="emerging">
-  <h1 class="reveal">emerging narratives</h1>
+  <h1 class="reveal">heating in the corpus</h1>
   <p class="lede reveal">
-    narratives that first appeared within four weeks of the corpus frontier,
-    ordered by how fast they are rising.
+    narratives whose
+    quarterly institutional volume sit more than
+    {CORPUS_HEATING.kSigma}σ above its yearly baseline,
+    strongest deviation first.
   </p>
 
   <div class="toolbar reveal">
@@ -80,47 +107,40 @@ const kSigma = heating.length
   </div>
 
   <div class="grid reveal" id="e-gallery">
-    {emerging.map((e) => (
+    {corpusHeat.map(({ e }) => (
       <div class="card-wrap" data-label={(displayName(e) + " " + e.label).toLowerCase()}
         data-terms={e.top_terms.join(" ").toLowerCase()}
         data-stage={e.stage}
         data-scope={e.in_scope ? "in" : "out"}>
-        <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
+        <NarrativeCard entry={e} spark={sparks[e.cluster_id]}
+          corpusHot={corpusHotIds.has(e.cluster_id)} pressHot={pressHotIds.has(e.cluster_id)} />
+      </div>
+    ))}
+    {subfloorHeat.map((c) => (
+      <div class="card-wrap" data-label={((c.label_human ?? "") + " " + c.label).toLowerCase()}
+        data-terms={(c.terms ?? []).join(" ").toLowerCase()}
+        data-scope="in">
+        <NarrativeCard entry={subfloorEntry(c)} linked={false}
+          tag="not yet charted" />
       </div>
     ))}
   </div>
-  <p id="e-empty" class={`muted${emerging.length ? " hidden" : ""}`}>
-    {emerging.length ? "no narratives match that filter." : "none in the current window."}
+  <p id="e-empty" class={`muted${corpusHeat.length + subfloorHeat.length ? " hidden" : ""}`}>
+    {corpusHeat.length + subfloorHeat.length ? "no narratives match that filter." : "none right now."}
   </p>
-  <nav id="e-pager" class="pager" aria-label="emerging pages"></nav>
-
-  {forming.length > 0 && (
-    <section class="forming reveal">
-      <h2>forming below the floor</h2>
-      <p class="lede">
-        new clusters that appeared within the last four weeks but haven't reached
-        the {floor}-article floor for a full page. they graduate to charted
-        narratives as they grow.
-      </p>
-      <div class="forming-rows">
-        {forming.map((c) => (
-          <div class="forming-row">
-            <span class="forming-name">{formingName(c)}</span>
-            <span class="forming-meta">
-              {c.n_articles} articles · since {c.date_range?.[0]}
-            </span>
-          </div>
-        ))}
-      </div>
-    </section>
+  {subfloorHeat.length > 0 && (
+    <p class="muted footnote reveal">
+      "not yet charted" cards are clusters still under the {floor}-article floor
+      for a full page; they are listed in the directory and graduate to charted
+      narratives as they grow.
+    </p>
   )}
 
   <section class="heating reveal">
-    <h2>heating in the press</h2>
+    <h1>heating in the press</h1>
     <p class="lede">
-      tracked narratives whose recent broad press attention sits more than {kSigma}σ
-      above their own yearly baseline (via Media Cloud). this signal is press-led —
-      separate from the institutional onsets above.
+      narratives whose quarterly press attention sits more
+      than {PRESS_HEATING.kSigma}σ above its yearly baseline, strongest deviation first.
     </p>
 
     <div class="toolbar">
@@ -140,21 +160,22 @@ const kSigma = heating.length
           data-terms={e.top_terms.join(" ").toLowerCase()}
           data-stage={e.stage}
           data-scope={e.in_scope ? "in" : "out"}>
-          <NarrativeCard entry={e} spark={sparks[e.cluster_id]} />
+          <NarrativeCard entry={e} spark={sparks[e.cluster_id]}
+            corpusHot={corpusHotIds.has(e.cluster_id)} pressHot={pressHotIds.has(e.cluster_id)} />
         </div>
       ))}
     </div>
     <p id="h-empty" class={`muted${heating.length ? " hidden" : ""}`}>
       {heating.length ? "no narratives match that filter." : "none right now."}
     </p>
-    <nav id="h-pager" class="pager" aria-label="press-heating pages"></nav>
   </section>
 
   <script>
     import { setupCatalog } from "@lib/catalog";
 
     // Both sections carry the same filter bar as the narratives catalog; wire
-    // each to its own controls by id prefix.
+    // each to its own controls by id prefix. The lists are short (a heating
+    // signal fires on a handful of narratives), so no pager — every match shows.
     function wire(prefix) {
       const $ = (id) => document.getElementById(`${prefix}-${id}`);
       const search = $("search");
@@ -170,13 +191,13 @@ const kSigma = heating.length
       const catalog = setupCatalog({
         cards: [...gallery.querySelectorAll(".card-wrap")],
         empty: $("empty"),
-        pager: $("pager"),
-        scrollTo: gallery,
+        pageSize: 500,
         matches(c) {
           const q = (search.value || "").trim().toLowerCase();
           const anyChecked = Object.values(flags).some((f) => f?.checked);
           const okText = !q || c.dataset.label.includes(q) || c.dataset.terms.includes(q);
-          const okCat = !anyChecked || flags[c.dataset.stage]?.checked;
+          // cards without a stage (sub-floor clusters) pass the stage filter
+          const okCat = !anyChecked || !c.dataset.stage || flags[c.dataset.stage]?.checked;
           const okScope = !scope?.checked || c.dataset.scope === "in";
           return okText && okCat && okScope;
         },
@@ -204,20 +225,11 @@ const kSigma = heating.length
   .toolbar input[type="search"]:focus {
     outline: none; border-bottom-color: var(--accent);
   }
-  .heating, .forming {
-    margin-top: 3.5rem; padding-top: 2rem; border-top: 1px solid var(--line);
+  .heating {
+    margin-top: var(--space-section); padding-top: var(--space-section);
+    border-top: 1px solid var(--line);
   }
-  .heating h2, .forming h2 { margin: 0.2rem 0 0.4rem; }
+  .heating h1 { margin: 0.2rem 0 0.4rem; }
   .heating .lede { margin-bottom: 0.2rem; }
-  .forming .lede { margin-bottom: 1rem; }
-  .forming-row {
-    display: flex; align-items: baseline; justify-content: space-between;
-    gap: 0.6rem 1.6rem; flex-wrap: wrap;
-    padding: 0.55rem 0.2rem; border-bottom: 1px solid var(--line-soft);
-  }
-  .forming-name { color: var(--ink); font-weight: 600; }
-  .forming-meta {
-    color: var(--muted); font-size: var(--fs-meta);
-    font-variant-numeric: tabular-nums; white-space: nowrap;
-  }
+  .footnote { font-size: var(--fs-meta); margin-top: 1rem; }
 </style>

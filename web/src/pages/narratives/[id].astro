@@ -1,7 +1,7 @@
 ---
 import Base from "../../layouts/Base.astro";
 import StageBadge from "@components/StageBadge.astro";
-import { loadIndex, loadNarrative, labelMap, displayName, JEL_NAME } from "@lib/data";
+import { loadIndex, loadNarrative, labelMap, displayName, JEL_NAME, STAGE_COLOR, corpusHeating, pressHeating, CORPUS_HEATING, PRESS_HEATING } from "@lib/data";
 
 export function getStaticPaths() {
   const index = loadIndex();
@@ -16,6 +16,15 @@ const n = loadNarrative(entry.cluster_id);
 const index = loadIndex();
 const labels = labelMap(index);
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+// 16-week heating signals (ADR-074), computed here so the badges and callouts
+// match what the emerging page and cards show. Frontier = latest last-active
+// date across all narratives, the same reference the emerging page uses.
+const frontierMs = Math.max(
+  ...index.narratives.map((e) => (e.date_range ? Date.parse(e.date_range[1]) : 0)),
+);
+const corpusHot = corpusHeating(n.volume, frontierMs);
+const pressHot = pressHeating(n.mediacloud, frontierMs);
 
 const fmt = (x: number | null, d = 2) =>
   x === null || x === undefined ? "—" : x.toFixed(d);
@@ -86,14 +95,16 @@ const direction = (d: any) =>
 
 <Base title={displayName(n)} active="narratives">
   <p class="back reveal"><a href={`${base}/narratives`}>← all narratives</a></p>
-  <h1 class="reveal">{displayName(n)}</h1>
+  <h1 class="reveal ntitle" style={`--stage-c:${STAGE_COLOR[n.stage]}`}>{displayName(n)}</h1>
   {n.description && <p class="reveal" style="margin:0.2rem 0 0.4rem;color:var(--muted)">{n.description}</p>}
-  <p class="lede reveal" style="margin-bottom:0.4rem">
+  <p class="page-meta reveal">
     {n.card.n_articles} articles
     {n.card.date_range && <> · {n.card.date_range[0]} → {n.card.date_range[1]}</>}
     {n.jel && <> · <abbr title={JEL_NAME[n.jel.code] ?? n.jel.code}>JEL {n.jel.code}</abbr></>}
     <span class="sep">|</span>
     <StageBadge stage={n.stage} emerging={entry.is_emerging} inScope={n.jel?.in_scope ?? true} />
+    {corpusHot && <span class="heat" title="institutional writing on this narrative is spiking above its own yearly baseline">corpus heating</span>}
+    {pressHot && <span class="heat" title="broad-press attention on this narrative is spiking above its own yearly baseline">press heating</span>}
   </p>
 
   <!-- life-cycle chart -->
@@ -130,7 +141,7 @@ const direction = (d: any) =>
   <section class="section reveal">
     <div class="cols-2">
       <div>
-        <h2>where it sits now: {n.stage}</h2>
+        <h2>current stage: <span class="stage-word" style={`color:${STAGE_COLOR[n.stage]}`}>{n.stage}</span></h2>
         <table class="facts">
           <tr><td>trajectory test</td><td>modified Mann–Kendall</td></tr>
           <tr><td>recent trend</td><td>{trendWord}</td></tr>
@@ -154,6 +165,11 @@ const direction = (d: any) =>
         <> as an epidemic wave, attention doubled every {num(sirP.doubling_time_up, 1)} days on the rise and halved every {num(sirP.half_life_down, 1)} days on the fall (asymmetry {num(sirP.asymmetry, 1)}×).</>
       )}
     </p>
+    {corpusHot && (
+      <p class="caption heat-note">
+        <span class="heat">corpus heating</span> institutional writing on this narrative over the last {CORPUS_HEATING.recentWeeks} weeks sits {corpusHot.z.toFixed(1)}σ above its own yearly baseline — our sources are turning to it right now.
+      </p>
+    )}
   </section>
 
   {(n.markets || n.mediacloud) && (
@@ -163,12 +179,10 @@ const direction = (d: any) =>
           <div>
             <h2>did discourse lead or lag the {mlabel}?</h2>
             <p class="note">{mkg.verdict}</p>
-            <dl class="kv" style="margin-top:0.8rem">
-              <dt>discourse → {mlabel}</dt>
-              <dd>{direction(mkg.volume_leads_market)}</dd>
-              <dt>{mlabel} → discourse</dt>
-              <dd>{direction(mkg.market_leads_volume)}</dd>
-            </dl>
+            <table class="facts" style="margin-top:0.8rem">
+              <tr><td>discourse → {mlabel}</td><td>{direction(mkg.volume_leads_market)}</td></tr>
+              <tr><td>{mlabel} → discourse</td><td>{direction(mkg.market_leads_volume)}</td></tr>
+            </table>
           </div>
         )}
         {n.mediacloud && (
@@ -177,12 +191,10 @@ const direction = (d: any) =>
             {mcg ? (
               <>
                 <p class="note">{mcg.verdict}</p>
-                <dl class="kv" style="margin-top:0.8rem">
-                  <dt>discourse → press</dt>
-                  <dd>{direction(mcg.volume_leads_market)}</dd>
-                  <dt>press → discourse</dt>
-                  <dd>{direction(mcg.market_leads_volume)}</dd>
-                </dl>
+                <table class="facts" style="margin-top:0.8rem">
+                  <tr><td>discourse → press</td><td>{direction(mcg.volume_leads_market)}</td></tr>
+                  <tr><td>press → discourse</td><td>{direction(mcg.market_leads_volume)}</td></tr>
+                </table>
               </>
             ) : (
               <p class="note">press lead-lag unavailable for this window.</p>
@@ -190,9 +202,9 @@ const direction = (d: any) =>
           </div>
         )}
       </div>
-      {n.mediacloud?.press_heating?.is_heating && (
+      {pressHot && (
         <p class="caption heat-note">
-          <span class="heat">press heating</span> {n.mediacloud.press_heating.caption} — a press-led spike, separate from when the institutional sources picked the story up.
+          <span class="heat">press heating</span> broad-press attention over the last {PRESS_HEATING.recentWeeks} weeks sits {pressHot.z.toFixed(1)}σ above its own yearly baseline — a press-led spike, separate from when the institutional sources picked the story up.
         </p>
       )}
     </section>
@@ -217,7 +229,7 @@ const direction = (d: any) =>
       ))}
     </div>
     {n.card.source_mix?.length > 0 && (
-      <p class="caption">sources: {n.card.source_mix.slice(0, 6).map(([s, c]) => `${s} (${c})`).join(", ")}</p>
+      <p class="caption src-note">sources: {n.card.source_mix.slice(0, 6).map(([s, c]) => `${s} (${c})`).join(", ")}</p>
     )}
   </section>
 
@@ -313,8 +325,10 @@ const direction = (d: any) =>
             ? `a weak match for this narrative's shape (R² ${r2 != null ? r2.toFixed(2) : "n/a"}) — shown for comparison`
             : `R² ${r2 != null ? r2.toFixed(2) : "n/a"} — the share of the curve this lens explains`);
       b.addEventListener("click", () => {
-        activeFit = i; resetView(); render();
-        [...tabsEl.children].forEach((c, j) => c.classList.toggle("active", j === i));
+        // clicking the active lens again deactivates it, back to bars alone.
+        activeFit = activeFit === i ? -1 : i;
+        resetView(); render();
+        [...tabsEl.children].forEach((c, j) => c.classList.toggle("active", j === activeFit));
       });
       tabsEl.appendChild(b);
     });
@@ -417,19 +431,23 @@ const direction = (d: any) =>
           name: `${f.model} fit`, line: { color: COL.accent, width: 2.6 },
           hovertemplate: hov(`${f.model} fit`) });
       }
+      // overlays are min-max scaled onto the bars' axis, so their y is a
+      // display position, not a value — the hover shows the real number via
+      // customdata (stories/day for press, the index level for the market).
       if (pressEl && pressEl.checked && n.mediacloud) {
         const aligned = alignTo(dates, n.mediacloud.dates, n.mediacloud.story_count);
         traces.push({ x: dates, y: normalise(aligned), type: "scatter", mode: "lines",
-          name: "press (scaled)", connectgaps: true,
+          name: "press (scaled)", connectgaps: true, customdata: aligned,
           line: { color: COL.ember, width: 2, dash: "dot" },
-          hovertemplate: hov("press (scaled)") });
+          hovertemplate: "press · %{x|%b %-d, %Y} · %{customdata:,.0f} stories/day<extra></extra>" });
       }
       if (marketEl && marketEl.checked && n.markets) {
         const aligned = alignTo(dates, n.markets.dates, n.markets.market);
+        const mname = seriesLabel(n.markets.series_label);
         traces.push({ x: dates, y: normalise(aligned), type: "scatter", mode: "lines",
-          name: `${seriesLabel(n.markets.series_label)} (scaled)`, connectgaps: true,
+          name: `${mname} (scaled)`, connectgaps: true, customdata: aligned,
           line: { color: COL.decay, width: 2, dash: "dash" },
-          hovertemplate: hov(`${seriesLabel(n.markets.series_label)} (scaled)`) });
+          hovertemplate: `${mname} · %{x|%b %-d, %Y} · %{customdata:.2f}<extra></extra>` });
       }
       // custom HTML legend instead of Plotly's. Plotly's built-in legend can
       // only anchor to the plot area (indented by the y-axis margin) or to the
@@ -493,18 +511,32 @@ const direction = (d: any) =>
 <style>
   .heat-note { margin-top: 1.2rem; }
   .sir-note { margin-top: 1.2rem; }
-  .heat-note .heat {
-    font-size: 0.72rem; padding: 0.1rem 0.45rem; border-radius: 999px;
+  /* heating pill — shared by the page-meta badges and the callout labels;
+     corpus and press heating use the identical pill, only the wording differs. */
+  .heat {
+    font-size: 0.72rem; font-weight: 600;
+    padding: 0.1rem 0.45rem; border-radius: 999px;
     border: 1px solid color-mix(in srgb, #c2410c 45%, var(--paper));
     color: #c2410c; background: color-mix(in srgb, #c2410c 12%, var(--paper));
     margin-right: 0.35rem; white-space: nowrap;
   }
   .back { margin: 0 0 0.6rem; }
+  /* the stage accent is the title itself, set in the narrative's stage color —
+     no underline tick, so the title-to-description rhythm stays untouched. the
+     stage word in the "current stage" heading carries the same color. mixed
+     toward ink so the lightest stage (dormant's warm gray) still clears
+     large-text contrast on white. */
+  .ntitle { color: color-mix(in srgb, var(--stage-c, var(--ink)) 72%, var(--ink)); }
+  /* the source-mix line closes the whole representative-writing section, not
+     just the "most recent" list — give it a clear gap from the last panel. */
+  .src-note { margin-top: 2rem; }
   /* a single divider between the JEL code and the color-bubble tags, replacing
      the gray dot separators around them. */
   .sep { color: var(--line); margin: 0 0.5rem; }
-  .lede :global(.badge) { vertical-align: middle; margin-right: 0.3rem; }
-  .section:first-of-type { padding-top: 1rem; }
+  /* the article count / dates / JEL / stage line matches the description's
+     body size and color; only the lede role is dropped. */
+  .page-meta { color: var(--muted); font-size: var(--fs-body); margin: 0.5rem 0 1.4rem; }
+  .page-meta :global(.badge) { vertical-align: middle; margin-right: 0.3rem; }
   /* lens tabs on the left, overlay checkboxes pinned to the right, one line */
   .lens-bar {
     display: flex; align-items: center; justify-content: space-between;

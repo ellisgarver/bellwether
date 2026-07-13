@@ -213,6 +213,12 @@ class DashboardIndex:
     # sub-floor clusters), so the data page can report the whole corpus next to
     # the article count of the surfaced narratives. None for sample artifacts.
     n_articles_corpus: int | None = None
+    # Full-corpus composition over every clustered article (ADR-076): article
+    # counts by source id and by JEL code across ALL clusters, so the data-page
+    # charts describe the whole corpus rather than only the surfaced narratives.
+    # None/omitted for sample or partial artifacts (the front end then falls back
+    # to aggregating the surfaced story cards).
+    corpus_composition: dict[str, dict[str, int]] | None = None
     schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
