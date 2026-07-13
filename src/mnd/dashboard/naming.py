@@ -141,6 +141,8 @@ _ACRONYMS = {
     "g7", "g20", "oled", "fsb", "bri", "wmd",
     # added 2026-07-13 from the full-bake title scan
     "usaid", "uscis",
+    # legislative bill types (HR = House Resolution/Bill, S = Senate Bill)
+    "hr", "hres", "hjres", "sjres",
 }
 # Single-word proper nouns (countries, demonyms, cities, institutions, people)
 # that the 7B-class models leave lowercase after copying the c-TF-IDF keywords.
@@ -299,6 +301,17 @@ def _polish_word(w: str) -> str:
     return w
 
 
+# CBO distributes PDFs whose filenames / catalog tokens leak into extracted
+# text and surface as top c-TF-IDF terms (e.g. "kdocs37448txt", "086690").
+# Strip them from titles before any other processing so the LLM's real content
+# is what remains.  The patterns are narrow enough to be safe in a macro-finance
+# corpus: no economics paper title legitimately contains "kdocs\d+txt".
+_ARTIFACT_RE = re.compile(
+    r"\b(?:kdocs\d+\w*|sdeneendocs\d+\w*|\d{5,6})\b",
+    re.IGNORECASE,
+)
+
+
 def _polish_title(title: str) -> str:
     """Deterministic casing repair: first letter, acronyms, proper nouns.
 
@@ -310,6 +323,11 @@ def _polish_title(title: str) -> str:
     growth lands on the next bake with no regeneration (ADR-056).
     """
     t = title.strip()
+    # Strip CBO artifact tokens (filename fragments like kdocs37448txt) and
+    # leading catalog numbers (like 6601, 086690) that are not years.
+    t = _ARTIFACT_RE.sub("", t)
+    t = re.sub(r"^(?!(?:19|20)\d{2}\b)\d{3,6}\s+", "", t)
+    t = re.sub(r"\s{2,}", " ", t).strip()
     # Drop a redundant trailing date span, but never the whole title if a date is
     # somehow all it is.
     stripped = _TRAILING_DATE.sub("", t).rstrip(" ,;:-–—")
