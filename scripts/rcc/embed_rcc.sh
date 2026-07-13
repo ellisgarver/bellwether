@@ -1,37 +1,16 @@
 #!/bin/bash
-# SLURM job script: corpus embedding on UChicago RCC (Midway3).
+# SLURM job script: corpus embedding (Midway3).
 #
-# Two-model strategy (ADR-001, restored by ADR-011):
+# Production role (default):
+#   ROLE=primary   Qwen3-Embedding-8B (4096-dim, ADR-036) — 1x A100 40GB, ~6-12 h
+#                  Output: data/processed/embeddings.npy
 #
-#   ROLE=primary     Qwen3-Embedding-8B (4096-dim)
-#                    Long context (32,768 tokens) — essential for FOMC minutes,
-#                    BIS QR articles, Jackson Hole papers. Production embeddings.
-#                    Output: data/processed/embeddings.npy
-#
-#   ROLE=comparator  all-mpnet-base-v2 (768-dim, 384-token context)
-#                    Look-ahead sensitivity check ONLY (ADR-011).
-#                    Compares Δ_NMI(post-2021 − pre-2021) across both models on
-#                    anchor narrative sub-corpora. Not used for production clustering.
-#                    Output: data/processed/embeddings_comparator.npy
+# Diagnostic role (opt-in via submit_parallel_ingest.sh COMPARATOR=1):
+#   ROLE=comparator   all-mpnet-base-v2 (768-dim); not used for clustering (ADR-019)
+#                     Output: data/processed/embeddings_comparator.npy
 #
 # Canonical chain (use scripts/rcc/submit_parallel_ingest.sh):
-#   ingest → filter-pre-embed → filter → embed (primary) → cluster
-#   The fan-out also submits embed --role comparator in parallel
-#   with the primary embed when COMPARATOR=1.
-#
-# Resource spec:
-#   Account:   pi-dachxiu
-#   GPU:       1x A100 40GB (constraint=a100)  — ADR-036
-#              Qwen3-8B at max_seq_len=1024, batch=8, fp16: ~16 GB weights +
-#              activations — comfortable on 40 GB (was V100 16GB for 0.6B, which
-#              cannot hold 8B). The gpu partition has a100 nodes (gold-6248r,384g).
-#              all-mpnet-base-v2 comparator at 384 tokens: < 2 GB — trivially fits.
-#              config uses batch=8 + seq=1024 (see config/config.yaml).
-#   CPUs:      8
-#   RAM:       64 GB
-#   Time:      18 h   (Qwen3-8B primary on A100 ~6-12 h; mpnet comparator ~2 h)
-#
-# All output goes under the user scratch space, never in the PI project folder.
+#   ingest → filter-pre-embed → filter → embed → cluster
 
 #SBATCH --job-name=mnd-embed
 #SBATCH --account=pi-dachxiu

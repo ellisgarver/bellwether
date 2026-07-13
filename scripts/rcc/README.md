@@ -66,6 +66,16 @@ them, but the artifacts are absent until then:
 
 All RCC scripts hardcode `REPO_ROOT=/scratch/midway3/ehgarver/macro-narrative-dynamics`.
 This is intentional — sbatch spools scripts before running them, so `$BASH_SOURCE` cannot
-resolve the repo at runtime. If the scratch directory is ever renamed, update the 13
-`REPO_ROOT=` lines in this directory plus the `REMOTE_REPO=` line in `scripts/publish.sh`
-(see `.claude/pending-removals.md §3` for the coordinated rename runbook).
+resolve the repo at runtime.
+
+To rename the scratch directory (not before the naming job and first weekly cycle complete):
+
+1. `scancel -n mnd-update` — park the self-resubmitting chain.
+2. On RCC: `mv /scratch/midway3/ehgarver/macro-narrative-dynamics /scratch/midway3/ehgarver/bellwether`
+   and re-run `scripts/rcc/link_data_home.sh` (re-creates the `data/` symlink).
+3. One commit: update the 13 `REPO_ROOT=` lines in this directory and the `REMOTE_REPO=`
+   line in `scripts/publish.sh`; on RCC `git remote set-url origin https://github.com/ellisgarver/bellwether.git`.
+4. Re-enroll: `sbatch --begin=<next Saturday 00:00> scripts/rcc/update_rcc.sh`.
+5. Locally and on RCC: `pip install -e . --no-deps` so the editable-install metadata picks
+   up the `pyproject.toml` rename (import path `mnd` is unchanged; nothing breaks until then,
+   metadata is just stale).
