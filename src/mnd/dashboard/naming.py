@@ -139,6 +139,8 @@ _ACRONYMS = {
     "ieepa", "covid", "esg", "cbdc", "oecd", "asean", "brics", "nafta",
     "usmca", "gdpr", "llm", "llms", "gse", "gses", "sme", "smes", "ppp",
     "g7", "g20", "oled", "fsb", "bri", "wmd",
+    # added 2026-07-13 from the full-bake title scan
+    "usaid", "uscis",
 }
 # Single-word proper nouns (countries, demonyms, cities, institutions, people)
 # that the 7B-class models leave lowercase after copying the c-TF-IDF keywords.
@@ -169,6 +171,13 @@ _PROPER = {
     "greenspan", "volcker", "mnuchin", "goolsbee", "kuroda", "merkel",
     "macron", "trump", "biden", "obama", "putin", "erdogan", "modi",
     "lehman", "hezbollah", "hamas", "taliban",
+    # added 2026-07-13: surnames and first names the 7B models leave lowercase
+    "obrador",   # Andrés Manuel López Obrador
+    "subbarao",  # Duvvuri Subbarao (RBI Governor)
+    "geithner",  # Timothy Geithner
+    "carney",    # Mark Carney (BoE / BoC)
+    "mario",     # Mario Draghi
+    "lópez",     # López Obrador (accented form; "lopez" without accent gets leading-cap)
 }
 _FIXUPS = {
     "federal reserve": "Federal Reserve",
@@ -216,6 +225,25 @@ _FIXUPS = {
     # possessive spelling slips the models introduce from the keyword copy
     "chinas": "China's",
     "americas": "Americas",
+    # multi-word paired names where the first name is a common word
+    "ben bernanke": "Ben Bernanke",
+    "jean-claude trichet": "Jean-Claude Trichet",
+    "jean-claude": "Jean-Claude",
+    # merged US–country/region names the 7B models produce from glued c-TF-IDF keywords
+    # (us-china with a hyphen already resolves via _PROPER; these are the no-hyphen forms)
+    "uschina": "US-China",
+    "usindia": "US-India",
+    "usgermany": "US-Germany",
+    "usjapan": "US-Japan",
+    "usjapanese": "US-Japanese",
+    "usbrazil": "US-Brazil",
+    "usafrica": "US-Africa",
+    "usmexico": "US-Mexico",
+    "ussaudi": "US-Saudi",
+    "usasean": "US-ASEAN",
+    "usrok": "US-ROK",
+    # garbled accented form from keyword copy (missing ó)
+    "lpez": "López",
 }
 
 # Strip a trailing possessive so proper-noun lookup matches ("china's" -> "china").

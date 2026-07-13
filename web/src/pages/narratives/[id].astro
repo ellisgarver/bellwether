@@ -167,7 +167,7 @@ const direction = (d: any) =>
     </p>
     {corpusHot && (
       <p class="caption heat-note">
-        <span class="heat">corpus heating</span> institutional writing on this narrative over the last {CORPUS_HEATING.recentWeeks} weeks sits {corpusHot.z.toFixed(1)}σ above its own yearly baseline — our sources are turning to it right now.
+        <span class="heat">corpus heating</span> institutional writing on this narrative over the last {CORPUS_HEATING.recentWeeks} weeks sits {corpusHot.z.toFixed(1)}σ above its own yearly baseline.
       </p>
     )}
   </section>
@@ -204,7 +204,7 @@ const direction = (d: any) =>
       </div>
       {pressHot && (
         <p class="caption heat-note">
-          <span class="heat">press heating</span> broad-press attention over the last {PRESS_HEATING.recentWeeks} weeks sits {pressHot.z.toFixed(1)}σ above its own yearly baseline — a press-led spike, separate from when the institutional sources picked the story up.
+          <span class="heat">press heating</span> broad-press attention over the last {PRESS_HEATING.recentWeeks} weeks sits {pressHot.z.toFixed(1)}σ above its own yearly baseline.
         </p>
       )}
     </section>
@@ -514,7 +514,7 @@ const direction = (d: any) =>
   /* heating pill — shared by the page-meta badges and the callout labels;
      corpus and press heating use the identical pill, only the wording differs. */
   .heat {
-    font-size: 0.72rem; font-weight: 600;
+    font-size: var(--fs-micro); font-weight: 600;
     padding: 0.1rem 0.45rem; border-radius: 999px;
     border: 1px solid color-mix(in srgb, #c2410c 45%, var(--paper));
     color: #c2410c; background: color-mix(in srgb, #c2410c 12%, var(--paper));
