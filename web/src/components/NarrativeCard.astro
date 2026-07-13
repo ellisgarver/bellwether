@@ -85,6 +85,9 @@ const col = STAGE_COLOR[entry.stage];
   :global(.in) .spark path { stroke-dashoffset: 0; }
   .card:hover .spark path { animation: sparkredraw 0.9s var(--ease); }
   @keyframes sparkredraw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @media (max-width: 480px) {
+    .spark { display: none; }
+  }
   @media (prefers-reduced-motion: reduce) {
     .spark path,
     .card:hover .spark path {

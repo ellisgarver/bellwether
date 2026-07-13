@@ -565,6 +565,9 @@ const direction = (d: any) =>
   }
   .zoom span { white-space: nowrap; }
   .zoom input[type="range"] { flex: 1; accent-color: var(--accent); cursor: pointer; }
+  @media (max-width: 640px) {
+    .lens-bar { justify-content: flex-start; }
+  }
   /* the two sliders crush together below ~420px; stack them instead. */
   @media (max-width: 420px) {
     .zoom-controls { flex-direction: column; gap: 0.6rem; align-items: stretch; }

@@ -37,7 +37,7 @@ if (comp?.by_source) {
 // a de-underscored form so a new feed still renders sensibly.
 const SOURCE_LABEL: Record<string, string> = {
   federalreserve: "Fed Board",
-  regional_fed: "Regional Fed",
+  regional_fed: "Reg Fed",
   imf: "IMF",
   bis: "BIS",
   cbo: "CBO",
@@ -249,17 +249,11 @@ const shownStats: [string, string][] = [
           x: src.map((d: any) => d.articles),
           y: src.map((d: any) => d.label),
           marker: { color: COL.accent },
-          text: src.map((d: any) => d.articles.toLocaleString()),
-          textposition: "outside",
-          textfont: { size: 12, color: COL.muted },
-          cliponaxis: false,
-          hovertemplate: "%{y}: %{x:,} articles<extra></extra>",
+          hovertemplate: "%{x:,} articles<extra></extra>",
         }],
         baseLayout({
-          // acronym labels now auto-fit the left margin (was 160 for full names),
-          // so the bars fill the width; counts sit at each bar's end.
-          margin: { l: 8, r: 56, t: 8, b: 36 },
-          xaxis: { gridcolor: "rgba(226,220,207,0.6)", zeroline: false, tickformat: ",", fixedrange: true, showticklabels: false },
+          margin: { l: 8, r: 12, t: 8, b: 36 },
+          xaxis: { gridcolor: "rgba(226,220,207,0.6)", zeroline: false, tickformat: ",", fixedrange: true },
           yaxis: { automargin: true, fixedrange: true },
           bargap: 0.32,
         }),
