@@ -134,7 +134,10 @@ curl -sf "http://${OLLAMA_HOST}/api/tags" > /dev/null || {
     echo "ERROR: Ollama did not come up (see logs/ollama_serve_${SLURM_JOB_ID:-manual}.log)" >&2
     exit 1
 }
-ollama pull "${MND_NAMING_MODEL:-llama3.1}"
+# Pull the model the `name` command actually requests (config display.naming.model
+# = qwen2.5:7b, ADR-067/naming v4); must match name_rcc.sh or new clusters fail to
+# title. MND_NAMING_MODEL overrides both in lockstep.
+ollama pull "${MND_NAMING_MODEL:-qwen2.5:7b}"
 python scripts/run_pipeline.py name
 
 # 3) Publish the site artifacts to the orphan `site-data` branch — a single
