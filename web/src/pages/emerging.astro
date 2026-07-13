@@ -53,9 +53,15 @@ const corpusHeat = index.narratives
 // Sub-floor clusters with a baked heating blob (ADR-074): same signal, but no
 // narrative page to click through to — rendered as unlinked, tagged cards.
 const floor = index.min_articles_to_fit ?? 42;
-const subfloorHeat = (loadDirectory()?.clusters ?? [])
+const dir = loadDirectory();
+const dirClusters = dir?.clusters ?? [];
+const subfloorHeat = dirClusters
   .filter((c) => !c.surfaced && c.heating?.is_heating)
   .sort((a, b) => b.heating!.z - a.heating!.z);
+const subfloorHeatIds = new Set(subfloorHeat.map((c) => c.cluster_id));
+const formingClusters = dirClusters
+  .filter((c) => !c.surfaced && c.forming && !subfloorHeatIds.has(c.cluster_id))
+  .sort((a, b) => b.n_articles - a.n_articles);
 const subfloorEntry = (c: (typeof subfloorHeat)[number]) =>
   ({
     cluster_id: c.cluster_id,
@@ -168,6 +174,23 @@ const sparks: Record<number, number[]> = Object.fromEntries(
     <p id="h-empty" class={`muted${heating.length ? " hidden" : ""}`}>
       {heating.length ? "no narratives match that filter." : "none right now."}
     </p>
+  </section>
+
+  <section class="heating reveal">
+    <h1>forming</h1>
+    <p class="lede">
+      sub-floor clusters with a recent onset — topics beginning to coalesce in the
+      corpus that have not yet crossed the {floor}-article threshold for a full
+      narrative page. listed by article count, most substantial first.
+    </p>
+    <div class="grid">
+      {formingClusters.length > 0
+        ? formingClusters.map((c) => (
+            <NarrativeCard entry={subfloorEntry(c)} linked={false} tag="forming" />
+          ))
+        : <p class="muted">none right now.</p>
+      }
+    </div>
   </section>
 
   <script>
