@@ -14,8 +14,9 @@ interface Props {
   tag?: string;
   pressHot?: boolean;
   corpusHot?: boolean;
+  forming?: boolean;
 }
-const { entry, spark, linked = true, tag, pressHot, corpusHot } = Astro.props;
+const { entry, spark, linked = true, tag, pressHot, corpusHot, forming } = Astro.props;
 const showPress = pressHot ?? entry.is_press_heating ?? false;
 const Root = linked ? "a" : "div";
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -60,6 +61,9 @@ const col = STAGE_COLOR[entry.stage];
       )}
       {showPress && (
         <span class="badge heat" title="broad-press attention on this narrative is spiking above its own yearly baseline">press heating</span>
+      )}
+      {forming && (
+        <span class="badge forming" title="sub-floor cluster with a recent onset — not yet charted">forming</span>
       )}
       {tag && <span class="flag">{tag}</span>}
     </div>

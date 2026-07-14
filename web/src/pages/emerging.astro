@@ -62,6 +62,21 @@ const subfloorHeatIds = new Set(subfloorHeat.map((c) => c.cluster_id));
 const formingClusters = dirClusters
   .filter((c) => !c.surfaced && c.forming && !subfloorHeatIds.has(c.cluster_id))
   .sort((a, b) => b.n_articles - a.n_articles);
+
+// Synthetic sparkline for forming clusters: flat silence then recent onset at
+// the right edge, using dormant color — purely illustrative, no real series.
+const formingSpark = [...Array(34).fill(0), 0.2, 0.4, 0.5, 0.7, 0.9, 1.2, 1.6, 2.0, 2.5, 3.0];
+const formingEntry = (c: (typeof formingClusters)[number]) =>
+  ({
+    cluster_id: c.cluster_id,
+    label: c.label,
+    label_human: c.label_human,
+    n_articles: c.n_articles,
+    date_range: c.date_range,
+    top_terms: c.terms ?? [],
+    stage: "dormant",
+    in_scope: true,
+  }) as unknown as IndexEntry;
 const subfloorEntry = (c: (typeof subfloorHeat)[number]) =>
   ({
     cluster_id: c.cluster_id,
@@ -179,14 +194,14 @@ const sparks: Record<number, number[]> = Object.fromEntries(
   <section class="heating reveal">
     <h1>forming</h1>
     <p class="lede">
-      sub-floor clusters with a recent onset — topics beginning to coalesce in the
-      corpus that have not yet crossed the {floor}-article threshold for a full
-      narrative page. listed by article count, most substantial first.
+      narratives with a recent onset yet not meeting the {floor}-article threshold for a full
+      narrative page, most substantial first.
     </p>
     <div class="grid">
       {formingClusters.length > 0
         ? formingClusters.map((c) => (
-            <NarrativeCard entry={subfloorEntry(c)} linked={false} tag="forming" />
+            <NarrativeCard entry={formingEntry(c)} linked={false}
+              spark={formingSpark} forming={true} />
           ))
         : <p class="muted">none right now.</p>
       }

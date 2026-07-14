@@ -188,6 +188,7 @@ a.card:hover { background: var(--paper-2); padding-left: 0.9rem; padding-right: 
 .badge.emerging { background: color-mix(in srgb, var(--ember) 14%, var(--paper)); color: var(--ember); border: 1px solid color-mix(in srgb, var(--ember) 45%, var(--paper)); }
 .badge.oos { background: var(--paper-2); color: var(--muted); border: 1px solid var(--line); }
 .badge.heat { background: color-mix(in srgb, var(--ember) 12%, var(--paper)); color: var(--ember); border: 1px solid color-mix(in srgb, var(--ember) 45%, var(--paper)); white-space: nowrap; }
+.badge.forming { background: color-mix(in srgb, var(--dormant) 20%, var(--paper)); color: #57534a; border: 1px solid color-mix(in srgb, var(--dormant) 55%, var(--paper)); white-space: nowrap; }
 
 /* ---- tabs + toggles ---- */
 .tabs { display: flex; gap: 0.2rem; border-bottom: 1px solid var(--line); margin: var(--space-3) 0 0; flex-wrap: wrap; }
