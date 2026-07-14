@@ -111,7 +111,13 @@ echo "Started:  $(date)"
 echo "======================================="
 
 # 1) Full delta: all sources + identity-stable merge + re-bake artifacts.
-python scripts/run_pipeline.py update --sources "${MND_SOURCES:-all}" --merge
+#    MND_ANALYZE_ONLY=1 skips ingest+merge and re-bakes artifacts only (e.g.
+#    to land front-end-baked features without pulling new articles).
+if [[ "${MND_ANALYZE_ONLY:-0}" == "1" ]]; then
+    python scripts/run_pipeline.py update --skip-ingest --no-merge
+else
+    python scripts/run_pipeline.py update --sources "${MND_SOURCES:-all}" --merge
+fi
 
 # 2) Title newly-appended clusters (user-space Ollama on CPU; cache-incremental).
 OLLAMA_ROOT="/scratch/midway3/ehgarver/ollama"
