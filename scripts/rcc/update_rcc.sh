@@ -111,7 +111,7 @@ echo "Started:  $(date)"
 echo "======================================="
 
 # 1) Full delta: all sources + identity-stable merge + re-bake artifacts.
-python scripts/run_pipeline.py update --sources all --merge
+python scripts/run_pipeline.py update --sources "${MND_SOURCES:-all}" --merge
 
 # 2) Title newly-appended clusters (user-space Ollama on CPU; cache-incremental).
 OLLAMA_ROOT="/scratch/midway3/ehgarver/ollama"
