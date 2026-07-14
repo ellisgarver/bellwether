@@ -317,7 +317,7 @@ const direction = (d: any) =>
       const r2 = r2of(f);
       const poor = !f.converged;
       b.className = "tab" + (i === activeFit ? " active" : "") + (poor ? " muted" : "");
-      b.textContent = f.model + (r2 != null ? ` · R²${r2.toFixed(2)}` : "");
+      b.textContent = f.model + (r2 != null ? ` · R² ${r2.toFixed(2)}` : "");
       b.disabled = !f.curve;
       b.title = !f.curve
         ? (f.failure_reason || "no fitted curve")
