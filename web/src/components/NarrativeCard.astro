@@ -10,13 +10,14 @@ import { JEL_NAME, STAGE_COLOR, displayName, type IndexEntry } from "@lib/data";
 interface Props {
   entry: IndexEntry;
   spark?: number[];
+  sparkColor?: string;
   linked?: boolean;
   tag?: string;
   pressHot?: boolean;
   corpusHot?: boolean;
   forming?: boolean;
 }
-const { entry, spark, linked = true, tag, pressHot, corpusHot, forming } = Astro.props;
+const { entry, spark, sparkColor, linked = true, tag, pressHot, corpusHot, forming } = Astro.props;
 const showPress = pressHot ?? entry.is_press_heating ?? false;
 const Root = linked ? "a" : "div";
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -32,7 +33,7 @@ if (spark && spark.length > 1) {
     .map((v, i) => `${i === 0 ? "M" : "L"}${(PAD + i * step).toFixed(1)},${(H - PAD - (v / max) * (H - PAD * 2)).toFixed(1)}`)
     .join(" ");
 }
-const col = STAGE_COLOR[entry.stage];
+const col = sparkColor ?? STAGE_COLOR[entry.stage];
 ---
 <Root class={`card${linked ? "" : " unlinked"}`} href={linked ? `${base}/narratives/${entry.cluster_id}` : undefined}>
   <div class="card-main">

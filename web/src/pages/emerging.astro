@@ -4,6 +4,7 @@ import NarrativeCard from "@components/NarrativeCard.astro";
 import {
   CORPUS_HEATING,
   PRESS_HEATING,
+  STAGE_COLOR,
   corpusHeating,
   pressHeating,
   loadDirectory,
@@ -74,7 +75,6 @@ const formingEntry = (c: (typeof formingClusters)[number]) =>
     n_articles: c.n_articles,
     date_range: c.date_range,
     top_terms: c.terms ?? [],
-    stage: "dormant",
     in_scope: true,
   }) as unknown as IndexEntry;
 const subfloorEntry = (c: (typeof subfloorHeat)[number]) =>
@@ -201,7 +201,7 @@ const sparks: Record<number, number[]> = Object.fromEntries(
       {formingClusters.length > 0
         ? formingClusters.map((c) => (
             <NarrativeCard entry={formingEntry(c)} linked={false}
-              spark={formingSpark} forming={true} />
+              spark={formingSpark} sparkColor={STAGE_COLOR.dormant} forming={true} />
           ))
         : <p class="muted">none right now.</p>
       }
