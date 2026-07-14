@@ -121,7 +121,7 @@ const fmt = (n: number) => n.toLocaleString("en-US");
 const floor = index.min_articles_to_fit;
 const corpusStats: [string, string][] = [
   ...(index.n_articles_corpus
-    ? ([[fmt(index.n_articles_corpus), "articles"]] as [string, string][])
+    ? ([[fmt(index.n_articles_corpus), "total articles"]] as [string, string][])
     : []),
   ...(index.n_clusters_total
     ? ([[fmt(index.n_clusters_total), "clusters"]] as [string, string][])
