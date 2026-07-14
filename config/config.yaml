@@ -326,9 +326,12 @@ display:
     cache_dir: "data/naming_cache"   # tracked path (data/ is not gitignored)
   forming:
     # Sub-floor clusters surface as "forming" on the emerging page when their
-    # onset falls within stages.newly_emerging_recency_weeks and they span at
-    # least this many distinct articles (excludes single-document clusters;
-    # ADR-071). Display-only.
+    # onset falls within recency_weeks of the corpus frontier and they span at
+    # least min_articles distinct articles (excludes single-document clusters;
+    # ADR-071). Uses its own window (not stages.newly_emerging_recency_weeks)
+    # so the recency signal is independent of the surfaced emerging flag.
+    # Display-only.
+    recency_weeks: 16
     min_articles: 3
   corpus_heating:
     # "Heating in the corpus" (emerging page, ADR-074): a cluster fires when its

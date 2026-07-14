@@ -505,12 +505,11 @@ def write_cluster_directory(
                     per_day.to_numpy(dtype=float), index=pd.to_datetime(per_day.index)
                 ).sort_index()
 
-    # Forming window (ADR-071): onset within the ADR-059 recency window of the
-    # corpus frontier, measured over the whole corpus.
-    recency_weeks = int(cfg["stages"]["newly_emerging_recency_weeks"])
-    forming_floor = int(
-        ((cfg.get("display") or {}).get("forming") or {}).get("min_articles", 3)
-    )
+    # Forming window (ADR-071): onset within display.forming.recency_weeks of
+    # the corpus frontier (independent of the surfaced emerging window).
+    forming_cfg = (cfg.get("display") or {}).get("forming") or {}
+    recency_weeks = int(forming_cfg.get("recency_weeks", 4))
+    forming_floor = int(forming_cfg.get("min_articles", 3))
     frontier = max((hi for _, hi in date_ranges.values()), default=None)
     forming_cut = (
         (pd.to_datetime(frontier) - pd.Timedelta(weeks=recency_weeks)).date().isoformat()

@@ -51,17 +51,13 @@ const corpusHeat = index.narratives
   .filter((x) => x.heat !== null)
   .sort((a, b) => b.heat!.z - a.heat!.z);
 
-// Sub-floor clusters with a baked heating blob (ADR-074): same signal, but no
-// narrative page to click through to — rendered as unlinked, tagged cards.
+// Sub-floor clusters with a recent onset that haven't yet crossed the article
+// floor for a full narrative page (ADR-071).
 const floor = index.min_articles_to_fit ?? 42;
 const dir = loadDirectory();
 const dirClusters = dir?.clusters ?? [];
-const subfloorHeat = dirClusters
-  .filter((c) => !c.surfaced && c.heating?.is_heating)
-  .sort((a, b) => b.heating!.z - a.heating!.z);
-const subfloorHeatIds = new Set(subfloorHeat.map((c) => c.cluster_id));
 const formingClusters = dirClusters
-  .filter((c) => !c.surfaced && c.forming && !subfloorHeatIds.has(c.cluster_id))
+  .filter((c) => !c.surfaced && c.forming)
   .sort((a, b) => b.n_articles - a.n_articles);
 
 // Synthetic sparkline for forming clusters: flat silence then recent onset at
@@ -77,17 +73,6 @@ const formingEntry = (c: (typeof formingClusters)[number]) =>
     top_terms: c.terms ?? [],
     in_scope: true,
   }) as unknown as IndexEntry;
-const subfloorEntry = (c: (typeof subfloorHeat)[number]) =>
-  ({
-    cluster_id: c.cluster_id,
-    label: c.label,
-    label_human: c.label_human,
-    n_articles: c.n_articles,
-    date_range: c.date_range,
-    top_terms: c.terms ?? [],
-    in_scope: true,
-  }) as unknown as IndexEntry;
-
 // Press heating (ADR-074): computed at build time over the same quarterly
 // window as corpus heating, from each narrative's shipped Media Cloud ratio
 // series. Strongest deviation first.
@@ -137,25 +122,10 @@ const sparks: Record<number, number[]> = Object.fromEntries(
           corpusHot={corpusHotIds.has(e.cluster_id)} pressHot={pressHotIds.has(e.cluster_id)} />
       </div>
     ))}
-    {subfloorHeat.map((c) => (
-      <div class="card-wrap" data-label={((c.label_human ?? "") + " " + c.label).toLowerCase()}
-        data-terms={(c.terms ?? []).join(" ").toLowerCase()}
-        data-scope="in">
-        <NarrativeCard entry={subfloorEntry(c)} linked={false}
-          tag="not yet charted" />
-      </div>
-    ))}
   </div>
-  <p id="e-empty" class={`muted${corpusHeat.length + subfloorHeat.length ? " hidden" : ""}`}>
-    {corpusHeat.length + subfloorHeat.length ? "no narratives match that filter." : "none right now."}
+  <p id="e-empty" class={`muted${corpusHeat.length ? " hidden" : ""}`}>
+    {corpusHeat.length ? "no narratives match that filter." : "none right now."}
   </p>
-  {subfloorHeat.length > 0 && (
-    <p class="muted footnote reveal">
-      "not yet charted" cards are clusters still under the {floor}-article floor
-      for a full page; they are listed in the directory and graduate to charted
-      narratives as they grow.
-    </p>
-  )}
 
   <section class="heating reveal">
     <h1>heating in the press</h1>
