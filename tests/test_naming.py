@@ -153,7 +153,7 @@ def test_prompt_is_grounded_in_supplied_material():
         # multi-word fixups win before per-word handling
         ("european union budget rules", "European Union budget rules"),
         # trailing date spans are dropped (shown separately on every card)
-        ("iran sanctions on uav production, 2010-2026", "Iran sanctions on uav production"),
+        ("iran sanctions on uav production, 2010-2026", "Iran sanctions on UAV production"),
         ("sanctions against syria, 2011-2024", "Sanctions against Syria"),
         ("north korea summit diplomacy 2018", "North Korea summit diplomacy"),
         ("emerging economies' monetary challenges 2022-23", "Emerging economies' monetary challenges"),

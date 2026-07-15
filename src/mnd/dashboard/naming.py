@@ -58,15 +58,15 @@ class NarrativeName:
 # System prompt is part of the cache key (via prompt_version) — changing it
 # without bumping display.naming.prompt_version would silently reuse stale titles.
 _SYSTEM = (
-    "You write titles and descriptions for clusters of U.S. economic-policy and "
+    "You write titles and descriptions for clusters of economic-policy and "
     "financial writing, shown on a public educational dashboard that tracks how such "
     "narratives rise and fade. You are given a cluster's defining keywords, and "
     "usually short excerpts from its most central documents plus its active date "
     "span.\n\n"
     "Write two things:\n"
     "- title: a short, specific noun phrase naming what the writing is about — a "
-    "headline, not a sentence, and not a bare keyword. Name the period or event "
-    "when the excerpts make it clear.\n"
+    "headline, not a sentence, and not a bare keyword. Name the institution, "
+    "country, person, or event when the material makes it identifiable.\n"
     "- description: 2 to 4 plain, concrete sentences on what the writing covers and, "
     "where the material itself shows it, why it mattered — written for an interested "
     "non-expert.\n\n"
@@ -76,52 +76,68 @@ _SYSTEM = (
     "never 'Regional Bank Deposit Runs'. This holds for every subject, economic "
     "or not. If every word of your draft title starts with a capital letter, "
     "rewrite it in sentence case before answering.\n"
+    "- Be as specific as the material allows. If the keywords or excerpts identify "
+    "a country, region, institution, or named actor, include it in the title: "
+    "'Chinese exchange rate reform', 'ECB asset purchases', 'CBO budget "
+    "projections', 'Indian monetary policy'. A generic title ('monetary policy', "
+    "'economic uncertainty') is only acceptable when the material genuinely covers "
+    "multiple countries or institutions without a clear center.\n"
     "- Ground everything in the supplied material. Do not add events, places, dates, "
-    "numbers, causes, or outcomes that are not present in it. If the keywords "
-    "resemble a well-known event, name that event only when the excerpts confirm "
-    "it; otherwise stay general.\n"
+    "numbers, causes, or outcomes that are not in it. Name a well-known event only "
+    "when the excerpts confirm it.\n"
     "- If the material does not say why something happened, leave the why out — "
     "no 'likely', 'possibly', or 'may have been influenced by' padding. Never "
     "write that something is unspecified, implied, or not stated; just leave it "
     "out.\n"
-    "- When no excerpts are supplied, title from the keywords alone, and prefer a "
-    "modest descriptive phrase over guessing a specific event or storyline. Do "
-    "not invent relationships or actions connecting the people and institutions "
-    "the keywords name. Connect the keywords into a natural phrase; never output "
-    "a bare list of keywords as the title.\n"
+    "- When no excerpts are supplied, title from the keywords alone. Use whatever "
+    "country, institution, or named actor the keywords identify. Do not invent "
+    "relationships or actions between keywords. Connect them into a natural phrase; "
+    "never output a bare list.\n"
     "- Keywords are machine-extracted and can be malformed — run together "
     "('officetoresidential') or oddly split. Write the title in normal English "
     "with correct spacing and hyphens ('office-to-residential conversions').\n"
+    "- Never copy URLs, file paths, or protocol strings (http, https, www, .gov, "
+    ".pdf) into the title. If a keyword looks like a URL fragment or document ID, "
+    "ignore it.\n"
+    "- When a person's name includes a middle initial, capitalize it and add a "
+    "period: 'William C. Dudley', not 'William c dudley'.\n"
+    "- Proper nouns always carry standard English capitalization: countries, cities, "
+    "people, organizations, currencies, and named laws (Dodd-Frank, CARES Act). "
+    "Executive Orders are written 'EO 13224', never 'eo 13224'.\n"
     "- If the material is not about economics or finance, name it plainly for what it "
     "actually is rather than forcing an economic framing.\n"
     "- Neutral and factual: no hype, no editorializing, no forecasting, no advice.\n"
-    "- Write about the subject directly, as if the reader is looking at the "
-    "documents themselves. Never refer to 'this narrative', 'this cluster', 'this "
-    "topic', 'these articles', 'the writing', 'the material', 'the excerpts', "
-    "'the keywords', or 'the dashboard', and never open with 'Explores' or 'In "
-    "the world of'. Vary how you open across descriptions.\n"
+    "- Write about the subject directly. Never refer to 'this narrative', 'this "
+    "cluster', 'these articles', 'the writing', 'the material', 'the excerpts', "
+    "or 'the dashboard', and never open with 'Explores' or 'In the world of'. "
+    "Vary how you open across descriptions.\n"
     "- No quotation marks around the title, no trailing period on it, no markdown "
     "anywhere.\n"
     "Return strictly the requested JSON.\n\n"
-    "Example (with excerpts):\n"
+    "Example (with excerpts, named institution):\n"
+    '{"title": "Federal Reserve rate normalization cycle", "description": '
+    '"The Federal Reserve began raising the federal funds rate from near zero '
+    "following a decade of accommodation. Each FOMC statement weighed labor market "
+    "tightening against inflation expectations, and the pace of hikes shaped "
+    'borrowing costs across the economy."}\n'
+    "Example (with excerpts, named event):\n"
     '{"title": "Municipal bond market stress, 2010\\u20132011", "description": '
     '"State and local governments faced rising borrowing costs as investors '
     "questioned the safety of municipal debt. Analysts weighed default risk "
     "against the market's long record of low losses, and the debate shaped how "
     'pension shortfalls were reported."}\n'
-    "Example (keywords only):\n"
-    '{"title": "Crop insurance and farm subsidy programs", "description": '
-    '"Federal support for farmers through crop insurance and direct subsidies, '
-    'and the recurring budget debates over the cost of both."}\n'
-    "Example (keywords only, not economics — sentence case still applies):\n"
+    "Example (keywords only, named country):\n"
+    '{"title": "Indian banking sector asset quality", "description": '
+    '"Non-performing loans and provisioning requirements at Indian commercial '
+    'banks, and the RBI\'s responses to asset-quality stress."}\n'
+    "Example (keywords only, not economics):\n"
     '{"title": "Conference planning and event logistics", "description": '
     '"Professional conferences are organized around registration, hotel '
     'arrangements, agendas, and keynote sessions."}\n'
-    "Example (keywords only, mostly names — stay modest, connect nothing):\n"
-    '{"title": "European leaders and transatlantic relations", "description": '
-    '"European heads of government manage their countries\' relations with the '
-    'United States, and recurring surveys track how those relationships '
-    'shift."}'
+    "Example (keywords only, truly cross-institutional — modest is correct here):\n"
+    '{"title": "Central bank independence debates", "description": '
+    '"Recurring arguments over how much political influence central banks should '
+    'face, drawn from multiple countries and institutions."}'
 )
 
 # Deterministic title cleanup applied after generation, before caching. The
@@ -143,6 +159,16 @@ _ACRONYMS = {
     "usaid", "uscis",
     # legislative bill types (HR = House Resolution/Bill, S = Senate Bill)
     "hr", "hres", "hjres", "sjres",
+    # US government agencies and programs
+    "va", "sba", "ppe", "arp", "slfrf", "aca", "arra",
+    "doj", "dhs", "dod", "hud", "hhs", "cfpb", "fhfa", "fha",
+    "irs", "fcc", "epa", "fda", "gao", "omb", "cia", "nsa",
+    "eo",          # Executive Order
+    # financial instruments / market structure
+    "uav", "jgb", "aml", "cft", "agoa",
+    "lbo", "clo", "mbs", "abs", "cdo",
+    "rbi", "boc", "rba", "bnm",       # central banks (Reserve Bank India, Bank of Canada/Australia/Malaysia)
+    "fdi", "spac", "nlp", "agi",
 }
 # Single-word proper nouns (countries, demonyms, cities, institutions, people)
 # that the 7B-class models leave lowercase after copying the c-TF-IDF keywords.
@@ -150,9 +176,12 @@ _ACRONYMS = {
 # the lookup, so "china's" matches "china". Kept to items that actually surfaced
 # in the corpus titles and are unambiguous in a macro-finance context.
 _PROPER = {
+    # continents / regions
     "america", "american", "africa", "african", "asia", "asian",
     "europe", "european", "latin", "caribbean", "pacific", "atlantic",
     "nordic", "mediterranean", "eurasia", "balkans", "scandinavia",
+    "subsaharan",   # glued form; also handled by FIXUPS for the full phrase
+    # countries and demonyms
     "china", "chinese", "japan", "japanese", "india", "indian",
     "korea", "korean", "germany", "german", "france", "french",
     "russia", "russian", "ukraine", "ukrainian", "iran", "iranian",
@@ -160,28 +189,55 @@ _PROPER = {
     "turkish", "greece", "greek", "italy", "italian", "spain", "spanish",
     "portugal", "portuguese", "ireland", "irish", "iceland", "brazil",
     "brazilian", "mexico", "mexican", "canada", "canadian", "argentina",
-    "venezuela", "egypt", "libya", "cyprus", "sudan", "afghanistan",
-    "afghan", "pakistan", "indonesia", "vietnam", "nigeria", "kenya",
+    "venezuela", "egypt", "egyptian", "libya", "libyan", "cyprus",
+    "sudan", "sudanese", "afghanistan", "afghan", "pakistan", "pakistani",
+    "indonesia", "indonesian", "vietnam", "vietnamese", "nigeria",
+    "nigerian", "kenya", "kenyan", "ghana", "ghanaian", "zambia", "zambian",
+    "senegal", "senegalese", "tanzania", "tanzanian", "zimbabwe",
+    "ethiopia", "ethiopian", "rwanda", "rwandan", "myanmar", "burmese",
+    "colombia", "colombian", "chile", "chilean", "peru", "peruvian",
+    "qatar", "qatari", "bahrain", "bahraini", "kuwait", "kuwaiti",
+    "jordan", "jordanian", "lebanon", "lebanese", "morocco", "moroccan",
+    "algeria", "algerian", "tunisia", "tunisian", "serbia", "serbian",
+    "albania", "albanian", "romania", "romanian", "bulgaria", "bulgarian",
+    "croatia", "croatian", "ukraine", "ukrainian",
     "australia", "australian", "britain", "british", "swiss", "dutch",
     "belgian", "swedish", "norwegian", "danish", "finnish", "austrian",
-    "polish", "hungarian", "czech", "slovak", "romanian", "bulgarian",
+    "polish", "hungarian", "czech", "slovak", "philippine", "philippino",
+    "malaysia", "malaysian", "thailand", "thai", "bangladesh", "bangladeshi",
+    "singapore", "singaporean",
+    "taiwan", "taiwanese",
+    "ukraine", "ukrainian",   # also above in countries section, idempotent
+    "israel", "israeli",      # same
+    # cities
     "washington", "beijing", "brussels", "frankfurt", "basel", "davos",
     "london", "tokyo", "paris", "moscow", "tehran", "gaza", "detroit",
-    "chicago", "shanghai", "geneva", "vienna",
+    "chicago", "shanghai", "geneva", "vienna", "delhi", "mumbai",
+    "istanbul", "riyadh", "kyiv", "taipei", "seoul", "jakarta",
+    "manila", "nairobi", "cairo", "abuja", "accra", "kampala",
+    # institutions / bodies
     "congress", "senate", "treasury", "fed", "brexit",
+    "pentagon", "kremlin", "bundestag", "riksbank",
+    # central bankers and finance officials (surnames)
     "draghi", "trichet", "bernanke", "yellen", "powell", "lagarde",
     "greenspan", "volcker", "mnuchin", "goolsbee", "kuroda", "merkel",
     "macron", "trump", "biden", "obama", "putin", "erdogan", "modi",
-    "lehman", "hezbollah", "hamas", "taliban",
-    # added 2026-07-13: surnames and first names the 7B models leave lowercase
-    "obrador",   # Andrés Manuel López Obrador
-    "subbarao",  # Duvvuri Subbarao (RBI Governor)
-    "geithner",  # Timothy Geithner
-    "carney",    # Mark Carney (BoE / BoC)
+    "dudley", "poloz", "lew", "geithner", "carney", "subbarao",
+    "nabiullina", "sejko", "morsi", "haftar", "netanyahu", "zelensky",
+    "scholz", "sunak", "orban", "milei", "lula", "bolsonaro",
+    "kashkari", "bullard", "waller", "brainard", "clarida",
+    # first names that appear without a surname in titles
     "mario",     # Mario Draghi
-    "lópez",     # López Obrador (accented form; "lopez" without accent gets leading-cap)
+    "janet",     # Janet Yellen
+    # armed groups / political movements kept for disambiguation
+    "lehman", "hezbollah", "hamas", "taliban", "houthi", "daesh",
+    # accented forms (bare lowercase from c-TF-IDF)
+    "obrador",   # Andrés Manuel López Obrador
+    "lópez",     # López Obrador (accented form)
+    "draghi",
 }
 _FIXUPS = {
+    # --- institutions and bodies ---
     "federal reserve": "Federal Reserve",
     "federal open market committee": "Federal Open Market Committee",
     "beige book": "Beige Book",
@@ -189,7 +245,6 @@ _FIXUPS = {
     "wall street": "Wall Street",
     "white house": "White House",
     "u.s.": "U.S.",
-    # multi-word places and institutions (added 2026-07-12)
     "united states": "United States",
     "united kingdom": "United Kingdom",
     "united nations": "United Nations",
@@ -200,6 +255,10 @@ _FIXUPS = {
     "international monetary fund": "International Monetary Fund",
     "supreme court": "Supreme Court",
     "silicon valley": "Silicon Valley",
+    "dodd-frank": "Dodd-Frank",
+    "affordable care act": "Affordable Care Act",
+    "cares act": "CARES Act",
+    # --- geographic multi-word phrases ---
     "middle east": "Middle East",
     "hong kong": "Hong Kong",
     "new york": "New York",
@@ -210,7 +269,22 @@ _FIXUPS = {
     "puerto rico": "Puerto Rico",
     "latin america": "Latin America",
     "sub-saharan africa": "Sub-Saharan Africa",
+    "subsaharan africa": "Sub-Saharan Africa",
+    "east africa": "East Africa",
+    "west africa": "West Africa",
+    "central africa": "Central Africa",
+    "north africa": "North Africa",
+    "southeast asia": "Southeast Asia",
+    "south asia": "South Asia",
+    "east asia": "East Asia",
+    "central asia": "Central Asia",
+    "eastern europe": "Eastern Europe",
+    "western europe": "Western Europe",
     "euro area": "euro area",
+    "east china sea": "East China Sea",
+    "south china sea": "South China Sea",
+    "persian gulf": "Persian Gulf",
+    # --- central banks ---
     "bank of japan": "Bank of Japan",
     "bank of england": "Bank of England",
     "bank of france": "Bank of France",
@@ -219,20 +293,46 @@ _FIXUPS = {
     "bank of spain": "Bank of Spain",
     "bank of mexico": "Bank of Mexico",
     "bank of korea": "Bank of Korea",
+    "bank of albania": "Bank of Albania",
     "reserve bank of india": "Reserve Bank of India",
+    "reserve bank of australia": "Reserve Bank of Australia",
     "people's bank of china": "People's Bank of China",
     "south african reserve bank": "South African Reserve Bank",
-    "east china sea": "East China Sea",
-    "south china sea": "South China Sea",
-    # possessive spelling slips the models introduce from the keyword copy
-    "chinas": "China's",
-    "americas": "Americas",
-    # multi-word paired names where the first name is a common word
+    "national bank of romania": "National Bank of Romania",
+    "norges bank": "Norges Bank",
+    "swiss national bank": "Swiss National Bank",
+    # --- named people (multi-word; single words handled by _PROPER) ---
     "ben bernanke": "Ben Bernanke",
     "jean-claude trichet": "Jean-Claude Trichet",
     "jean-claude": "Jean-Claude",
-    # merged US–country/region names the 7B models produce from glued c-TF-IDF keywords
-    # (us-china with a hyphen already resolves via _PROPER; these are the no-hyphen forms)
+    "william c. dudley": "William C. Dudley",
+    "william c dudley": "William C. Dudley",
+    "william dudley": "William Dudley",
+    "jack lew": "Jack Lew",
+    "steven mnuchin": "Steven Mnuchin",
+    "steve mnuchin": "Steve Mnuchin",
+    "janet yellen": "Janet Yellen",
+    "jerome powell": "Jerome Powell",
+    "neel kashkari": "Neel Kashkari",
+    "duvvuri subbarao": "Duvvuri Subbarao",
+    "elvira nabiullina": "Elvira Nabiullina",
+    "stephen poloz": "Stephen Poloz",
+    "gent sejko": "Gent Sejko",
+    "philip lowe": "Philip Lowe",
+    "andrés manuel lópez obrador": "Andrés Manuel López Obrador",
+    "lópez obrador": "López Obrador",
+    "lopez obrador": "López Obrador",
+    # --- possessive / plural slips from keyword copy ---
+    "chinas": "China's",
+    "russias": "Russia's",
+    "americas": "Americas",
+    "hezbollahs": "Hezbollah's",
+    "hamass": "Hamas's",
+    "talibans": "Taliban's",
+    # --- glued / run-together forms ---
+    "crossborder": "cross-border",
+    "crossstrait": "cross-strait",
+    "subsaharan": "Sub-Saharan",
     "uschina": "US-China",
     "usindia": "US-India",
     "usgermany": "US-Germany",
@@ -244,6 +344,8 @@ _FIXUPS = {
     "ussaudi": "US-Saudi",
     "usasean": "US-ASEAN",
     "usrok": "US-ROK",
+    "usuk": "US-UK",
+    "useu": "US-EU",
     # garbled accented form from keyword copy (missing ó)
     "lpez": "López",
 }
@@ -304,25 +406,43 @@ def _polish_word(w: str) -> str:
 # CBO distributes PDFs whose filenames / catalog tokens leak into extracted
 # text and surface as top c-TF-IDF terms (e.g. "kdocs37448txt", "086690").
 # Strip them from titles before any other processing so the LLM's real content
-# is what remains.  The patterns are narrow enough to be safe in a macro-finance
-# corpus: no economics paper title legitimately contains "kdocs\d+txt".
+# is what remains.  6-digit bare numbers (CBO catalog IDs like "086690") are
+# stripped; 5-digit numbers are NOT, because Executive Order numbers (13224,
+# 14024 ...) are 5-digit and meaningful.
 _ARTIFACT_RE = re.compile(
-    r"\b(?:kdocs\d+\w*|sdeneendocs\d+\w*|\d{5,6})\b",
+    r"\b(?:kdocs\d+\w*|sdeneendocs\d+\w*|\d{6})\b",
     re.IGNORECASE,
 )
+
+# Unicode decimal entity artifacts: models occasionally emit curly-quote
+# characters (U+2018/2019) that survive JSON serialization as their decimal
+# code points (8216/8217).  e.g. "Act8217s" → "Act's", "it8217s" → "it's".
+_UNICODE_APOS_RE = re.compile(r"(\w)8217s\b")
+_UNICODE_QUOT_RE = re.compile(r"\b8216(\w)")
+
+# URL / protocol artifacts: LLMs occasionally copy a keyword that looks like
+# a URL scheme ("https", "http", "www") into the title verbatim.
+_URL_PREFIX_RE = re.compile(r"^https?:?\s*", re.IGNORECASE)
 
 
 def _polish_title(title: str) -> str:
     """Deterministic casing repair: first letter, acronyms, proper nouns.
 
-    Order: multi-word fixups first (so "united states" wins before per-word
-    handling), then per-word acronym up-casing and proper-noun capitalization,
-    then the leading capital. Up-casing/capitalizing a fixed list is safe in a
-    way the reverse (de-Title-Casing, which needs to know which words are proper)
-    is not; the list only grows, and because polish also runs on cache read the
-    growth lands on the next bake with no regeneration (ADR-056).
+    Order: artifact/encoding fixes first, then multi-word fixups (so "united
+    states" wins before per-word handling), then per-word acronym up-casing and
+    proper-noun capitalization, then the leading capital. Up-casing/capitalizing
+    a fixed list is safe in a way the reverse (de-Title-Casing, which needs to
+    know which words are proper) is not; the list only grows, and because polish
+    also runs on cache read the growth lands on the next bake with no
+    regeneration (ADR-056).
     """
     t = title.strip()
+    # Fix unicode decimal entities from LLM curly-quote output
+    # ("Act8217s" → "Act's", i.e. U+2019 RIGHT SINGLE QUOTATION MARK).
+    t = _UNICODE_APOS_RE.sub(r"\1's", t)
+    t = _UNICODE_QUOT_RE.sub(r"'\1", t)
+    # Strip leading URL/protocol artifacts ("Https reciprocal..." → "Reciprocal...")
+    t = _URL_PREFIX_RE.sub("", t).strip()
     # Strip CBO artifact tokens (filename fragments like kdocs37448txt) and
     # leading catalog numbers (like 6601, 086690) that are not years.
     t = _ARTIFACT_RE.sub("", t)
@@ -349,9 +469,19 @@ _SCHEMA: dict[str, Any] = {
 }
 
 
+_KEYWORD_ARTIFACT_RE = re.compile(
+    r"^(?:https?|www|ftp)$"          # bare URL protocols
+    r"|^https?://"                    # full URL prefix
+    r"|\bkdocs\d+\w*"                 # CBO filename fragments
+    r"|\bsdeneendocs\d+\w*",
+    re.IGNORECASE,
+)
+
+
 def _build_user(inp: NamingInput, title_words: int) -> str:
     """Render one cluster's representation into the user message."""
-    lines = [f"Keywords: {', '.join(inp.terms[:15])}"]
+    clean_terms = [t for t in inp.terms if not _KEYWORD_ARTIFACT_RE.search(t)]
+    lines = [f"Keywords: {', '.join(clean_terms[:15])}"]
     if inp.sources:
         lines.append(f"Sources: {', '.join(inp.sources[:4])}")
     if inp.date_range:

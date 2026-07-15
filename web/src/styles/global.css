@@ -235,8 +235,11 @@ a.card:hover { background: var(--paper-2); padding-left: 0.9rem; padding-right: 
 /* while a cluster is click-locked on the 3-D map, hover chips are suppressed —
    the locked tag owns the stage. toggled by chart.ts on the map container;
    gl3d keeps drawing hovertemplate chips regardless of hoverinfo, so the
-   suppression lives here at the CSS layer instead. */
+   suppression lives here at the CSS layer instead.
+   exception: hovering a directly-connected neighbor (map-neighbor-hover) shows
+   its chip so the reader can explore the immediate cluster neighbourhood. */
 .map-locked .hovertext { display: none !important; }
+.map-locked.map-neighbor-hover .hovertext { display: block !important; }
 
 /* ---- key/value + facts (flat tables, hairline rules) ---- */
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 0.45rem 1.4rem; font-size: var(--fs-ui); margin: 0; }

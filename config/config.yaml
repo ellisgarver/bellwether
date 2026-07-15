@@ -116,6 +116,14 @@ dynamics:
   # alpha=0.05; no new tuned parameter. Staging and the displayed volume series
   # stay on the full span (ADR-058) — only the fitted lens curves are windowed.
   fit_window_mass_alpha: 0.05
+  # Lens fit window strategy (ADR-060):
+  #   central_mass — single window holding the central 1-alpha fraction of the
+  #     cumulative article mass (original behaviour).
+  #   best_third   — search N candidate windows each spanning at least 1/3 of the
+  #     total timeline; use the window that yields the highest R² per lens.
+  #     Better for multi-peak or dormant narratives where the lifecycle model only
+  #     applies to a sub-span.  Fits take ~8-12x longer but are fully cached.
+  fit_window_strategy: "best_third"
   # Fit/display floor (ADR-051): only clusters with at least this many unique
   # articles are fit, staged, and surfaced on the front end (map, narratives,
   # emerging, search). BERTopic at the library-default min_cluster_size (ADR-019)
@@ -322,7 +330,7 @@ display:
     model: "qwen2.5:7b"         # backend=llama: served model id (env MND_NAMING_MODEL overrides)
     local_model: "Qwen/Qwen2.5-7B-Instruct"   # backend=local: open, Apache-2.0, no key
     max_title_words: 7          # soft target for the title (not a hard cap)
-    prompt_version: 4           # bump to invalidate the cache when the prompt changes
+    prompt_version: 5           # bump to invalidate the cache when the prompt changes
     cache_dir: "data/naming_cache"   # tracked path (data/ is not gitignored)
   forming:
     # Sub-floor clusters surface as "forming" on the emerging page when their

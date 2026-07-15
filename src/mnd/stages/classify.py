@@ -139,6 +139,24 @@ def classify_stage(
     recent = y[-w:] if w > 0 else y
 
     mk = mann_kendall(recent, alpha=alpha)
+
+    # Latest-active slope: Theil-Sen on log1p(y) over the 4-week window ending at
+    # the last nonzero day.  For dormant narratives the absolute tail is all zeros
+    # (slope=0 regardless of exit shape); this reports the actual trend at the end
+    # of the narrative's last active period instead.
+    from scipy.stats import theilslopes
+    nonzero_idx = np.nonzero(y)[0]
+    if nonzero_idx.size > 0:
+        last_active = int(nonzero_idx[-1])
+        w_latest = min(w, last_active + 1)
+        latest_win = y[last_active - w_latest + 1 : last_active + 1]
+        la_idx = np.arange(len(latest_win), dtype=float)
+        latest_slope = float(
+            theilslopes(np.log1p(np.maximum(latest_win, 0.0)), la_idx)[0]
+        )
+    else:
+        latest_slope = mk["slope"]
+
     faded, recent_peak_ratio, peak_level = _recent_faded(y, w, dormant_fraction)
 
     if mk["trend"] == "increasing":
@@ -172,7 +190,7 @@ def classify_stage(
         "trend": mk["trend"],
         "trend_p": mk["p"],
         "trend_z": mk["z"],
-        "trend_slope": mk["slope"],
+        "trend_slope": latest_slope,
         "recent_near_peak": bool(not faded),
         "recent_peak_ratio": recent_peak_ratio,
         "peak_level": peak_level,

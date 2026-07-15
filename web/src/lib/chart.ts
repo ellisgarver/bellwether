@@ -337,7 +337,7 @@ export function mountMap3d(
   const deselect = () => {
     if (selectedCid === null) return;
     selectedCid = null;
-    el.classList.remove("map-locked");
+    el.classList.remove("map-locked", "map-neighbor-hover");
     Plotly.restyle(el, { x: [[], []], y: [[], []], z: [[], []] }, [0, 1]);
     Plotly.relayout(el, {
       "scene.annotations": [],
@@ -525,9 +525,15 @@ export function mountMap3d(
     const cd = ev.points?.[0]?.customdata;
     hoverCid = Array.isArray(cd) ? cd[0] : (cd ?? null);
     pause();
+    // while click-locked, allow the hover chip only for direct neighbours
+    if (selectedCid !== null) {
+      const isNeighbor = hoverCid !== null && (adj[selectedCid] ?? []).includes(hoverCid);
+      el.classList.toggle("map-neighbor-hover", isNeighbor);
+    }
   });
   (el as PlotlyHTMLElement).on("plotly_unhover", () => {
     hoverCid = null;
+    el.classList.remove("map-neighbor-hover");
     scheduleResume();
   });
   el.addEventListener("mouseleave", scheduleResume);

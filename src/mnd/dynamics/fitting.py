@@ -125,21 +125,23 @@ class DynamicsFitter:
         t = np.arange(n, dtype=float)
         y = smoothed.values.astype(float)
 
-        # Fit the lenses on the central-mass window (ADR-060): drop the sparse
-        # leading/trailing stragglers that otherwise stretch nearly every fit series
-        # to ~14 years. The window carries the full active lifecycle (all waves that
-        # hold real attention); only negligible-mass tails are trimmed. Each fitted
-        # curve is reprojected back onto the full daily grid for display, and
-        # shape-facts + staging stay on the full series.
-        alpha = float(self._cfg["dynamics"].get("fit_window_mass_alpha", 0.05))
-        i0, i1 = _trim_window_central_mass(y, alpha)
-        t_win = np.arange(i1 - i0 + 1, dtype=float)
-        y_win = y[i0:i1 + 1]
-
-        all_fits: list[FitResult] = [
-            self._fit_lens_cached(cluster_id, model_name, t_win, y_win, y, i0, i1, n, cache_dir)
-            for model_name in self._cfg["dynamics"]["models_to_fit"]
-        ]
+        strategy = str(self._cfg["dynamics"].get("fit_window_strategy", "central_mass"))
+        if strategy == "best_third":
+            all_fits = [
+                self._fit_best_window(cluster_id, model_name, y, n, cache_dir)
+                for model_name in self._cfg["dynamics"]["models_to_fit"]
+            ]
+        else:
+            # central_mass (ADR-060): single window holding the central 1-alpha
+            # fraction of the cumulative article mass.
+            alpha = float(self._cfg["dynamics"].get("fit_window_mass_alpha", 0.05))
+            i0, i1 = _trim_window_central_mass(y, alpha)
+            t_win = np.arange(i1 - i0 + 1, dtype=float)
+            y_win = y[i0:i1 + 1]
+            all_fits = [
+                self._fit_lens_cached(cluster_id, model_name, t_win, y_win, y, i0, i1, n, cache_dir)
+                for model_name in self._cfg["dynamics"]["models_to_fit"]
+            ]
 
         staging = self._select_staging_fit(cluster_id, all_fits)
         facts = shape_facts(t, y)
@@ -178,7 +180,7 @@ class DynamicsFitter:
 
         path = None
         if cache_dir is not None:
-            sig = _lens_fit_signature(y_full, model_name, self._cfg)
+            sig = _lens_fit_signature(y_full, model_name, self._cfg, i0, i1)
             path = cache_dir / f"fit_{cluster_id}_{model_name}_{sig}.pkl"
             if path.exists():
                 try:
@@ -198,6 +200,53 @@ class DynamicsFitter:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(pickle.dumps(fr))
         return fr
+
+    def _fit_best_window(
+        self,
+        cluster_id: int | str,
+        model_name: str,
+        y: np.ndarray,
+        n: int,
+        cache_dir: Path | None,
+    ) -> FitResult:
+        """Try each candidate window; return the fit with the highest R².
+
+        Windows must span at least 1/3 of the full series length so a trivially
+        short burst cannot dominate a multi-peak history. All (model, window) pairs
+        are cached independently, so repeated bakes only pay the optimizer cost on
+        the first run.
+        """
+        min_frac = float(self._cfg["dynamics"].get("fit_window_min_frac", 1 / 3))
+        n_anchors = int(self._cfg["dynamics"].get("fit_window_n_anchors", 6))
+        windows = _candidate_windows(n, min_frac, n_anchors)
+        best_fr: FitResult | None = None
+        best_r2: float = float("-inf")
+        for i0, i1 in windows:
+            # Skip windows with too few non-zero points to be meaningful.
+            y_win = y[i0 : i1 + 1]
+            if float(np.sum(y_win > 0)) < 5 or float(np.max(y_win)) <= 0:
+                continue
+            t_win = np.arange(i1 - i0 + 1, dtype=float)
+            fr = self._fit_lens_cached(
+                cluster_id, model_name, t_win, y_win, y, i0, i1, n, cache_dir
+            )
+            # Converged fits are ranked by R²; non-converged are ranked below -1
+            # so a bad converged fit still beats no converged fit at all.
+            r2 = float(fr.param_summary.get("r2", -1.0)) if fr.converged else -2.0
+            if r2 > best_r2:
+                best_r2 = r2
+                best_fr = fr
+        if best_fr is not None:
+            return best_fr
+        # No window converged — return the central-mass fit as a fallback so the
+        # lens tab still shows the unconverged curve rather than nothing.
+        alpha = float(self._cfg["dynamics"].get("fit_window_mass_alpha", 0.05))
+        i0_fb, i1_fb = _trim_window_central_mass(y, alpha)
+        t_fb = np.arange(i1_fb - i0_fb + 1, dtype=float)
+        return self._fit_lens_cached(
+            cluster_id, model_name, t_fb, y[i0_fb : i1_fb + 1],
+            y, i0_fb, i1_fb, n, cache_dir,
+        )
 
     @staticmethod
     def _select_staging_fit(
@@ -425,14 +474,21 @@ class DynamicsFitter:
 # Module-level helpers
 # ------------------------------------------------------------------
 
-def _lens_fit_signature(y_full: np.ndarray, model_name: str, cfg: dict[str, Any]) -> str:
+def _lens_fit_signature(
+    y_full: np.ndarray,
+    model_name: str,
+    cfg: dict[str, Any],
+    i0: int = 0,
+    i1: int = -1,
+) -> str:
     """Content hash of one lens's fit inputs (ADR-065).
 
     Covers the smoothed series, the shared fit config (smoothing window, fit-window
-    alpha, the R² display floor), and only *this lens's* priors — so a change to
-    one lens's config invalidates only its cache, while the other lenses reload
-    unchanged. The fits are deterministic least squares (ADR-067), so a cache hit
-    is identical to a refit.
+    strategy + alpha, the R² display floor), only *this lens's* priors, and the
+    specific window [i0, i1] — so each (model, window) pair gets its own cache
+    file, and a change to one lens's config invalidates only its cache.
+    The fits are deterministic least squares (ADR-067), so a cache hit is
+    identical to a refit.
     """
     import hashlib
 
@@ -440,15 +496,45 @@ def _lens_fit_signature(y_full: np.ndarray, model_name: str, cfg: dict[str, Any]
     lens_cfg: dict[str, Any] = {
         "model": model_name,
         "smoothing": dyn.get("smoothing_window_days"),
+        "fit_window_strategy": dyn.get("fit_window_strategy", "central_mass"),
         "fit_window_mass_alpha": dyn.get("fit_window_mass_alpha"),
         "min_fit_r2": dyn.get("min_fit_r2"),
         "priors": dyn.get("priors", {}).get(model_name),  # bass init anchors (ADR-067)
+        "window": [i0, int(i1)],
     }
     payload = (
         np.ascontiguousarray(np.asarray(y_full, dtype=float)).tobytes()
         + repr(lens_cfg).encode()
     )
     return hashlib.sha1(payload).hexdigest()[:12]
+
+
+def _candidate_windows(
+    n: int, min_frac: float = 1 / 3, n_anchors: int = 6
+) -> list[tuple[int, int]]:
+    """Generate diverse [i0, i1] fit windows each spanning at least ``min_frac`` of n.
+
+    Places ``n_anchors`` evenly-spaced anchor points across the series and returns
+    all pairs (a0, a1) where a1 - a0 >= min_frac * n.  Always includes the full
+    range [0, n-1] as a fallback.
+    """
+    if n < 2:
+        return [(0, max(0, n - 1))]
+    min_len = max(int(n * min_frac), 30)
+    step = max(1, n // (n_anchors - 1))
+    anchors = sorted(set(min(i * step, n - 1) for i in range(n_anchors)) | {n - 1})
+    seen: set[tuple[int, int]] = set()
+    windows: list[tuple[int, int]] = []
+    for a0 in anchors:
+        for a1 in anchors:
+            if a1 - a0 < min_len:
+                continue
+            if (a0, a1) not in seen:
+                seen.add((a0, a1))
+                windows.append((a0, a1))
+    if not windows:
+        windows.append((0, n - 1))
+    return windows
 
 
 def _trim_window_central_mass(y: np.ndarray, alpha: float) -> tuple[int, int]:

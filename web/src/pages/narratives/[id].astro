@@ -146,7 +146,7 @@ const direction = (d: any) =>
           <tr><td>trajectory test</td><td>modified Mann–Kendall</td></tr>
           <tr><td>recent trend</td><td>{trendWord}</td></tr>
           <tr><td>significance</td><td>{sd.trend_p != null ? `p = ${fmt(sd.trend_p, 3)} (α = ${fmt(sd.alpha, 2)})` : "—"}</td></tr>
-          <tr><td>recent log-slope</td><td>{sd.trend_slope != null ? `${fmt(sd.trend_slope, 3)} / day` : "—"}</td></tr>
+          <tr><td>last log-slope</td><td>{sd.trend_slope != null ? `${fmt(sd.trend_slope, 3)} / day` : "—"}</td></tr>
           <tr><td>vs own peak</td><td>{sd.recent_peak_ratio == null ? "—" : `${Math.round(sd.recent_peak_ratio * 100)}% of peak level${n.stage === "dormant" ? " — faded" : ""}`}</td></tr>
         </table>
       </div>

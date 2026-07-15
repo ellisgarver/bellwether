@@ -204,7 +204,11 @@ const walkthrough: [string, string][] = [
     </div>
     <p>
       each curve is fit by bounded least squares and scored with R², the share of
-      the volume's variation the curve explains. every lens stays available on
+      the volume's variation the curve explains. because many narratives have
+      multiple peaks or long quiet periods where no lifecycle model applies, each
+      lens searches for the sub-span of at least one-third of the narrative's
+      timeline where its fit is strongest — so the R² reflects a real episode, not
+      a diluted average across inactive stretches. every lens stays available on
       every narrative, opening on the best-scoring one. weaker lenses are
       grayed not hidden, and the score sits on the tab. when no lens
       describes the narrative well it opens on the volume alone, and the grayed
