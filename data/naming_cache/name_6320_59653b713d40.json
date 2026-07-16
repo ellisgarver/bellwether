@@ -1,0 +1,1 @@
+{"title": "Pdf document structure", "description": "A pdf document includes objects like endobj and obj, each with properties such as type, text colorspace, mediabox dimensions, and color settings gs2 30 and gs3 31."}

@@ -1,0 +1,1 @@
+{"title": "Pdf color space transparency", "description": "Discussions of how transparency is implemented in pdf color spaces, focusing on the use of gs1 and extgstate commands for managing color and opacity."}
