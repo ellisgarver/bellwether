@@ -224,20 +224,36 @@ def strip_leading_furniture(body: str, title: str) -> tuple[str, bool]:
          to the first sentence boundary, bounded to ~300 chars.
 
     Each step is anchored at position 0, so an inline date or an inline "note:"
-    is never touched. Returns ``(cleaned_body, changed)``.
+    is never touched. Every removal is guarded by ``_sentence_initial``: a strip
+    is committed only when what remains begins a NEW sentence (uppercase, digit,
+    or opening quote). This prevents cutting into a real first sentence whose
+    subject happens to be the title or a leading date — e.g. the title
+    "Rebuilding the global economy" is furniture when followed by "This paper…"
+    but the sentence subject when followed by "is essential…". Returns
+    ``(cleaned_body, changed)``.
     """
     original = body
     text = body.lstrip()
-    # 1. verbatim leading title repeat (only an exact prefix match — a real
-    #    opening sentence does not equal the whole title then continue).
+
+    def _try(candidate: str) -> str:
+        """Accept a removal only if the remainder starts a new sentence."""
+        if candidate == text:
+            return text
+        rest = candidate.lstrip(" \t\n:—–-.")
+        if (not rest) or rest[0].isupper() or rest[0].isdigit() or rest[0] in "\"'“‘(":
+            return rest
+        return text
+
+    # 1. verbatim leading title repeat (only an exact prefix match, and only
+    #    when a new sentence follows — else the title is the sentence subject).
     t = title.strip()
     if t and len(t) >= 8 and text[: len(t)].lower() == t.lower():
-        text = text[len(t):].lstrip(" \t\n:—–-.")
+        text = _try(text[len(t):])
     # 2. leading date stamp / "Published:" + date, then a bare "Published:".
-    text = _LEADING_DATE_RE.sub("", text, count=1)
-    text = _LEADING_PUBLISHED_RE.sub("", text, count=1)
+    text = _try(_LEADING_DATE_RE.sub("", text, count=1))
+    text = _try(_LEADING_PUBLISHED_RE.sub("", text, count=1))
     # 3. leading editorial-credit sentence.
-    text = _LEADING_CREDIT_RE.sub("", text, count=1)
+    text = _try(_LEADING_CREDIT_RE.sub("", text, count=1))
     text = text.lstrip()
     return (text, True) if text and text != original.lstrip() else (original, False)
 

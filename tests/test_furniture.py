@@ -51,6 +51,27 @@ class TestLeadingFurniture:
         body, changed = strip_leading_furniture(text, "Inflation dynamics")
         assert not changed and body == text
 
+    def test_title_as_sentence_subject_not_stripped(self):
+        # PIIE case: the title IS the subject of the first sentence (lowercase
+        # continuation) — stripping it would leave a fragment.
+        text = ("Rebuilding the global economy is essential to addressing many "
+                "interlocking problems at once, including the recovery.")
+        body, changed = strip_leading_furniture(text, "Rebuilding the global economy")
+        assert not changed and body == text
+
+    def test_title_repeat_before_new_sentence_stripped(self):
+        # NBER case: title noun-phrase then a new sentence (uppercase) — furniture.
+        text = ("Private Equity and Industry Performance The growth of the private "
+                "equity industry has spurred concerns about the economy.")
+        body, changed = strip_leading_furniture(text, "Private Equity and Industry Performance")
+        assert changed and body.startswith("The growth of the private equity")
+
+    def test_leading_date_before_lowercase_kept(self):
+        # A leading full date that is the sentence subject is not stripped.
+        text = "January 21, 2010 was the day the crisis truly began in earnest."
+        body, changed = strip_leading_furniture(text, "Crisis timeline")
+        assert not changed and body == text
+
 _BIS_TITLE = "Jean-Claude Trichet: Interview with FOCUS"
 _BIS_BODY = (
     "Jean-Claude Trichet: Interview with FOCUS Interview with Mr Jean-Claude "
