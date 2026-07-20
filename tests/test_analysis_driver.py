@@ -145,6 +145,31 @@ def test_run_analysis_writes_adjusted_artifacts(tmp_path, monkeypatch):
         assert art["stage"] in {"growth", "stable", "decay", "dormant"}
 
 
+def test_carry_forward_names_reuses_prior_titles(tmp_path):
+    """Held-off naming keeps prior display names from the artifacts on disk (ADR-080)."""
+    from mnd.dashboard.naming import NarrativeName
+
+    out = tmp_path / "dash"
+    out.mkdir()
+    # A prior bake's surfaced + light artifacts, each carrying a display name.
+    (out / "narrative_7.json").write_text(json.dumps(
+        {"cluster_id": 7, "label_human": "Regional bank deposit runs",
+         "description": "A prior description."}))
+    (out / "narrative_light_88.json").write_text(json.dumps(
+        {"cluster_id": 88, "label_human": "Repo market plumbing", "description": ""}))
+    # An artifact with no display name yields nothing (falls back to c-TF-IDF).
+    (out / "narrative_9.json").write_text(json.dumps({"cluster_id": 9, "label_human": None}))
+
+    carried = driver._carry_forward_names(out)
+    assert carried[7] == NarrativeName("Regional bank deposit runs", "A prior description.")
+    assert carried[88].title == "Repo market plumbing"
+    assert 9 not in carried
+
+
+def test_carry_forward_names_missing_dir_is_empty(tmp_path):
+    assert driver._carry_forward_names(tmp_path / "does_not_exist") == {}
+
+
 def test_corpus_adjustment_indexes_to_count_units():
     """adj = raw / N̄ * N̄_mean keeps the series in count-like units (ADR-045)."""
     from mnd.dynamics.normalize import adjusted_cluster_volumes, corpus_base_rate
@@ -197,10 +222,11 @@ def test_per_lens_fit_cache_reuses_and_invalidates_per_lens(tmp_path):
             super().__init__(c)
             self.model_calls: list = []
 
-        def _fit_model(self, cid, model_name, t, y):
+        def _fit_model(self, cid, model_name, t, y, t_eval=None):
             self.model_calls.append((cid, model_name))
+            curve = y if t_eval is None else np.interp(t_eval, t, y)
             return FitResult(cluster_id=cid, model_name=model_name, converged=True,
-                             aicc=1.0, curve=[float(v) for v in y])
+                             aicc=1.0, curve=[float(v) for v in curve])
 
     n_lenses = len(cfg["dynamics"]["models_to_fit"])
 

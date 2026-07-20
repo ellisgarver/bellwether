@@ -44,6 +44,7 @@ import pandas as pd
 from mnd.clustering.jel_classifier import ClusterJELAssignment
 from mnd.clustering.similar_narratives import semantic_similarity_weighted
 from mnd.dashboard.artifacts import (
+    SCHEMA_VERSION,
     DashboardIndex,
     FitArtifact,
     IndexEntry,
@@ -448,6 +449,135 @@ def _corpus_heating(
         "baseline_weeks": baseline_weeks,
         "k": k,
     }
+
+
+def build_light_artifacts(
+    light_ids: list[int],
+    adj: dict[int, "pd.Series"],
+    clusters_df: pd.DataFrame,
+    topic_info: pd.DataFrame | None,
+    corpus_jel: dict[int, str],
+    centroids_by_cid: dict[int, Any],
+    names: dict[int, Any],
+    cfg: dict[str, Any],
+    out_dir: str | Path,
+) -> int:
+    """Write one compact ``narrative_light_<id>.json`` per sub-floor cluster (ADR-083).
+
+    The light tier: every non-noise cluster below the ADR-051 fit floor gets a
+    page-sized artifact — name (patched in by the naming job), weekly volume
+    series, model-free stage + shape facts, story card (references), JEL flag,
+    corpus-heating blob, and semantic nearest neighbours. No lens fits, no
+    press/market overlays, no lead-lag: those layers stay behind the
+    identifiability floor. The volume ships on the WEEKLY grid (``freq="W"``)
+    so ~7k artifacts stay deployable (daily grids are what make full artifacts
+    ~570 KB each).
+    """
+    from dataclasses import asdict
+
+    from mnd.dynamics.models import shape_facts as _shape_facts
+    from mnd.stages.classify import classify_stage
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    smoothing = int(cfg["dynamics"]["smoothing_window_days"])
+    heat_cfg = (cfg.get("display") or {}).get("corpus_heating") or {}
+    scope_codes = {"E", "F", "G", "H"}
+
+    # Corpus frontier across every cluster's series (same reference as staging).
+    lasts = [s.index[-1] for s in adj.values() if len(s)]
+    frontier = max(lasts) if lasts else None
+
+    # Semantic neighbours across the FULL cluster set (surfaced + light), so a
+    # light page can point at the related full narrative when one exists.
+    all_ids = sorted(centroids_by_cid)
+    sem_top: dict[int, list[int]] = {}
+    if len(all_ids) > 1:
+        mat = np.stack([np.asarray(centroids_by_cid[c], dtype=np.float32) for c in all_ids])
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        mat = mat / norms
+        id_arr = np.asarray(all_ids)
+        light_set = set(int(c) for c in light_ids)
+        rows = [i for i, c in enumerate(all_ids) if int(c) in light_set]
+        for start in range(0, len(rows), 512):
+            block = rows[start:start + 512]
+            sims = mat[block] @ mat.T
+            for bi, i in enumerate(block):
+                order = np.argsort(-sims[bi])
+                nbrs = [int(id_arr[j]) for j in order if j != i][:5]
+                sem_top[int(id_arr[i])] = nbrs
+
+    # Distinct-article daily counts (raw) for the heating blob.
+    rows = clusters_df[clusters_df["topic"] != NOISE_TOPIC]
+    days = rows.assign(_d=rows["published_at"].astype(str).str.slice(0, 10))
+    days = days[days["_d"].str.match(r"\d{4}-\d{2}-\d{2}")]
+    arts = days.drop_duplicates(subset=["topic", "article_id"])
+
+    n_written = 0
+    for cid in light_ids:
+        series = adj.get(cid)
+        if series is None or not len(series):
+            continue
+        smoothed = series.rolling(smoothing, center=True, min_periods=1).mean()
+        weekly = series.resample("W-MON", label="left").mean()
+        weekly = weekly.round(4)
+
+        stage_obj = classify_stage(cid, None, smoothed, cfg, frontier=frontier)
+        t = np.arange(len(smoothed), dtype=float)
+        facts = _shape_facts(t, smoothed.to_numpy(dtype=float))
+
+        card = build_story_card(cid, clusters_df, topic_info)
+        label = card.label
+
+        heat = None
+        grp = arts[arts["topic"] == cid]
+        if frontier is not None and not grp.empty:
+            per_day = grp.groupby("_d").size()
+            counts = pd.Series(
+                per_day.to_numpy(dtype=float), index=pd.to_datetime(per_day.index)
+            ).sort_index()
+            h = _corpus_heating(
+                counts, frontier,
+                recent_weeks=int(heat_cfg.get("recent_weeks", 16)),
+                baseline_weeks=int(heat_cfg.get("baseline_weeks", 52)),
+                k=float(heat_cfg.get("k_sigma", 2.0)),
+                min_articles=int(heat_cfg.get("min_articles", 3)),
+            )
+            if h and h.get("is_heating"):
+                heat = h
+
+        nm = names.get(cid)
+        jel_code = corpus_jel.get(int(cid))
+        payload = {
+            "schema_version": SCHEMA_VERSION,
+            "tier": "light",
+            "cluster_id": int(cid),
+            "label": label,
+            "label_human": getattr(nm, "title", None),
+            "description": getattr(nm, "description", None),
+            "stage": stage_obj.stage,
+            "stage_detail": _json_safe(stage_obj.detail),
+            "shape_facts": {k: float(v) for k, v in facts.items()},
+            "volume": asdict(_series_artifact(weekly, freq="W")),
+            "card": card.to_dict(),
+            "jel": (
+                {"code": jel_code, "in_scope": jel_code[0] in scope_codes}
+                if jel_code else None
+            ),
+            "similar": {"semantic": sem_top.get(int(cid), []),
+                        "lexical": [], "morphological": []},
+            "heating": heat,
+            "fits": [],
+            "mediacloud": None,
+            "markets": None,
+        }
+        (out / f"narrative_light_{int(cid)}.json").write_text(
+            json.dumps(_json_safe(payload), ensure_ascii=False, allow_nan=False)
+        )
+        n_written += 1
+    log.info("Wrote %d light-tier narrative artifacts to %s", n_written, out)
+    return n_written
 
 
 def write_cluster_directory(

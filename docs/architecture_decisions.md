@@ -4046,6 +4046,271 @@ cited default or absent, and none is tuned toward any target).
 
 ---
 
+## ADR-078: Weekly fit grid and a Bass launch-time parameter
+
+- **Status**: Accepted
+- **Date**: 2026-07-16
+
+### Context
+
+The three lenses were fit to the 7-day-smoothed *daily* series. Across the 348
+surfaced narratives that grid left SIR converged (R² ≥ 0.3) on 8%, Bass on 2%
+(75% with negative R²), and the logistic on 1%: the day-to-day residual spikes
+in single-digit count data dominate the variance no smooth lifecycle curve can
+express, so R² was bounded near zero for structurally correct shapes. The
+display bars are already weekly means, so the reader was shown one series and
+the R² judged another. Bass had a second, structural handicap: unlike SIR
+(peak_time) and the logistic (t0), the Bass curve has no location parameter —
+it was pinned to the fit window's first day. Its SFL init rates are also per
+adoption *period*, which taken per-day start the optimizer on a two-week
+diffusion regardless of the window.
+
+### Decision
+
+Fit all lenses on weekly means (7-day blocks of the smoothed series, block
+centers in day units, so parameters stay per-day), matching the display, the
+staging window, and the press series' native resolution. Evaluate the fitted
+curve back on the daily grid for display alignment; compute R²/AICc on the
+weekly points the fit saw. The best-third window search runs on week indices.
+Series shorter than 10 weekly points keep the daily grid. Give Bass a fourth
+parameter, ``t_launch`` (volume zero before it) — the standard left-truncation
+treatment (cf. the virtual Bass model, Jiang, Bass & Bass 2006) — and rescale
+the SFL init rates so the implied peak lands on the observed peak, the same
+data-scaled-init treatment SIR already had. Fit-cache signatures gain a grid
+tag, so all lens caches roll over on the next bake.
+
+### Consequences
+
+- On the current baked series: SIR 8% → 47% converged (median R² 0.021 → 0.214),
+  Bass 2% → 32% (negative-R² share 75% → 10%), logistic 1% → 13%.
+- The logistic stays mostly gray by design — a monotone S-curve cannot describe
+  rise-and-fall shapes; it converges only on rising/plateau windows.
+- ~7× fewer points per fit; the best-third sweep is proportionally cheaper.
+
+### Amendment (2026-07-19): window anchors 6 → 10
+
+Headroom experiments on a 40-narrative sample tested four further levers.
+Raising the best-third search anchors from 6 to 10 lifted SIR converged
+33%→42% and Bass 23%→33% — pure search resolution, no new methodology; adopted
+as ``dynamics.fit_window_n_anchors: 10``. Rejected with evidence: multi-start
+optimization (+0–2 pts; the data-scaled inits already find the basin) and
+fitting the logistic to cumulative attention (R² 0.99 on 100% of narratives —
+trivially high on a smooth monotone target, carrying no discriminative
+information; the same fits score ~0.03 in incidence space). A quarterly
+envelope pre-smooth (SIR→57%, Bass→50%) was declined deliberately: it adds an
+unanchored smoothing parameter and changes what the lens claims to describe
+(the methodology is settled; ADR-040 discipline).
+
+---
+
+## ADR-079: Last log-slope reads the latest major wave, not the tail
+
+- **Status**: Accepted
+- **Date**: 2026-07-16
+
+### Context
+
+The "last log-slope" (stage_detail.trend_slope) was a Theil-Sen slope over the
+4-week window ending at the last nonzero day. Most narratives end in a sparse
+straggler tail — a lone late article inside weeks of silence — so that window
+was mostly zeros, and the median pairwise slope of a mostly-zero window is
+exactly 0: 93% of surfaced narratives read 0.000/day. Even on dense endings, a
+short article burst leaves a plateau-then-cliff shape after 7-day smoothing,
+whose Theil-Sen slope is also exactly 0.
+
+### Decision
+
+Report the endpoint log1p rate of the latest *major wave*'s closing limb.
+A major wave is a local maximum at half the global peak or higher (the
+full-width-half-max convention shape_facts already uses, which no lone
+straggler bump reaches); its end is the first later day below
+``stages.dormant_peak_fraction`` of the wave's own height (the existing
+stable/dormant line); the slope is (log1p(y_end) − log1p(y_peak))/(days), the
+wave's average exponential decay rate on already-smoothed endpoints. A wave
+peaking at the series edge reports the climb into the peak instead. No new
+constants — both thresholds are reused conventions.
+
+### Consequences
+
+- 0/348 narratives now read exactly 0 (was 93%); 98% show a negative closing
+  rate (median −0.056/day), 2% a positive one (still rising at the edge).
+- The number now answers "how fast did the last big wave fade?" instead of
+  describing the silence around a straggler.
+
+---
+
+## ADR-080: Naming v6 — story slugs, dated-title context, arc descriptions
+
+- **Status**: Accepted
+- **Date**: 2026-07-16
+
+### Context
+
+v5 titles still slipped into vague category boxes ("Work home arrangements",
+"Iraqi political landscape") and typographic errors kept growing the
+after-the-fact fixup lists. The namer saw only c-TF-IDF keywords and three
+320-char central body excerpts — never the human-written article *titles*, the
+strongest naming signal the corpus carries, and nothing about the story's arc.
+Naming is display-only (ADR-056), so "lookahead" via the model's world
+knowledge is not a bias concern — knowing the story helps name it.
+
+### Decision
+
+Prompt v6 (cache version 6): the title is framed as a wire-desk story slug —
+actor plus action/dispute — with explicit vague-box→story contrast examples;
+descriptions become one 4–6-sentence paragraph covering what, who, the arc over
+the span, and why it mattered. The model may use general knowledge to recognize
+the event the material tracks, but never against the dates/titles. The user
+message becomes a structured JSON object carrying dated article titles from the
+three story-card panels (earliest / most central / most recent), the article
+count, span, and peak date, plus longer central excerpts (700 chars). Signature
+adds central+earliest titles; newest titles, count, and peak stay out of the
+key (they roll forward weekly — ADR-070 discipline). ``_parse_json_object``
+parses the first complete object via ``raw_decode`` so trailing 7B-model junk
+no longer kills a name.
+
+### Consequences
+
+- All names regenerate on the next bake (prompt_version 6).
+- A/B on the production model (qwen2.5:7b) shows materially richer, arc-aware
+  descriptions and more specific titles, but the 7B model remains the quality
+  floor: occasional truncated/garbled JSON and factual sloppiness (attributing
+  a cluster's full span to one person's tenure). If v6-on-7B still misses the
+  bar, the sanctioned next step is ``display.naming.backend: anthropic``
+  (Claude Haiku, schema-constrained output) — display layer is exempt from the
+  no-paid-dependency rule (ADR-056), and the committed cache makes the cost a
+  one-time bake plus weekly deltas.
+
+---
+
+## ADR-082: Per-document furniture cleaning before embedding
+
+- **Status**: Accepted; activated 2026-07-20 with the manual clean rebuild
+- **Date**: 2026-07-19 (activated 2026-07-20)
+
+### Context
+
+Clusters were forming around document *register* rather than content: BIS
+curated speech/interview reprints open with a byline title ("Jean-Claude
+Trichet: Interview with FOCUS") and an attribution preamble, and
+``build_chunk_text`` prepends the title to **every** chunk — so the
+speaker/format signal rides on 100% of a document's chunks and pulls all such
+reprints together regardless of what was said. The "Jean-Claude Trichet
+interviews" narrative is really "ECB officials' press interviews", clustered
+by format (its latest members are Cœuré/Asmussen/Mersch interviews). PDF
+sources (CBO, FSOC, testimony) are extracted with raw ``pypdf``, which keeps
+page numbers, running headers/footers, and reference lists inline — noise in
+every affected embedding. The goal is clusters formed on the CONTENT of
+documents, not on who spoke or which template printed them.
+
+### Decision
+
+A per-document cleaning pass (``mnd.filtering.furniture``, config
+``filtering.furniture``) runs in the filter stage before the ADR-054
+cross-document boilerplate strip. **Byline handling is source-scoped** (only
+curated speech reprints put the speaker in the title; BIS is the one basis-set
+source that does); **everything else runs corpus-wide on every source's body**:
+
+1. Byline titles are split with double evidence (name-shaped colon prefix AND
+   the surname appearing in the document's opening attribution): the speaker
+   moves to the ``author`` field (BIS ingestion already populates it where
+   available; never overwritten), the title keeps the substance. Ordinary
+   colon titles ("Inflation: the road ahead") and multi-word place prefixes
+   ("New York: fiscal strain") pass untouched. Scoped to ``byline_sources``.
+2. Attribution preambles (repeated title + "Interview with Mr X, President of
+   the ..., <date>." header) are stripped from the body start. Byline-scoped.
+3. **Leading furniture (corpus-wide, newline-agnostic)**: a verbatim leading
+   title repeat, a leading publication-date stamp ("January 21, 2010",
+   "2010-01-21", optionally "Published:"), and a leading editorial-credit
+   sentence ("Editors' note: …", "Disclaimer: …") bounded to ~300 chars. This
+   is the corpus's most common furniture — e.g. ~3.9k CBO cost-estimate bodies
+   open with a bare date stamp, OFR bodies with "Title Published: <date>",
+   VoxEU columns with "Editors' note:". Line-based stripping cannot reach these
+   because web/PDF extraction often yields a single-line body.
+4. Line furniture (corpus-wide): bare page numbers, "Page N of M", short lines
+   repeating ≥3× within one document (running headers/footers), standalone
+   metadata/citation lines (JEL, keywords, DOI/URL, "Available at",
+   media-contact, bare email — whole-line only), and a trailing
+   References/Notes/Bibliography section when its heading sits in the last 40%
+   (standard IR practice; same family as Kohlschütter et al.).
+
+Speaker, dates, and organization metadata survive in the Article schema —
+nothing is deleted from the record, only from the text the embedder sees. A
+dry-run auditor (``scripts/experiments/furniture_audit.py``) previews the pass
+per-source on the real corpus, mutating nothing, so the cleaning is verified
+before the irreversible re-embed.
+
+**The pass ships disabled.** Cleaning changes chunk text, which changes the
+``(chunk_id, text_sha1)`` embedding-cache key, so affected documents re-embed
+on the next run. The weekly ``update`` job is CPU-only (ADR-063); activation
+must coincide with a scheduled GPU re-embed + full re-cluster on RCC. Because
+the cache is content-keyed, only changed documents re-embed — a partial
+re-embed, not a corpus rebuild.
+
+### Consequences
+
+- After activation + re-cluster, register-attached clusters should dissolve
+  into content clusters; the effect is measurable (source-purity, person-terms
+  in c-TF-IDF, duration distribution) in the planned clustering A/B.
+- The embedding instruction prefix is untouched: the register bias lives in
+  the TEXT (byline on every chunk), not in the one-line instruction, which
+  matches the Qwen3-Embedding model card's prescribed format and is neutral.
+  Removing or rewording the instruction is a separate ablation the clustering
+  A/B can carry cheaply — with the guard that the instruction is deliberately
+  NOT part of the embedding-cache key, so any instruction change requires an
+  explicit cache clear or it will silently reuse stale vectors.
+
+---
+
+## ADR-083: Tiered narrative pages — a light tier for sub-floor clusters
+
+- **Status**: Accepted
+- **Date**: 2026-07-19
+
+### Context
+
+The ADR-051 fit floor (42 articles) gated not just the lens fits but the whole
+narrative page: 348 surfaced narratives cover 28.9k of 91.8k clustered articles
+(31%), while 2,352 hidden clusters in the 10–41-article band alone hold 42k
+articles — more than the entire surfaced set. The directory listed them as bare
+titles with nothing behind the link. The floor's identifiability rationale
+(≥10 observations per lifecycle-curve parameter) justifies withholding *fits*,
+not withholding a page.
+
+### Decision
+
+Two tiers. Full analysis stays at ≥42 articles, unchanged. Every other
+non-noise cluster (1–41 articles) gets a **light page** from a compact
+``narrative_light_<id>.json``: display name + description (patched in by the
+naming job, now grounded on the cluster's story CARD — dated titles + excerpts,
+the same v6 inputs as surfaced narratives, replacing terms-only keyword mush),
+weekly volume chart, date span, stage + shape-facts columns (model-free, cheap
+at any size), story-card article references, JEL flag, corpus-heating badge
+(baked, since the daily grid never ships), and semantic related-narratives
+(centroid cosine across the full cluster set, so light pages link up to full
+narratives). Explicitly absent, with an on-page note: lens fits, press/market
+overlays, and lead–lag (identifiability floor and per-cluster API cost).
+
+Size discipline: light volumes ship on the WEEKLY grid — the daily grids are
+what make full artifacts ~570 KB; a light page builds to ~15 KB, so ~6.8k
+pages add ~100–150 MB to the built site (measured), inside GitHub Pages
+limits. The directory links every cluster (a ``linked`` flag guards against
+pre-light bakes); forming clusters on the emerging page link to their light
+pages. ``naming_input_from_card`` is the single constructor both naming paths
+share, keeping cache signatures identical between the bake and the name job.
+
+### Consequences
+
+- The site exposes 100% of the clustered corpus instead of 31%, at ~7.2k
+  static pages (build time ~1–3 min).
+- First post-change name job generates ~6.8k card-grounded names — more than
+  one 6-hour job at 12B speeds; the run is cache-incremental and resumes
+  across submissions (existing name_rcc.sh behaviour).
+- The stage/heating machinery runs unchanged on light clusters (model-free);
+  nothing in the analysis layer changed — this is presentation-tier only.
+
+---
+
 ## ADR-NNN: <short title>
 
 - **Status**: Proposed | Accepted | Deprecated | Superseded by ADR-MMM

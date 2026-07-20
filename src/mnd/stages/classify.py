@@ -98,6 +98,67 @@ def _recent_faded(
     return bool(ratio < fraction), ratio, peak_level
 
 
+def _latest_wave_slope(y: np.ndarray, wave_end_fraction: float) -> float | None:
+    """Theil-Sen log-slope (per day) of the latest major wave's closing limb.
+
+    The "last log-slope" the site reports should describe how the narrative's
+    latest major trend was moving — the decay of its final bell, or the climb of
+    a still-rising one — not the flat silence around a straggler article.
+
+    Method, reusing only conventions the pipeline already carries:
+    - A *major wave* is a local maximum reaching at least half the global peak —
+      the same full-width-half-max convention as ``shape_facts``'s wave count.
+      Lone straggler articles (smoothed bumps far below half-peak) never qualify.
+    - The wave's *end* is the first later day the series falls below
+      ``wave_end_fraction`` of that wave's own height — the same definitional
+      line as the stable/dormant split (``stages.dormant_peak_fraction``) — or
+      the last day of the series if it never does.
+    - The slope is the endpoint log1p rate over the closing limb:
+      (log1p(y_end) − log1p(y_peak)) / (end − peak). The endpoints are already
+      7-day-smoothed, so this is the wave's average exponential decay rate. A
+      rank-based (Theil-Sen) slope degenerates to exactly 0 on the plateau-then-
+      cliff shape a short article burst leaves after smoothing — the median
+      pairwise slope over a flat top is zero however fast the cliff — which is
+      how ~half the corpus read 0.000/day.
+    - When the wave peaks at the series edge (a narrative still at its high),
+      the ascending limb into the peak is used instead, from the last prior
+      crossing of the same fraction line.
+
+    Returns None when no slope can be resolved (all-zero series or a degenerate
+    limb), letting the caller fall back to the recent-window Mann-Kendall slope.
+    """
+    from scipy.signal import find_peaks
+
+    y = np.asarray(y, dtype=float)
+    if y.size < 4 or float(np.max(y)) <= 0.0:
+        return None
+
+    half = float(np.max(y)) / 2.0
+    peaks, _ = find_peaks(y, height=half)
+    # find_peaks ignores boundary maxima; fall back to the global argmax so a
+    # series still rising at its edge (or a single-hump series) keeps a wave.
+    peak = int(peaks[-1]) if len(peaks) > 0 else int(np.argmax(y))
+    wave_height = float(y[peak])
+    line = wave_end_fraction * wave_height
+
+    below = np.nonzero(y[peak + 1:] < line)[0]
+    end = peak + 1 + int(below[0]) if below.size > 0 else y.size - 1
+
+    def _endpoint_rate(i: int, j: int) -> float:
+        return float(
+            (np.log1p(max(y[j], 0.0)) - np.log1p(max(y[i], 0.0))) / float(j - i)
+        )
+
+    if end > peak:
+        return _endpoint_rate(peak, end)
+    # Wave peaks at/near the series edge: report the climb into it instead.
+    prior_below = np.nonzero(y[:peak] < line)[0]
+    start = int(prior_below[-1]) + 1 if prior_below.size > 0 else 0
+    if peak <= start:
+        return None
+    return _endpoint_rate(start, peak)
+
+
 def classify_stage(
     cluster_id: int | str,
     fit_result: Any,          # FitResult from dynamics.fitting (display lens only)
@@ -140,21 +201,14 @@ def classify_stage(
 
     mk = mann_kendall(recent, alpha=alpha)
 
-    # Latest-active slope: Theil-Sen on log1p(y) over the 4-week window ending at
-    # the last nonzero day.  For dormant narratives the absolute tail is all zeros
-    # (slope=0 regardless of exit shape); this reports the actual trend at the end
-    # of the narrative's last active period instead.
-    from scipy.stats import theilslopes
-    nonzero_idx = np.nonzero(y)[0]
-    if nonzero_idx.size > 0:
-        last_active = int(nonzero_idx[-1])
-        w_latest = min(w, last_active + 1)
-        latest_win = y[last_active - w_latest + 1 : last_active + 1]
-        la_idx = np.arange(len(latest_win), dtype=float)
-        latest_slope = float(
-            theilslopes(np.log1p(np.maximum(latest_win, 0.0)), la_idx)[0]
-        )
-    else:
+    # Latest-active slope: the log-trend of the narrative's last *major wave*,
+    # not of its absolute tail. A fixed window ending at the last nonzero day is
+    # dominated by zeros for the sparse straggler tail most narratives carry (a
+    # lone late article inside 4 weeks of silence), and the Theil-Sen median of
+    # a mostly-zero window is exactly 0 — which made ~90% of narratives read
+    # 0.000/day regardless of how their story actually ended.
+    latest_slope = _latest_wave_slope(y, dormant_fraction)
+    if latest_slope is None:
         latest_slope = mk["slope"]
 
     faded, recent_peak_ratio, peak_level = _recent_faded(y, w, dormant_fraction)

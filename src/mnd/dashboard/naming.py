@@ -47,6 +47,17 @@ class NamingInput:
     excerpts: list[str]
     date_range: tuple[str, str] | None = None
     sources: list[str] = field(default_factory=list)  # top source ids, most frequent first
+    # v6 context (ADR-056): dated article titles across the lifespan — the
+    # strongest naming signal the corpus carries (headlines written by humans).
+    # Each entry is "YYYY-MM-DD — title". central/earliest enter the cache
+    # signature; newest do NOT (they roll forward every weekly merge, and a few
+    # new arrivals must not regenerate a settled title — same rationale as
+    # excluding the date span, ADR-070).
+    central_titles: list[str] = field(default_factory=list)
+    earliest_titles: list[str] = field(default_factory=list)
+    newest_titles: list[str] = field(default_factory=list)
+    n_articles: int | None = None    # excluded from the signature (grows weekly)
+    peak_date: str | None = None     # excluded from the signature (can shift)
 
 
 @dataclass(frozen=True)
@@ -55,86 +66,129 @@ class NarrativeName:
     description: str
 
 
+def naming_input_from_card(
+    cluster_id: int, terms: list[str], card: dict[str, Any]
+) -> NamingInput:
+    """Build the v6 NamingInput from a story-card dict (ADR-061/080).
+
+    The single constructor both naming paths share — the ``analyze`` bake (from
+    ``StoryCard.to_dict()``) and the post-bake ``name`` job (from the baked
+    ``card`` JSON) — so their cache signatures are identical and every name is
+    generated exactly once wherever the namer runs.
+    """
+    def _dated(panel: Any) -> list[str]:
+        out = []
+        for a in panel or []:
+            title = str(a.get("title") or "").strip()
+            if not title:
+                continue
+            day = str(a.get("published_at") or "")[:10]
+            out.append(f"{day} — {title}" if day else title)
+        return out
+
+    panels = card.get("central_articles") or card.get("representative_articles") or []
+    dr = card.get("date_range")
+    return NamingInput(
+        cluster_id=int(cluster_id),
+        terms=[str(t) for t in terms],
+        excerpts=[a["excerpt"] for a in panels if a.get("excerpt")],
+        date_range=tuple(dr) if dr else None,
+        sources=[s for s, _ in (card.get("source_mix") or [])[:4]],
+        central_titles=_dated(panels),
+        earliest_titles=_dated(card.get("earliest_articles")),
+        newest_titles=_dated(card.get("newest_articles")),
+        n_articles=int(card.get("n_articles") or 0) or None,
+        peak_date=card.get("peak_date"),
+    )
+
+
 # System prompt is part of the cache key (via prompt_version) — changing it
 # without bumping display.naming.prompt_version would silently reuse stale titles.
 _SYSTEM = (
-    "You write titles and descriptions for clusters of economic-policy and "
-    "financial writing, shown on a public educational dashboard that tracks how such "
-    "narratives rise and fade. You are given a cluster's defining keywords, and "
-    "usually short excerpts from its most central documents plus its active date "
-    "span.\n\n"
+    "You are a news editor naming tracked stories for a public dashboard of "
+    "macro-financial discourse. Each story is a cluster of related institutional "
+    "and academic writing (Fed, IMF, BIS, CBO, think tanks, NBER) followed over "
+    "years. You receive a JSON object with the cluster's machine-extracted "
+    "keywords, its top sources, its active date span and peak date, dated titles "
+    "of articles from across its life (earliest, most central, most recent), and "
+    "excerpts from its most central documents.\n\n"
     "Write two things:\n"
-    "- title: a short, specific noun phrase naming what the writing is about — a "
-    "headline, not a sentence, and not a bare keyword. Name the institution, "
-    "country, person, or event when the material makes it identifiable.\n"
-    "- description: 2 to 4 plain, concrete sentences on what the writing covers and, "
-    "where the material itself shows it, why it mattered — written for an interested "
-    "non-expert.\n\n"
-    "Rules:\n"
-    "- Sentence case for the title, always: capitalize the first word, proper "
-    "nouns, and acronyms — nothing else. Write 'Regional bank deposit runs', "
-    "never 'Regional Bank Deposit Runs'. This holds for every subject, economic "
-    "or not. If every word of your draft title starts with a capital letter, "
-    "rewrite it in sentence case before answering.\n"
-    "- Be as specific as the material allows. If the keywords or excerpts identify "
-    "a country, region, institution, or named actor, include it in the title: "
-    "'Chinese exchange rate reform', 'ECB asset purchases', 'CBO budget "
-    "projections', 'Indian monetary policy'. A generic title ('monetary policy', "
-    "'economic uncertainty') is only acceptable when the material genuinely covers "
-    "multiple countries or institutions without a clear center.\n"
-    "- Ground everything in the supplied material. Do not add events, places, dates, "
-    "numbers, causes, or outcomes that are not in it. Name a well-known event only "
-    "when the excerpts confirm it.\n"
+    "- title: a wire-desk story slug — a specific noun phrase that tells a reader "
+    "what the story IS: the actor plus the action, dispute, or subject. 'US "
+    "sanctions against Hezbollah', 'ECB press conferences on the inflation "
+    "outlook', 'Regional bank deposit runs', 'CBO scoring of pandemic relief "
+    "bills'. NOT a vague category box: 'Work-home arrangements', 'Iraqi political "
+    "landscape', 'Economic uncertainty' tell the reader nothing — every draft "
+    "must answer 'who is doing what, or what is being debated?'. Around 4 to 8 "
+    "words.\n"
+    "- description: one paragraph of 4 to 6 plain, concrete sentences for an "
+    "interested non-expert: what the writing covers, who the main actors are, "
+    "how the story ran over its span (what set it off where the material shows "
+    "it, what it centered on at its height, and whether it faded or continues), "
+    "and why it mattered. Write about the subject itself, never about the "
+    "collection: open with the subject ('Interviews with X tracked...', 'The "
+    "shale boom transformed...'), never with 'This collection', 'This writing "
+    "cluster', 'This material', or 'Writing from X tracks'.\n\n"
+    "Grounding:\n"
+    "- The dated article titles are your strongest evidence; the keywords are "
+    "noisy machine output. Weigh titles and excerpts over keywords.\n"
+    "- You may use your knowledge of economic history to recognize the story the "
+    "material tracks — if dated titles about bond-market selloffs cluster in mid-"
+    "2013, it is the taper tantrum and you should say so. But never force an "
+    "event the dates or titles contradict, and never import facts, numbers, or "
+    "outcomes the material neither contains nor clearly points to.\n"
+    "- A cluster can drift: early and late articles may sit off the core story. "
+    "Name the story that carries the bulk of the material (the central titles "
+    "and excerpts), not a stray outlier.\n"
+    "- The active span is the coverage window, not any one person's tenure. "
+    "Never attribute the whole span to a single actor: if the dated titles show "
+    "an officeholder's era ending and successors continuing the story, say so "
+    "rather than stretching one name across the full range.\n"
     "- If the material does not say why something happened, leave the why out — "
-    "no 'likely', 'possibly', or 'may have been influenced by' padding. Never "
-    "write that something is unspecified, implied, or not stated; just leave it "
-    "out.\n"
-    "- When no excerpts are supplied, title from the keywords alone. Use whatever "
-    "country, institution, or named actor the keywords identify. Do not invent "
-    "relationships or actions between keywords. Connect them into a natural phrase; "
-    "never output a bare list.\n"
-    "- Keywords are machine-extracted and can be malformed — run together "
-    "('officetoresidential') or oddly split. Write the title in normal English "
-    "with correct spacing and hyphens ('office-to-residential conversions').\n"
-    "- Never copy URLs, file paths, or protocol strings (http, https, www, .gov, "
-    ".pdf) into the title. If a keyword looks like a URL fragment or document ID, "
-    "ignore it.\n"
-    "- When a person's name includes a middle initial, capitalize it and add a "
-    "period: 'William C. Dudley', not 'William c dudley'.\n"
-    "- Proper nouns always carry standard English capitalization: countries, cities, "
-    "people, organizations, currencies, and named laws (Dodd-Frank, CARES Act). "
-    "Executive Orders are written 'EO 13224', never 'eo 13224'.\n"
-    "- If the material is not about economics or finance, name it plainly for what it "
-    "actually is rather than forcing an economic framing.\n"
-    "- Neutral and factual: no hype, no editorializing, no forecasting, no advice.\n"
+    "no 'likely', 'possibly', 'may have' padding, and never write that something "
+    "is unspecified or not stated.\n"
+    "- When only keywords are supplied, stay modest: connect them into a natural, "
+    "grammatical phrase using whatever country, institution, or actor they "
+    "identify; do not invent relationships between them.\n"
+    "- If the material is not about economics or finance, name it plainly for "
+    "what it is rather than forcing an economic framing.\n\n"
+    "Form:\n"
+    "- Sentence case for the title, always: capitalize the first word, proper "
+    "nouns, and acronyms — nothing else. 'Regional bank deposit runs', never "
+    "'Regional Bank Deposit Runs'. If every word of your draft starts with a "
+    "capital, rewrite it before answering.\n"
+    "- No commas, colons, semicolons, quotation marks, or trailing period in the "
+    "title, and no date ranges in it (the span is shown separately). A year may "
+    "appear only when it names the event itself ('2013 taper tantrum').\n"
+    "- Standard English capitalization for proper nouns everywhere: countries, "
+    "people, organizations, currencies, named laws (Dodd-Frank, CARES Act), "
+    "'EO 13224', 'William C. Dudley'.\n"
+    "- Keywords can be malformed — run together ('officetoresidential') or "
+    "oddly split. Write normal English with correct spacing and hyphens "
+    "('office-to-residential conversions'). Never copy URL fragments, file "
+    "paths, or document IDs into the title.\n"
+    "- Neutral and factual: no hype, no editorializing, no forecasting.\n"
     "- Write about the subject directly. Never refer to 'this narrative', 'this "
-    "cluster', 'these articles', 'the writing', 'the material', 'the excerpts', "
-    "or 'the dashboard', and never open with 'Explores' or 'In the world of'. "
-    "Vary how you open across descriptions.\n"
-    "- No quotation marks around the title, no trailing period on it, no markdown "
-    "anywhere.\n"
-    "Return strictly the requested JSON.\n\n"
-    "Example (with excerpts, named institution):\n"
-    '{"title": "Federal Reserve rate normalization cycle", "description": '
-    '"The Federal Reserve began raising the federal funds rate from near zero '
-    "following a decade of accommodation. Each FOMC statement weighed labor market "
-    "tightening against inflation expectations, and the pace of hikes shaped "
-    'borrowing costs across the economy."}\n'
-    "Example (with excerpts, named event):\n"
-    '{"title": "Municipal bond market stress, 2010\\u20132011", "description": '
-    '"State and local governments faced rising borrowing costs as investors '
-    "questioned the safety of municipal debt. Analysts weighed default risk "
-    "against the market's long record of low losses, and the debate shaped how "
-    'pension shortfalls were reported."}\n'
-    "Example (keywords only, named country):\n"
-    '{"title": "Indian banking sector asset quality", "description": '
-    '"Non-performing loans and provisioning requirements at Indian commercial '
-    'banks, and the RBI\'s responses to asset-quality stress."}\n'
-    "Example (keywords only, not economics):\n"
-    '{"title": "Conference planning and event logistics", "description": '
-    '"Professional conferences are organized around registration, hotel '
-    'arrangements, agendas, and keynote sessions."}\n'
-    "Example (keywords only, truly cross-institutional — modest is correct here):\n"
+    "cluster', 'these articles', 'the material', or 'the dashboard'; never open "
+    "with 'Explores' or 'In the world of'. Vary how descriptions open.\n"
+    "- Return strictly the requested JSON; no markdown.\n\n"
+    "Title contrast — vague box vs. story:\n"
+    "- 'Work home arrangements' -> 'Remote work and the future of office demand'\n"
+    "- 'Iraqi political landscape' -> 'Iraq's reconstruction and oil politics'\n"
+    "- 'Monetary policy communication' -> 'Forward guidance at the zero lower bound'\n"
+    "- 'Governor press conferences' -> 'Bank of England guidance after the Brexit vote'\n\n"
+    "Example (full material):\n"
+    '{"title": "Federal Reserve rate normalization after 2015", "description": '
+    '"After seven years of near-zero rates, the Federal Reserve began raising the '
+    "federal funds rate in December 2015 and debated the pace of tightening for "
+    "the rest of the decade. FOMC statements and speeches weighed a firming labor "
+    "market against inflation that kept undershooting the 2% target. Regional Fed "
+    "presidents argued publicly over how much slack remained, and each meeting's "
+    "language was parsed for the timing of the next hike. The path of hikes set "
+    "borrowing costs across the economy and became the benchmark for when "
+    '\\"normal\\" policy had returned. The debate wound down as rates plateaued in '
+    '2019."}\n'
+    "Example (keywords only — modest is correct):\n"
     '{"title": "Central bank independence debates", "description": '
     '"Recurring arguments over how much political influence central banks should '
     'face, drawn from multiple countries and institutions."}'
@@ -353,6 +407,16 @@ _FIXUPS = {
 # Strip a trailing possessive so proper-noun lookup matches ("china's" -> "china").
 _POSSESSIVE = re.compile(r"['’]s$")
 
+# Collection meta-language the prompt forbids at the start of a description
+# ("This collection of interviews tracks…"). Detectable deterministically, so a
+# violation triggers one corrective retry (ADR-080) instead of shipping.
+_META_OPEN_RE = re.compile(
+    r"^\s*(?:this|these)\s+(?:collection|cluster|writing|writings|material|"
+    r"articles|documents|records|group|set|body)\b"
+    r"|^\s*writing\s+from\b",
+    re.IGNORECASE,
+)
+
 # Trailing date stamp the models copy out of the span ("…, 2010-2026", "… 2018",
 # "…, 2022-23", "…2011-present"). The date span is shown separately on every card,
 # so it is redundant in the title. Only a *trailing* date is stripped, never a
@@ -479,29 +543,41 @@ _KEYWORD_ARTIFACT_RE = re.compile(
 
 
 def _build_user(inp: NamingInput, title_words: int) -> str:
-    """Render one cluster's representation into the user message."""
+    """Render one cluster's representation into the user message (v6: JSON in)."""
     clean_terms = [t for t in inp.terms if not _KEYWORD_ARTIFACT_RE.search(t)]
-    lines = [f"Keywords: {', '.join(clean_terms[:15])}"]
+    payload: dict[str, Any] = {"keywords": clean_terms[:15]}
     if inp.sources:
-        lines.append(f"Sources: {', '.join(inp.sources[:4])}")
+        payload["sources"] = inp.sources[:4]
+    if inp.n_articles:
+        payload["n_articles"] = int(inp.n_articles)
     if inp.date_range:
-        lines.append(f"Active: {inp.date_range[0]} to {inp.date_range[1]}")
+        payload["active"] = {"from": inp.date_range[0], "to": inp.date_range[1]}
+        if inp.peak_date:
+            payload["active"]["peak"] = inp.peak_date
+    titles: dict[str, list[str]] = {}
+    if inp.earliest_titles:
+        titles["earliest"] = inp.earliest_titles[:4]
+    if inp.central_titles:
+        titles["most_central"] = inp.central_titles[:4]
+    if inp.newest_titles:
+        titles["most_recent"] = inp.newest_titles[:4]
+    if titles:
+        payload["article_titles"] = titles
     if inp.excerpts:
-        lines.append("Central excerpts:")
-        for i, ex in enumerate(inp.excerpts[:3], 1):
-            lines.append(f"{i}. {ex.strip()[:500]}")
-    else:
-        # directory/terms-only path (ADR-073): no excerpts exist for sub-floor
-        # clusters — say so explicitly so the model stays modest instead of
-        # inferring a specific event from keyword resemblance alone.
+        payload["central_excerpts"] = [ex.strip()[:700] for ex in inp.excerpts[:3]]
+    lines = [json.dumps(payload, ensure_ascii=False, indent=1)]
+    if not inp.excerpts and not titles:
+        # directory/terms-only path (ADR-073): no excerpts or titles exist for
+        # sub-floor clusters — say so explicitly so the model stays modest
+        # instead of inferring a specific event from keyword resemblance alone.
         lines.append(
-            "No excerpts are available for this cluster; ground the title in the "
-            "keywords alone and stay general."
+            "Only keywords are available for this cluster; ground the title in "
+            "them alone and stay general."
         )
     lines.append(
-        "\nReturn JSON with two keys: title (a short, specific phrase — roughly "
+        "\nReturn JSON with two keys: title (a specific story slug — roughly "
         f"{title_words} words, sentence case, never a full sentence, no trailing "
-        "period) and description (2 to 4 plain, concrete sentences)."
+        "period) and description (one paragraph, 4 to 6 plain, concrete sentences)."
     )
     return "\n".join(lines)
 
@@ -511,17 +587,20 @@ def _signature(
 ) -> str:
     """Content hash of everything that determines the generated title.
 
-    Keyed on the substance of the representation (terms, excerpts, sources) plus
-    the model, prompt version, and title-length knob. The date span is
-    deliberately excluded (ADR-070): a continuing narrative extends its span
-    every weekly merge, and that alone must not regenerate its title — names
-    change only when the substance does.
+    Keyed on the substance of the representation (terms, excerpts, sources,
+    central/earliest article titles) plus the model, prompt version, and
+    title-length knob. The date span, peak date, article count, and *newest*
+    titles are deliberately excluded (ADR-070): a continuing narrative extends
+    all of these every weekly merge, and that alone must not regenerate its
+    title — names change only when the substance does.
     """
     payload = json.dumps(
         {
             "t": inp.terms,
             "e": inp.excerpts,
             "s": list(inp.sources),
+            "ct": list(inp.central_titles),
+            "et": list(inp.earliest_titles),
             "m": model,
             "v": prompt_version,
             "w": max_title_words,
@@ -579,12 +658,18 @@ def _parse_json_object(text: str) -> dict[str, Any]:
     """Extract the first JSON object from free-form model output.
 
     Open models are not schema-constrained, so they may wrap the JSON in prose or
-    a code fence. Slice from the first ``{`` to the last ``}`` and parse.
+    a code fence, or append garbage after the closing brace (7B-class models
+    occasionally emit trailing tool-call fragments). ``raw_decode`` from the
+    first ``{`` parses the first *complete* object and ignores anything after
+    it, where a first-``{``-to-last-``}`` slice chokes on the trailing junk.
     """
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
+    start = text.find("{")
+    if start == -1:
         raise ValueError(f"no JSON object in model output: {text[:120]!r}")
-    return json.loads(text[start : end + 1])
+    obj, _ = json.JSONDecoder().raw_decode(text[start:])
+    if not isinstance(obj, dict):
+        raise ValueError(f"model output is not a JSON object: {text[:120]!r}")
+    return obj
 
 
 class LocalHFNamer:
@@ -637,7 +722,7 @@ class OpenAICompatNamer:
     """Open-model naming via an OpenAI-compatible chat endpoint (ADR-067).
 
     The default and recommended path: an open model served locally by Ollama
-    (``ollama pull qwen2.5:7b`` → ``http://localhost:11434/v1``), key-free, free, and
+    (``ollama pull gemma3:12b`` → ``http://localhost:11434/v1``), key-free, free, and
     reproducible, keeping the whole pipeline runnable without any paid API. The same
     client drives any hosted OpenAI-compatible endpoint (Together, Groq, Fireworks,
     vLLM) by pointing ``base_url`` / setting ``MND_NAMING_API_KEY``.
@@ -658,7 +743,7 @@ class OpenAICompatNamer:
 
         nc = (cfg.get("display") or {}).get("naming") or {}
         base_url = os.environ.get("MND_NAMING_BASE_URL", nc.get("base_url", "http://localhost:11434/v1"))
-        model = os.environ.get("MND_NAMING_MODEL", nc.get("model", "qwen2.5:7b"))
+        model = os.environ.get("MND_NAMING_MODEL", nc.get("model", "gemma3:12b"))
         api_key = os.environ.get("MND_NAMING_API_KEY", nc.get("api_key"))
         return cls(base_url, model, api_key)
 
@@ -720,7 +805,7 @@ def generate_names(
     # The cache key includes the effective model id, so a backend/model switch never
     # serves another backend's titles from cache.
     if backend == "llama":
-        model = str(os.environ.get("MND_NAMING_MODEL", nc.get("model", "qwen2.5:7b")))
+        model = str(os.environ.get("MND_NAMING_MODEL", nc.get("model", "gemma3:12b")))
     elif backend == "local":
         model = str(nc.get("local_model", "Qwen/Qwen2.5-7B-Instruct"))
     else:
@@ -772,7 +857,28 @@ def generate_names(
         produced_any = False
         for inp, path in misses:
             try:
-                d = client.name_cluster(_SYSTEM, _build_user(inp, title_words), _SCHEMA)
+                user = _build_user(inp, title_words)
+                d = client.name_cluster(_SYSTEM, user, _SCHEMA)
+                # Conditional second pass (ADR-080): when the description opens
+                # with collection meta-language the prompt forbids — a violation
+                # a regex can detect — re-ask once with corrective feedback.
+                # Cheaper and more deterministic than a blanket rewrite pass;
+                # typography is already covered by _polish_title.
+                if _META_OPEN_RE.match(str(d.get("description", ""))):
+                    retry_user = (
+                        user
+                        + "\n\nYour previous description began with collection "
+                        "meta-language ('" + str(d["description"])[:60] + "...'). "
+                        "Rewrite it to open with the subject itself — the actor "
+                        "or event — never with 'This collection', 'This cluster', "
+                        "'The material', or 'Writing from'."
+                    )
+                    try:
+                        d2 = client.name_cluster(_SYSTEM, retry_user, _SCHEMA)
+                        if not _META_OPEN_RE.match(str(d2.get("description", ""))):
+                            d = d2
+                    except Exception:
+                        pass  # keep the first result; the retry is best-effort
                 name = NarrativeName(
                     _polish_title(str(d["title"])), str(d["description"]).strip()
                 )

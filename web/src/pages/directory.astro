@@ -1,6 +1,6 @@
 ---
 import Base from "../layouts/Base.astro";
-import { loadDirectory, loadIndex } from "@lib/data";
+import { loadDirectory, loadIndex, hasLightNarrative } from "@lib/data";
 
 const dir = loadDirectory();
 const index = loadIndex();
@@ -8,8 +8,10 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 const fmt = (n: number) => n.toLocaleString("en-US");
 
 // Compact rows for the client: [id, display label, terms for search, articles,
-// from, to, surfaced]. The 7,000+ rows render client-side, 50 at a time, so the
-// page itself stays light.
+// from, to, surfaced, linked]. The 7,000+ rows render client-side, 50 at a
+// time, so the page itself stays light. `linked` covers both tiers: surfaced
+// narratives always link; sub-floor clusters link when their light-tier page
+// exists (ADR-083) — absent on pre-light bakes, so old data degrades to text.
 const rows = (dir?.clusters ?? [])
   .sort((a, b) => b.n_articles - a.n_articles)
   .map((c) => [
@@ -20,6 +22,7 @@ const rows = (dir?.clusters ?? [])
     c.date_range?.[0]?.slice(0, 4) ?? "",
     c.date_range?.[1]?.slice(0, 4) ?? "",
     c.surfaced ? 1 : 0,
+    c.surfaced || hasLightNarrative(c.cluster_id) ? 1 : 0,
   ]);
 ---
 
@@ -27,9 +30,11 @@ const rows = (dir?.clusters ?? [])
   <h1 class="reveal">every cluster in the corpus</h1>
   <p class="lede reveal">
     all {fmt(dir?.n_clusters ?? index.n_clusters_total ?? 0)} clusters the corpus
-    contains, from the {fmt(index.n_narratives)} narratives charted on this site
-    down to the smallest recurring threads. narratives with a full page link
-    through; the rest are listed here but not charted or analyzed.
+    contains, from the {fmt(index.n_narratives)} narratives with full lifecycle
+    analysis down to the smallest recurring threads. every cluster links to its
+    own page; clusters below the {fmt(index.min_articles_to_fit ?? 42)}-article
+    floor get a light page — volume, stage, references, and related narratives,
+    without the lens fits and press/market overlays.
   </p>
 
   {rows.length > 0 ? (
@@ -75,9 +80,9 @@ const rows = (dir?.clusters ?? [])
         page = Math.min(Math.max(0, page), pages - 1);
         const slice = hits.slice(page * PAGE, (page + 1) * PAGE);
         rowsEl.innerHTML = slice
-          .map(([id, name, , n, from, to, surfaced]) => {
+          .map(([id, name, , n, from, to, , linked]) => {
             const span = from ? `${from}–${to}` : "";
-            const label = surfaced
+            const label = linked
               ? `<a href="${base}/narratives/${id}">${esc(name)}</a>`
               : `<span class="dir-name">${esc(name)}</span>`;
             return `<div class="dir-row">${label}<span class="dir-meta">${n.toLocaleString("en-US")} articles${span ? " · " + span : ""}</span></div>`;

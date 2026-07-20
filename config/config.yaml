@@ -124,6 +124,13 @@ dynamics:
   #     Better for multi-peak or dormant narratives where the lifecycle model only
   #     applies to a sub-span.  Fits take ~8-12x longer but are fully cached.
   fit_window_strategy: "best_third"
+  # Anchor points for the best-third window search (ADR-078 amendment,
+  # 2026-07-19). 10 anchors on the weekly grid: the 6-anchor grid was too
+  # coarse to isolate single waves in long histories — on the 40-narrative
+  # holdout sample the finer grid lifts SIR converged 33%→42% and Bass
+  # 23%→33% with no methodology change (pure search resolution; every
+  # (model, window) pair stays independently cached).
+  fit_window_n_anchors: 10
   # Fit/display floor (ADR-051): only clusters with at least this many unique
   # articles are fit, staged, and surfaced on the front end (map, narratives,
   # emerging, search). BERTopic at the library-default min_cluster_size (ADR-019)
@@ -259,6 +266,37 @@ filtering:
     num_perm: 128                  # Broder 1997; datasketch library default
     threshold: 0.85                # Henzinger 2006 mid-band for near-duplicate detection
 
+  # Per-document structural-furniture cleaning (ADR-082). Byline titles
+  # ("Jean-Claude Trichet: Interview with FOCUS") are split — speaker moves to
+  # the author field, the title keeps the substance — attribution preambles
+  # are stripped from curated reprint bodies, and PDF furniture (page-number
+  # lines, running headers/footers repeated within a document, trailing
+  # References sections) is dropped. The chunker prepends the title to every
+  # chunk, so byline titles were riding on 100% of a speech's chunks and
+  # clustering documents by speaker/format instead of content (the
+  # register-attachment failure diagnosed 2026-07-16).
+  #
+  # ACTIVATED 2026-07-20 for the manual clean rebuild (the scheduled GPU
+  # re-embed the ADR-082 gate was waiting for). Cleaning changes chunk text →
+  # (chunk_id, text_sha1) cache keys → affected documents re-embed. This is safe
+  # for the CPU-only weekly `update` (ADR-063) ONLY after the one-time GPU
+  # re-embed lands (existing docs then cache-hit on clean text; new docs embed
+  # fresh regardless). Do the manual rebuild — delete chunks.parquet, re-embed
+  # on GPU, re-cluster — before the next weekly update runs with this on.
+  furniture:
+    enabled: true
+    # Byline splitting ("Speaker: Title" → author metadata + clean title) is
+    # source-scoped because only curated speech reprints put the speaker in the
+    # title; BIS is the one basis-set source that does. Everything below runs
+    # CORPUS-WIDE on every source's body (the furniture_audit.py dry-run reports
+    # per-source effects on the real corpus before any re-embed).
+    byline_sources: ["bis"]        # sources whose titles carry "Speaker: Title"
+    max_running_line_words: 6      # running header/footer candidates are short lines
+    min_repeats_running_line: 3    # repeated >= this within one doc = printed per page
+    strip_reference_sections: true # drop References/Notes/Bibliography tails (last 40%)
+    strip_metadata_lines: true     # drop standalone JEL/keywords/DOI/URL/"Available at"/
+                                   # media-contact/bare-email lines (whole-line only)
+
   # Sub-document boilerplate removal (ADR-054). Sentence-level cross-document
   # repetition strip applied after MinHash dedup, before embedding. Removes
   # disclaimers, donation disclosures, media-contact blocks, and speech caveats
@@ -320,17 +358,27 @@ display:
     # Disabled or unkeyed → the front end falls back to the c-TF-IDF label.
     enabled: true
     # "llama" (default): open model via an OpenAI-compatible endpoint (ADR-067) —
-    # key-free/reproducible; defaults to a local Ollama (`ollama pull qwen2.5:7b`).
+    # key-free/reproducible; defaults to a local Ollama (`ollama pull gemma3:12b`).
     # "local": in-process transformers model. "anthropic": paid Claude Haiku.
     backend: "llama"
     base_url: "http://localhost:11434/v1"   # backend=llama: Ollama (or any OpenAI-compatible URL)
-    # qwen2.5:7b holds sentence case where llama3.1 reverts to Title Case
-    # (2026-07-12 A/B on the v4 prompt); non-thinking, so no qwen3-style
-    # deliberation timeouts. Same family as the ADR-067 local fallback below.
-    model: "qwen2.5:7b"         # backend=llama: served model id (env MND_NAMING_MODEL overrides)
+    # gemma3:12b won the 2026-07-16 12-cluster A/B on the v6 prompt over
+    # qwen2.5:7b: 12/12 valid JSON (qwen 11/12, one deterministic hard-fail),
+    # story-shaped titles, and it caught cluster drift + officeholder
+    # succession unprompted where qwen conflated a cluster's span with one
+    # person's tenure. (Earlier: qwen2.5:7b held sentence case where llama3.1
+    # reverted to Title Case, 2026-07-12 A/B on v4.) gemma3:27b (Q4 ~17 GB,
+    # fits the RCC A100) is the untested next rung via MND_NAMING_MODEL.
+    model: "gemma3:12b"         # backend=llama: served model id (env MND_NAMING_MODEL overrides)
     local_model: "Qwen/Qwen2.5-7B-Instruct"   # backend=local: open, Apache-2.0, no key
     max_title_words: 7          # soft target for the title (not a hard cap)
-    prompt_version: 5           # bump to invalidate the cache when the prompt changes
+    prompt_version: 6           # bump to invalidate the cache when the prompt changes
+                                # v6 (2026-07-16): wire-desk story slugs over category
+                                # boxes; JSON-structured input with dated article
+                                # titles across the lifespan (earliest/central/newest);
+                                # world knowledge allowed for event recognition
+                                # (display-only, no lookahead concern); 4-6 sentence
+                                # descriptions covering the story's arc.
     cache_dir: "data/naming_cache"   # tracked path (data/ is not gitignored)
   forming:
     # Sub-floor clusters surface as "forming" on the emerging page when their

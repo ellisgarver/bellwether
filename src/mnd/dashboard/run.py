@@ -34,6 +34,7 @@ without loading Qwen3-8B or running the lens fits; the CLI passes the real ones.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -44,10 +45,16 @@ from mnd.clustering.jel_classifier import classify_clusters
 from mnd.clustering.similar_narratives import compute_similar_narratives
 from mnd.dashboard.build_artifacts import (
     build_dashboard_artifacts,
+    build_light_artifacts,
     write_cluster_directory,
     write_dashboard_artifacts,
 )
-from mnd.dashboard.naming import NamingInput, generate_names
+from mnd.dashboard.naming import (
+    NamingInput,
+    NarrativeName,
+    generate_names,
+    naming_input_from_card,
+)
 from mnd.dashboard.story_card import (
     NOISE_TOPIC,
     _terms_from_topic_info,
@@ -146,12 +153,21 @@ def run_analysis(
     embedder: Any | None = None,
     fitter: DynamicsFitter | None = None,
     namer: Any | None = None,
+    keep_existing_names: bool = False,
 ) -> Path:
     """Recompute the analysis layer from persisted clustering and write artifacts.
 
     Returns the output directory. ``embedder`` must implement ``.encode(texts) ->
     np.ndarray`` (defaults to the production Qwen3 embedder); ``fitter`` defaults
     to ``DynamicsFitter.from_config()``.
+
+    ``keep_existing_names`` carries display names forward from the prior bake's
+    artifacts for any cluster the namer did not name this run (ADR-080 hold-off).
+    It is OFF by default and MUST stay off across a re-cluster: BERTopic reassigns
+    integer topic ids, so a prior ``narrative_7.json`` describes a *different*
+    cluster than the new topic 7, and carrying its name forward would mislabel it.
+    Enable it only for an analyze-only re-bake on an unchanged ``clusters.parquet``
+    (stable ids), where naming is being deliberately held off.
     """
     cfg = cfg or load_config()
     smoothing = int(cfg["dynamics"]["smoothing_window_days"])
@@ -231,12 +247,16 @@ def run_analysis(
     corpus_jel: dict[int, str] = {
         int(cid): a.primary_code for cid, a in jel.items() if getattr(a, "primary_code", None)
     }
+    # Sub-floor centroids: shared by the full-corpus JEL composition (ADR-076)
+    # and the light-tier semantic neighbours (ADR-083).
+    all_centroids: dict[int, Any] = dict(centroid_by_cid)
     try:
         rest = [cid for cid in all_ids if cid not in centroid_by_cid]
         if rest:
             rest_centroids = _cluster_centroids(clusters_df, embeddings, rest)
+            all_centroids.update({cid: rest_centroids[i] for i, cid in enumerate(rest)})
             rest_jel = _jel_scope(
-                {cid: rest_centroids[i] for i, cid in enumerate(rest)},
+                {cid: all_centroids[cid] for cid in rest},
                 cfg, Path(out_dir) / ".jel_cache", embedder=embedder,
             )
             corpus_jel.update(
@@ -258,6 +278,14 @@ def run_analysis(
     # falls back to the c-TF-IDF label) when disabled or unkeyed.
     naming_inputs = _naming_inputs(fit_ids, cluster_terms, cards, clusters_df)
     names = generate_names(naming_inputs, cfg, client=namer)
+    # Carry-forward (ADR-080 hold-off): when naming is held off on an analyze-only
+    # re-bake, any cluster the namer did not name this run keeps the display name
+    # it had in the previous bake, so the site does not lose its titles. Fresh
+    # names always win. OFF unless the caller vouches that ids are stable — a
+    # re-cluster reassigns ids, and carrying names by id would mislabel.
+    if keep_existing_names:
+        for cid, nm in _carry_forward_names(Path(out_dir)).items():
+            names.setdefault(cid, nm)
 
     # 3. Four-lens fit + stage on the adjusted series (ADR-039 / ADR-019). Fits
     # are checkpointed per cluster under out_dir so a re-run resumes mid-corpus
@@ -311,7 +339,60 @@ def run_analysis(
     # the site can offer a searchable index of the whole corpus, with forming
     # clusters flagged for the emerging page (ADR-071).
     write_cluster_directory(clusters_df, topic_info, fit_ids, names, out_dir, cfg=cfg)
+    # Light-tier artifacts (ADR-083): every sub-floor cluster gets a compact
+    # page artifact — weekly volume, model-free stage + shape facts, story
+    # card, JEL flag, heating, semantic neighbours. No lens fits or overlays
+    # (those stay behind the ADR-051 identifiability floor). Names/descriptions
+    # are patched in afterwards by the `name` job from the committed cache.
+    light_ids = [cid for cid in all_ids if cid not in set(fit_ids)]
+    try:
+        build_light_artifacts(
+            light_ids, adj, clusters_df, topic_info, corpus_jel,
+            all_centroids, names, cfg, out_dir,
+        )
+    except Exception as exc:  # non-fatal: the site works without the light tier
+        log.warning("Light-tier artifacts skipped (%s)", exc)
     return out_path
+
+
+def _carry_forward_names(out_dir: Path) -> dict[int, NarrativeName]:
+    """Reuse the previous bake's display names from the artifacts on disk.
+
+    Lets naming be held off (ADR-080) — ``display.naming.enabled=false`` or an
+    unreachable endpoint — without the site losing its titles. Reads the
+    ``label_human`` / ``description`` already written to the surfaced
+    ``narrative_<id>.json`` and light ``narrative_light_<id>.json`` artifacts
+    from the prior run in ``out_dir`` and returns them keyed by cluster id.
+
+    A missing directory (first bake) or an unreadable artifact yields nothing
+    for that cluster, which then falls back to its c-TF-IDF label exactly as
+    before — the hold-off degrades gracefully, never crashes. The caller uses
+    ``setdefault`` so a name freshly generated this run always wins.
+    """
+    out = Path(out_dir)
+    if not out.exists():
+        return {}
+    carried: dict[int, NarrativeName] = {}
+    for path in out.glob("narrative_*.json"):
+        name = path.stem  # narrative_<id> or narrative_light_<id>
+        cid_str = name.rsplit("_", 1)[-1]
+        try:
+            cid = int(cid_str)
+        except ValueError:
+            continue  # e.g. narrative_index or an unexpected name
+        try:
+            d = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        title = d.get("label_human")
+        if title:
+            carried[cid] = NarrativeName(title, d.get("description") or "")
+    if carried:
+        log.info(
+            "Naming carry-forward: %d prior display names available from %s",
+            len(carried), out,
+        )
+    return carried
 
 
 def _naming_inputs(
@@ -324,25 +405,17 @@ def _naming_inputs(
 
     The excerpts are the cluster's *central* representative articles — the same
     most-aligned, most-substantial pieces surfaced on the narrative page (ADR-061) —
-    so titles reflect what the reader sees. Terms, date span, and top sources add
-    light grounding context. No model call here; this only assembles the inputs.
+    so titles reflect what the reader sees. Dated article titles from the three
+    card panels (earliest / central / newest) carry the story's arc: human-written
+    headlines are the strongest naming signal the corpus has (v6, ADR-056).
+    Built through ``naming_input_from_card`` — the same constructor the post-bake
+    ``name`` job uses — so cache signatures agree across both paths (ADR-080).
+    No model call here; this only assembles the inputs.
     """
-    inputs: list[NamingInput] = []
-    for cid in fit_ids:
-        card = cards[cid]
-        excerpts = [a["excerpt"] for a in card.central_articles if a.get("excerpt")]
-        date_range = card.date_range
-        sources = [s for s, _ in card.source_mix[:4]]
-        inputs.append(
-            NamingInput(
-                cluster_id=int(cid),
-                terms=cluster_terms[cid],
-                excerpts=excerpts,
-                date_range=date_range,
-                sources=sources,
-            )
-        )
-    return inputs
+    return [
+        naming_input_from_card(cid, cluster_terms[cid], cards[cid].to_dict())
+        for cid in fit_ids
+    ]
 
 
 def _markets_overlays(

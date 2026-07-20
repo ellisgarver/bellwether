@@ -143,7 +143,7 @@ curl -sf "http://${OLLAMA_HOST}/api/tags" > /dev/null || {
 # Pull the model the `name` command actually requests (config display.naming.model
 # = qwen2.5:7b, ADR-067/naming v4); must match name_rcc.sh or new clusters fail to
 # title. MND_NAMING_MODEL overrides both in lockstep.
-ollama pull "${MND_NAMING_MODEL:-qwen2.5:7b}"
+ollama pull "${MND_NAMING_MODEL:-gemma3:12b}"
 python scripts/run_pipeline.py name
 
 # 3) Publish the site artifacts to the orphan `site-data` branch — a single

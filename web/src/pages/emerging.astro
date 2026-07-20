@@ -10,6 +10,7 @@ import {
   loadDirectory,
   loadIndex,
   loadNarrative,
+  hasLightNarrative,
   displayName,
   type IndexEntry,
 } from "@lib/data";
@@ -170,7 +171,7 @@ const sparks: Record<number, number[]> = Object.fromEntries(
     <div class="grid">
       {formingClusters.length > 0
         ? formingClusters.map((c) => (
-            <NarrativeCard entry={formingEntry(c)} linked={false}
+            <NarrativeCard entry={formingEntry(c)} linked={hasLightNarrative(c.cluster_id)}
               spark={formingSpark} sparkColor={STAGE_COLOR.dormant} forming={true} />
           ))
         : <p class="muted">none right now.</p>

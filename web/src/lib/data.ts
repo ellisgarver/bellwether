@@ -168,8 +168,15 @@ function readJson<T>(file: string): T {
   return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), "utf-8")) as T;
 }
 
+// The build renders ~7k narrative pages (ADR-083), and each reads the index and
+// the ~2 MB directory. Parse each large shared artifact once per build worker
+// and reuse it — the files are static during a build, so caching the parse is
+// safe and keeps the light-tier build from re-parsing megabytes 7k times.
+let _indexCache: DashboardIndex | null = null;
+let _directoryCache: ClusterDirectory | null | undefined = undefined;
+
 export function loadIndex(): DashboardIndex {
-  return readJson<DashboardIndex>("index.json");
+  return (_indexCache ??= readJson<DashboardIndex>("index.json"));
 }
 
 export function loadNarrative(clusterId: number): Narrative {
@@ -211,8 +218,44 @@ export interface ClusterDirectory {
 }
 
 export function loadDirectory(): ClusterDirectory | null {
+  if (_directoryCache !== undefined) return _directoryCache;
   const p = path.join(DATA_DIR, "clusters_all.json");
-  return fs.existsSync(p) ? (JSON.parse(fs.readFileSync(p, "utf-8")) as ClusterDirectory) : null;
+  _directoryCache = fs.existsSync(p)
+    ? (JSON.parse(fs.readFileSync(p, "utf-8")) as ClusterDirectory)
+    : null;
+  return _directoryCache;
+}
+
+// ---- light-tier narratives (ADR-083) ----
+
+// A light narrative shares the Narrative shape (fits: [], overlays: null) plus
+// tier: "light", a WEEKLY volume series, and a baked heating blob (its series
+// ships weekly, so the daily corpusHeating() computation does not apply).
+export interface LightNarrative extends Narrative {
+  tier: "light";
+  heating: CorpusHeating | null;
+}
+
+export function loadLightNarrative(clusterId: number): LightNarrative {
+  return readJson<LightNarrative>(`narrative_light_${clusterId}.json`);
+}
+
+export function hasLightNarrative(clusterId: number): boolean {
+  return fs.existsSync(path.join(DATA_DIR, `narrative_light_${clusterId}.json`));
+}
+
+// Directory-wide display-label map (surfaced + light), for related-narrative
+// links that may point at either tier. Memoized on the directory object so the
+// 7k-page build (ADR-083) builds this map once, not per page.
+let _dirLabelCache: { dir: ClusterDirectory | null; map: Record<number, string> } | null = null;
+export function directoryLabelMap(dir: ClusterDirectory | null): Record<number, string> {
+  if (!dir) return {};
+  if (_dirLabelCache && _dirLabelCache.dir === dir) return _dirLabelCache.map;
+  const map = Object.fromEntries(
+    dir.clusters.map((c) => [c.cluster_id, c.label_human ?? c.label.replace(/^-?\d+_/, "").replace(/_/g, ", ")]),
+  );
+  _dirLabelCache = { dir, map };
+  return map;
 }
 
 // ---- corpus heating (ADR-074) ----

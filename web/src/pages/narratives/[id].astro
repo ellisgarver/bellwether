@@ -1,30 +1,45 @@
 ---
 import Base from "../../layouts/Base.astro";
 import StageBadge from "@components/StageBadge.astro";
-import { loadIndex, loadNarrative, labelMap, displayName, JEL_NAME, STAGE_COLOR, corpusHeating, pressHeating, CORPUS_HEATING, PRESS_HEATING } from "@lib/data";
+import { loadIndex, loadNarrative, loadLightNarrative, hasLightNarrative, loadDirectory, directoryLabelMap, labelMap, displayName, JEL_NAME, STAGE_COLOR, corpusHeating, pressHeating, CORPUS_HEATING, PRESS_HEATING } from "@lib/data";
 
 export function getStaticPaths() {
   const index = loadIndex();
-  return index.narratives.map((e) => ({
+  const full = index.narratives.map((e) => ({
     params: { id: String(e.cluster_id) },
-    props: { entry: e },
+    props: { entry: e, tier: "full" },
   }));
+  // Light tier (ADR-083): every sub-floor cluster with a baked light artifact
+  // gets a page at the same route family, so directory/related links resolve.
+  const dir = loadDirectory();
+  const light = (dir?.clusters ?? [])
+    .filter((c) => !c.surfaced && hasLightNarrative(c.cluster_id))
+    .map((c) => ({
+      params: { id: String(c.cluster_id) },
+      props: { entry: c, tier: "light" },
+    }));
+  return [...full, ...light];
 }
 
-const { entry } = Astro.props;
-const n = loadNarrative(entry.cluster_id);
+const { entry, tier = "full" } = Astro.props;
+const isLight = tier === "light";
+const n = isLight ? loadLightNarrative(entry.cluster_id) : loadNarrative(entry.cluster_id);
 const index = loadIndex();
-const labels = labelMap(index);
+// Related links can point at either tier, so the label map spans the whole
+// directory; surfaced labels win where both exist.
+const labels = { ...directoryLabelMap(loadDirectory()), ...labelMap(index) };
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 // 16-week heating signals (ADR-074), computed here so the badges and callouts
 // match what the emerging page and cards show. Frontier = latest last-active
 // date across all narratives, the same reference the emerging page uses.
+// Light narratives ship a WEEKLY series, so their heating blob is baked by the
+// pipeline instead of recomputed from the daily grid here.
 const frontierMs = Math.max(
   ...index.narratives.map((e) => (e.date_range ? Date.parse(e.date_range[1]) : 0)),
 );
-const corpusHot = corpusHeating(n.volume, frontierMs);
-const pressHot = pressHeating(n.mediacloud, frontierMs);
+const corpusHot = isLight ? ((n as any).heating ?? null) : corpusHeating(n.volume, frontierMs);
+const pressHot = isLight ? null : pressHeating(n.mediacloud, frontierMs);
 
 const fmt = (x: number | null, d = 2) =>
   x === null || x === undefined ? "—" : x.toFixed(d);
@@ -102,10 +117,17 @@ const direction = (d: any) =>
     {n.card.date_range && <> · {n.card.date_range[0]} → {n.card.date_range[1]}</>}
     {n.jel && <> · <abbr title={JEL_NAME[n.jel.code] ?? n.jel.code}>JEL {n.jel.code}</abbr></>}
     <span class="sep">|</span>
-    <StageBadge stage={n.stage} emerging={entry.is_emerging} inScope={n.jel?.in_scope ?? true} />
+    <StageBadge stage={n.stage} emerging={entry.is_emerging ?? entry.forming ?? false} inScope={n.jel?.in_scope ?? true} />
     {corpusHot && <span class="badge heat" title="institutional writing on this narrative is spiking above its own yearly baseline">corpus heating</span>}
     {pressHot && <span class="badge heat" title="broad-press attention on this narrative is spiking above its own yearly baseline">press heating</span>}
   </p>
+  {isLight && (
+    <p class="caption reveal" style="margin-top:0.2rem">
+      light narrative — this cluster sits below the 42-article analysis floor, so
+      the lifecycle lens fits and press/market overlays are not computed. Volume,
+      stage, shape facts, references, and related narratives are shown in full.
+    </p>
+  )}
 
   <!-- life-cycle chart -->
   <section class="section reveal">
@@ -273,14 +295,21 @@ const direction = (d: any) =>
         const d = new Date(ds[i] + "T00:00:00Z");
         d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); // Monday
         const k = d.toISOString().slice(0, 10);
-        const b = buckets.get(k) || [0, 0];
-        b[0] += vs[i]; b[1] += 1;
-        buckets.set(k, b);
+        buckets.set(k, (buckets.get(k) || 0) + vs[i]);
       }
       const ks = [...buckets.keys()].sort();
-      return { dates: ks, values: ks.map((k) => buckets.get(k)[0] / buckets.get(k)[1]) };
+      // Divide by the full week length, not days present: the daily series is
+      // complete (0-filled) inside its span, so only the edge buckets are
+      // partial, and days outside the span carry zero articles by definition.
+      // Dividing a 1-day trailing bucket by 1 made a lone final article the
+      // tallest bar on the chart (7x overweighted vs. every full week).
+      return { dates: ks, values: ks.map((k) => buckets.get(k) / 7) };
     }
-    const wk = weeklyMean(dates, vol);
+    // Light-tier artifacts (ADR-083) already ship the weekly series; bucketing
+    // them again would divide each single weekly sample by 7.
+    const wk = n.volume && n.volume.freq === "W"
+      ? { dates: dates.slice(), values: vol.slice() }
+      : weeklyMean(dates, vol);
     const maxVol = Math.max(0.001, ...wk.values);
 
     // x bounds in epoch-ms: the full timeline, edge to edge, no margin. this is

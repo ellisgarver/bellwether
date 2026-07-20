@@ -538,6 +538,29 @@ def filter_cmd(
     unique = Deduplicator().deduplicate(in_range)
     log.info("After dedup: %d unique articles", len(unique))
 
+    # Per-document furniture cleaning (ADR-082) — byline titles → author
+    # metadata, attribution preambles, PDF page furniture. Runs before the
+    # cross-document boilerplate strip so attribution sentences don't need the
+    # 25-document threshold to disappear. GATED: enabling changes chunk text →
+    # embedding-cache keys → affected docs re-embed; flip on only alongside a
+    # scheduled GPU re-embed (never silently into the CPU-only weekly update).
+    from mnd.filtering.furniture import FurnitureCleaner
+
+    cleaner = FurnitureCleaner.from_config(cfg)
+    if cleaner.enabled:
+        unique = cleaner.clean(unique)
+        frep = cleaner.report
+        log.info(
+            "Furniture clean: %d byline titles split, %d preambles stripped, "
+            "%d furniture lines dropped (%d reference tails); %d/%d articles modified",
+            frep.n_byline_titles_split, frep.n_preambles_stripped,
+            frep.n_furniture_lines_dropped, frep.n_reference_sections_dropped,
+            frep.n_articles_modified, frep.n_articles,
+        )
+        freport_path = out_path.parent / "furniture_report.json"
+        freport_path.write_text(json.dumps(frep.to_dict(), ensure_ascii=False, indent=2))
+        log.info("Furniture report → %s", freport_path)
+
     # Sub-document boilerplate strip (ADR-054) — remove recurring passages that
     # whole-document dedup cannot catch, before the corpus reaches the embedder.
     stripper = BoilerplateStripper.from_config(cfg)
@@ -994,6 +1017,11 @@ def stability(
 @click.option("--embeddings", default=None, help="Embeddings .npy path (default: config paths.processed_embeddings)")
 @click.option("--topic-info", default=None, help="topic_info parquet (default: alongside clusters)")
 @click.option("--output-dir", default=None, help="Dashboard artifacts dir (default: config paths.dashboard_artifacts)")
+@click.option("--keep-existing-names", is_flag=True, default=False,
+              help="Carry display names forward from the prior bake for clusters "
+                   "not named this run (ADR-080 hold-off). ONLY for an analyze-only "
+                   "re-bake on unchanged clusters — never after a re-cluster, which "
+                   "reassigns topic ids and would mislabel.")
 @click.pass_context
 def analyze(
     ctx: click.Context,
@@ -1001,6 +1029,7 @@ def analyze(
     embeddings: str | None,
     topic_info: str | None,
     output_dir: str | None,
+    keep_existing_names: bool,
 ) -> None:
     """Recompute the analysis layer from clustering and write dashboard artifacts.
 
@@ -1037,6 +1066,7 @@ def analyze(
         topic_info_path=ti_path if ti_path.exists() else None,
         out_dir=out_dir,
         cfg=cfg,
+        keep_existing_names=keep_existing_names,
     )
     log.info("analyze: wrote dashboard artifacts → %s", out)
 
@@ -1060,7 +1090,7 @@ def name_artifacts(ctx: click.Context, artifacts_dir: str | None) -> None:
     OpenAI-compatible endpoint (a local Ollama by default) after the artifacts
     were baked elsewhere. Display layer only; idempotent and safe to re-run.
     """
-    from mnd.dashboard.naming import NamingInput, generate_names
+    from mnd.dashboard.naming import NamingInput, generate_names, naming_input_from_card
 
     cfg = ctx.obj["cfg"]
     art_dir = (
@@ -1083,15 +1113,10 @@ def name_artifacts(ctx: click.Context, artifacts_dir: str | None) -> None:
             continue
         narr = json.loads(path.read_text(encoding="utf-8"))
         card = narr.get("card") or {}
-        panels = card.get("central_articles") or card.get("representative_articles") or []
+        # Shared v6 constructor (ADR-080) — identical inputs, and therefore
+        # identical cache signatures, to the ones the `analyze` bake builds.
         inputs.append(
-            NamingInput(
-                cluster_id=cid,
-                terms=[str(t) for t in (card.get("top_terms") or [])],
-                excerpts=[a["excerpt"] for a in panels if a.get("excerpt")],
-                date_range=tuple(card["date_range"]) if card.get("date_range") else None,
-                sources=[s for s, _ in (card.get("source_mix") or [])[:4]],
-            )
+            naming_input_from_card(cid, [str(t) for t in (card.get("top_terms") or [])], card)
         )
         narr_files[cid] = (path, narr)
 
@@ -1111,25 +1136,46 @@ def name_artifacts(ctx: click.Context, artifacts_dir: str | None) -> None:
         len(names), len(inputs), art_dir,
     )
 
-    # Directory titles (ADR-073): every non-surfaced cluster with baked terms
-    # gets a terms-grounded title — the whole directory, forming and sub-floor
-    # alike, not just the forming handful (ADR-071). Surfaced entries pick up
-    # the titles generated above so the directory matches the narrative pages.
+    # Light-tier + directory titles (ADR-073/083). Sub-floor clusters with a
+    # baked light artifact are named from their story CARD — the same v6
+    # grounding as surfaced narratives (dated titles + excerpts), replacing the
+    # thin terms-only titles that produced keyword mush. Clusters without a
+    # light artifact (older bakes) fall back to the terms-only path. Titles AND
+    # descriptions are patched into the light artifacts; the directory picks up
+    # every title so search matches the pages.
     dir_path = art_dir / "clusters_all.json"
     if dir_path.exists():
         directory = json.loads(dir_path.read_text(encoding="utf-8"))
-        directory_inputs = [
-            NamingInput(
-                cluster_id=int(c["cluster_id"]),
-                terms=[str(t) for t in (c.get("terms") or [])],
-                excerpts=[],
-                date_range=tuple(c["date_range"]) if c.get("date_range") else None,
-                sources=[],
-            )
-            for c in directory.get("clusters", [])
-            if not c.get("surfaced") and (c.get("terms") or [])
-        ]
+        directory_inputs: list[NamingInput] = []
+        light_files: dict[int, tuple[Path, dict]] = {}
+        for c in directory.get("clusters", []):
+            if c.get("surfaced"):
+                continue
+            cid = int(c["cluster_id"])
+            lp = art_dir / f"narrative_light_{cid}.json"
+            if lp.exists():
+                light = json.loads(lp.read_text(encoding="utf-8"))
+                card = light.get("card") or {}
+                terms = [str(t) for t in (card.get("top_terms") or c.get("terms") or [])]
+                directory_inputs.append(naming_input_from_card(cid, terms, card))
+                light_files[cid] = (lp, light)
+            elif c.get("terms"):
+                directory_inputs.append(
+                    NamingInput(
+                        cluster_id=cid,
+                        terms=[str(t) for t in c["terms"]],
+                        excerpts=[],
+                        date_range=tuple(c["date_range"]) if c.get("date_range") else None,
+                        sources=[],
+                    )
+                )
         directory_names = generate_names(directory_inputs, cfg) if directory_inputs else {}
+        for cid, nm in directory_names.items():
+            if cid in light_files:
+                lp, light = light_files[cid]
+                light["label_human"] = nm.title
+                light["description"] = nm.description
+                lp.write_text(json.dumps(light, ensure_ascii=False), encoding="utf-8")
         patched = 0
         for c in directory.get("clusters", []):
             cid = int(c["cluster_id"])
@@ -1140,8 +1186,9 @@ def name_artifacts(ctx: click.Context, artifacts_dir: str | None) -> None:
         if patched:
             dir_path.write_text(json.dumps(directory, ensure_ascii=False), encoding="utf-8")
         log.info(
-            "name: %d directory clusters titled, %d directory entries patched",
-            len(directory_names), patched,
+            "name: %d directory clusters titled (%d card-grounded light pages "
+            "patched), %d directory entries patched",
+            len(directory_names), len(light_files), patched,
         )
 
 

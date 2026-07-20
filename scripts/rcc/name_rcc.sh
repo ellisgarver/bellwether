@@ -92,7 +92,7 @@ curl -sf "http://${OLLAMA_HOST}/api/tags" > /dev/null || {
     exit 1
 }
 
-MODEL="${MND_NAMING_MODEL:-qwen2.5:7b}"
+MODEL="${MND_NAMING_MODEL:-gemma3:12b}"
 ollama pull "$MODEL"
 
 echo "===== mnd-name ====="

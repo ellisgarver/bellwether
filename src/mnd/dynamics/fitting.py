@@ -1,9 +1,15 @@
 """Least-squares dynamics fitting (ADR-067).
 
-Fits every configured lens (logistic, SIR, Bass) to a cluster's daily
-article-count series by bounded nonlinear least-squares (``scipy.least_squares``)
-and returns them side by side; AICc is a displayed diagnostic on each FitResult,
-not a selection gate. Model-free shape-facts are computed alongside.
+Fits every configured lens (logistic, SIR, Bass) to a cluster's article-count
+series by bounded nonlinear least-squares (``scipy.least_squares``) and returns
+them side by side; AICc is a displayed diagnostic on each FitResult, not a
+selection gate. Model-free shape-facts are computed alongside.
+
+The fit points are weekly means (7-day blocks of the smoothed daily series) with
+times in day units, so parameters stay per-day while the residuals the optimizer
+sees — and the reported R² — are measured against the weekly envelope the display
+shows, not the raw daily spikes no smooth lifecycle curve can express. The fitted
+curve is evaluated back on the daily grid for display alignment.
 
 The fits are display lenses reporting self-standing point numbers in the series'
 own units (ADR-062): logistic -> doubling time / inflection / plateau; SIR -> rise
@@ -115,6 +121,16 @@ class DynamicsFitter:
     ) -> ClusterDynamics:
         """Fit every configured lens; return all side by side (ADR-039).
 
+        The lenses are fit on the *weekly-mean* series (7-day blocks of the
+        smoothed daily curve), not the daily grid: institutional narratives are
+        weekly-scale phenomena, the display bars are weekly means, and staging /
+        press signals already operate weekly. Fitting the daily grid bounded R²
+        at near zero for every lens — the residual day-to-day spikes dominate the
+        variance no smooth lifecycle curve can express — which left the fit gate
+        rejecting shapes the weekly envelope matches well. The fitted curve is
+        evaluated back on the daily grid so it aligns with the shipped volume
+        series; R² and AICc are computed on the weekly points the fit saw.
+
         When ``cache_dir`` is given, each lens's ``FitResult`` is cached separately
         keyed on that lens's own config (ADR-065), so a change to one lens's priors
         re-fits only that lens and a re-bake reloads the rest. Staging and
@@ -125,21 +141,35 @@ class DynamicsFitter:
         t = np.arange(n, dtype=float)
         y = smoothed.values.astype(float)
 
+        # Weekly fit grid: block means + block-center times in day units. Series
+        # too short to resolve enough weekly points keep the daily grid (the
+        # weekly view would leave fewer points than model parameters need).
+        y_wk, t_wk = _weekly_blocks(y)
+        weekly = len(y_wk) >= 10
+
         strategy = str(self._cfg["dynamics"].get("fit_window_strategy", "central_mass"))
         if strategy == "best_third":
             all_fits = [
-                self._fit_best_window(cluster_id, model_name, y, n, cache_dir)
+                self._fit_best_window(
+                    cluster_id, model_name, y, y_wk, t_wk, weekly, n, cache_dir
+                )
                 for model_name in self._cfg["dynamics"]["models_to_fit"]
             ]
         else:
             # central_mass (ADR-060): single window holding the central 1-alpha
             # fraction of the cumulative article mass.
             alpha = float(self._cfg["dynamics"].get("fit_window_mass_alpha", 0.05))
-            i0, i1 = _trim_window_central_mass(y, alpha)
-            t_win = np.arange(i1 - i0 + 1, dtype=float)
-            y_win = y[i0:i1 + 1]
+            if weekly:
+                w0, w1 = _trim_window_central_mass(y_wk, alpha)
+                d0, d1 = _weekly_to_daily_bounds(w0, w1, n)
+                t_win = t_wk[w0:w1 + 1] - float(d0)
+                y_win = y_wk[w0:w1 + 1]
+            else:
+                d0, d1 = _trim_window_central_mass(y, alpha)
+                t_win = np.arange(d1 - d0 + 1, dtype=float)
+                y_win = y[d0:d1 + 1]
             all_fits = [
-                self._fit_lens_cached(cluster_id, model_name, t_win, y_win, y, i0, i1, n, cache_dir)
+                self._fit_lens_cached(cluster_id, model_name, t_win, y_win, y, d0, d1, n, cache_dir)
                 for model_name in self._cfg["dynamics"]["models_to_fit"]
             ]
 
@@ -175,7 +205,13 @@ class DynamicsFitter:
         n: int,
         cache_dir: Path | None,
     ) -> FitResult:
-        """Fit one lens, reusing a cached reprojected FitResult when unchanged (ADR-065)."""
+        """Fit one lens, reusing a cached reprojected FitResult when unchanged (ADR-065).
+
+        ``t_win``/``y_win`` are the fit points (weekly block centers/means in day
+        units local to the window, or the daily grid for short series); ``i0``/``i1``
+        are the window's *daily* bounds, used for the cache key and to evaluate the
+        fitted curve on the daily grid for display.
+        """
         import pickle
 
         path = None
@@ -194,7 +230,10 @@ class DynamicsFitter:
                     )
         log.info("Cluster %s — fitting %s on window [%d:%d] of %d",
                  cluster_id, model_name, i0, i1, n)
-        fr = _reproject_to_full(self._fit_model(cluster_id, model_name, t_win, y_win), i0, n)
+        t_eval = np.arange(i1 - i0 + 1, dtype=float)
+        fr = _reproject_to_full(
+            self._fit_model(cluster_id, model_name, t_win, y_win, t_eval), i0, n
+        )
         self._cache_fit += 1
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -206,41 +245,66 @@ class DynamicsFitter:
         cluster_id: int | str,
         model_name: str,
         y: np.ndarray,
+        y_wk: np.ndarray,
+        t_wk: np.ndarray,
+        weekly: bool,
         n: int,
         cache_dir: Path | None,
     ) -> FitResult:
         """Try each candidate window; return the fit with the highest R².
 
         Windows must span at least 1/3 of the full series length so a trivially
-        short burst cannot dominate a multi-peak history. All (model, window) pairs
+        short burst cannot dominate a multi-peak history. The search runs on the
+        weekly grid (window anchors are week indices). All (model, window) pairs
         are cached independently, so repeated bakes only pay the optimizer cost on
         the first run.
         """
         min_frac = float(self._cfg["dynamics"].get("fit_window_min_frac", 1 / 3))
         n_anchors = int(self._cfg["dynamics"].get("fit_window_n_anchors", 6))
-        windows = _candidate_windows(n, min_frac, n_anchors)
         best_fr: FitResult | None = None
         best_r2: float = float("-inf")
-        for i0, i1 in windows:
-            # Skip windows with too few non-zero points to be meaningful.
-            y_win = y[i0 : i1 + 1]
-            if float(np.sum(y_win > 0)) < 5 or float(np.max(y_win)) <= 0:
-                continue
-            t_win = np.arange(i1 - i0 + 1, dtype=float)
-            fr = self._fit_lens_cached(
-                cluster_id, model_name, t_win, y_win, y, i0, i1, n, cache_dir
-            )
-            # Converged fits are ranked by R²; non-converged are ranked below -1
-            # so a bad converged fit still beats no converged fit at all.
-            r2 = float(fr.param_summary.get("r2", -1.0)) if fr.converged else -2.0
-            if r2 > best_r2:
-                best_r2 = r2
-                best_fr = fr
+        if weekly:
+            for w0, w1 in _candidate_windows(len(y_wk), min_frac, n_anchors):
+                y_win = y_wk[w0 : w1 + 1]
+                # Skip windows with too few non-zero points to be meaningful.
+                if float(np.sum(y_win > 0)) < 5 or float(np.max(y_win)) <= 0:
+                    continue
+                d0, d1 = _weekly_to_daily_bounds(w0, w1, n)
+                fr = self._fit_lens_cached(
+                    cluster_id, model_name, t_wk[w0 : w1 + 1] - float(d0), y_win,
+                    y, d0, d1, n, cache_dir,
+                )
+                # Converged fits are ranked by R²; non-converged are ranked below -1
+                # so a bad converged fit still beats no converged fit at all.
+                r2 = float(fr.param_summary.get("r2", -1.0)) if fr.converged else -2.0
+                if r2 > best_r2:
+                    best_r2 = r2
+                    best_fr = fr
+        else:
+            for i0, i1 in _candidate_windows(n, min_frac, n_anchors):
+                y_win = y[i0 : i1 + 1]
+                if float(np.sum(y_win > 0)) < 5 or float(np.max(y_win)) <= 0:
+                    continue
+                t_win = np.arange(i1 - i0 + 1, dtype=float)
+                fr = self._fit_lens_cached(
+                    cluster_id, model_name, t_win, y_win, y, i0, i1, n, cache_dir
+                )
+                r2 = float(fr.param_summary.get("r2", -1.0)) if fr.converged else -2.0
+                if r2 > best_r2:
+                    best_r2 = r2
+                    best_fr = fr
         if best_fr is not None:
             return best_fr
         # No window converged — return the central-mass fit as a fallback so the
         # lens tab still shows the unconverged curve rather than nothing.
         alpha = float(self._cfg["dynamics"].get("fit_window_mass_alpha", 0.05))
+        if weekly:
+            w0, w1 = _trim_window_central_mass(y_wk, alpha)
+            d0, d1 = _weekly_to_daily_bounds(w0, w1, n)
+            return self._fit_lens_cached(
+                cluster_id, model_name, t_wk[w0 : w1 + 1] - float(d0),
+                y_wk[w0 : w1 + 1], y, d0, d1, n, cache_dir,
+            )
         i0_fb, i1_fb = _trim_window_central_mass(y, alpha)
         t_fb = np.arange(i1_fb - i0_fb + 1, dtype=float)
         return self._fit_lens_cached(
@@ -283,15 +347,22 @@ class DynamicsFitter:
     # ------------------------------------------------------------------
 
     def _fit_model(
-        self, cluster_id: int | str, model_name: str, t: np.ndarray, y: np.ndarray
+        self,
+        cluster_id: int | str,
+        model_name: str,
+        t: np.ndarray,
+        y: np.ndarray,
+        t_eval: np.ndarray | None = None,
     ) -> FitResult:
+        if t_eval is None:
+            t_eval = t
         try:
             if model_name == "logistic":
-                return self._fit_logistic(cluster_id, t, y)
+                return self._fit_logistic(cluster_id, t, y, t_eval)
             if model_name == "sir":
-                return self._fit_sir(cluster_id, t, y)
+                return self._fit_sir(cluster_id, t, y, t_eval)
             if model_name == "bass":
-                return self._fit_bass(cluster_id, t, y)
+                return self._fit_bass(cluster_id, t, y, t_eval)
             return FitResult(
                 cluster_id=cluster_id,
                 model_name=model_name,
@@ -320,7 +391,7 @@ class DynamicsFitter:
     # ------------------------------------------------------------------
 
     def _fit_logistic(
-        self, cluster_id: int | str, t: np.ndarray, y: np.ndarray
+        self, cluster_id: int | str, t: np.ndarray, y: np.ndarray, t_eval: np.ndarray
     ) -> FitResult:
         """Least-squares logistic fit (ADR-067) — point estimates + curve, no NUTS."""
         from scipy.optimize import least_squares
@@ -334,10 +405,11 @@ class DynamicsFitter:
             method="trf", max_nfev=2000,
         )
         L, k, t0 = (float(v) for v in res.x)
-        curve = logistic(t, L, k, t0)
-        r2 = _r_squared(y, curve)
+        fit_curve = logistic(t, L, k, t0)
+        curve = logistic(t_eval, L, k, t0)
+        r2 = _r_squared(y, fit_curve)
         converged = bool(res.success and r2 >= self._min_fit_r2())
-        ll = _gaussian_loglik(y, curve)
+        ll = _gaussian_loglik(y, fit_curve)
 
         # Self-standing numbers (ADR-062): growth rate -> doubling time (days),
         # inflection date, plateau level.
@@ -362,7 +434,7 @@ class DynamicsFitter:
     # ------------------------------------------------------------------
 
     def _fit_sir(
-        self, cluster_id: int | str, t: np.ndarray, y: np.ndarray
+        self, cluster_id: int | str, t: np.ndarray, y: np.ndarray, t_eval: np.ndarray
     ) -> FitResult:
         """Least-squares closed-form SIR fit (ADR-062/067) — no ODE, no NUTS.
 
@@ -374,9 +446,9 @@ class DynamicsFitter:
         """
         from scipy.optimize import least_squares
 
-        span = float(max(len(y), 2))
+        span = float(max(t.max() - t.min(), 2.0)) if len(t) > 1 else 2.0
         obs_peak = float(max(y.max(), 1.0))
-        peak_day_guess = float(np.argmax(y))
+        peak_day_guess = float(t[int(np.argmax(y))])
 
         def curve_of(p):
             ph, ptime, k0, rr = p
@@ -392,10 +464,11 @@ class DynamicsFitter:
         )
         ph, ptime, k0, rr = (float(v) for v in res.x)
         ts = (1.0 - k0) / (k0 * max(rr, 1e-9))
-        curve = sir_kssir_curve(t, ph, ptime, k0, ts)
-        r2 = _r_squared(y, curve)
+        fit_curve = sir_kssir_curve(t, ph, ptime, k0, ts)
+        curve = sir_kssir_curve(t_eval, ph, ptime, k0, ts)
+        r2 = _r_squared(y, fit_curve)
         converged = bool(res.success and r2 >= self._min_fit_r2())
-        ll = _gaussian_loglik(y, curve)
+        ll = _gaussian_loglik(y, fit_curve)
 
         rise_rate = sir_rise_rate(k0, ts)
         decay_rate = sir_decay_rate(k0, ts)
@@ -422,41 +495,67 @@ class DynamicsFitter:
     # ------------------------------------------------------------------
 
     def _fit_bass(
-        self, cluster_id: int | str, t: np.ndarray, y: np.ndarray
+        self, cluster_id: int | str, t: np.ndarray, y: np.ndarray, t_eval: np.ndarray
     ) -> FitResult:
         """Least-squares Bass fit (ADR-067) — closed form, no NUTS.
 
         Priors are retired to init values anchored to the Sultan–Farley–Lehmann 1990
         meta-analysis means (p≈0.03 innovation, q≈0.38 imitation), which now seed the
         optimizer rather than regularize a posterior.
+
+        A launch-time shift ``t_launch`` is fit alongside (m, p, q): the Bass curve
+        is anchored at the diffusion's start, which is unobserved and rarely the
+        fit window's first day. SIR and the logistic each carry a free location
+        parameter (peak_time, t0); without one Bass alone was pinned to the window
+        edge and systematically under-fit (the standard left-truncation treatment;
+        cf. the virtual Bass model, Jiang, Bass & Bass 2006). Volume before
+        t_launch is zero by definition.
         """
         from scipy.optimize import least_squares
 
         priors = self._cfg["dynamics"]["priors"]["bass"]
-        m0 = max(float(y.sum()), 1.0)
-        # Init p, q from the Sultan–Farley–Lehmann 1990 meta-analysis means (ADR-067).
-        x0 = [m0, float(np.exp(priors["p_log_mean"])), float(np.exp(priors["q_log_mean"]))]
-        lo = [1e-6, 1e-5, 1e-5]
-        hi = [m0 * 10.0 + 1.0, 2.0, 5.0]
+        dt = float(t[1] - t[0]) if len(t) > 1 else 1.0
+        m0 = max(float(y.sum() * dt), 1.0)
+        span = float(t.max() - t.min()) if len(t) > 1 else 1.0
+
+        def curve_of(params: np.ndarray, tt: np.ndarray) -> np.ndarray:
+            m, p, q, t_launch = params
+            shifted = tt - t_launch
+            out = bass(np.maximum(shifted, 0.0), m, p, q)
+            return np.where(shifted >= 0.0, out, 0.0)
+
+        # Init p, q from the Sultan–Farley–Lehmann 1990 meta-analysis means (ADR-067),
+        # time-rescaled so the implied peak ln(q/p)/(p+q) lands on the observed peak —
+        # the meta-analysis rates are per adoption *period*, not per day, and taken
+        # raw they start the optimizer on a two-week diffusion regardless of the
+        # window. Same data-scaled-init treatment the SIR fit already gets.
+        p0 = float(np.exp(priors["p_log_mean"]))
+        q0 = float(np.exp(priors["q_log_mean"]))
+        t_peak_obs = float(t[int(np.argmax(y))])
+        horizon = max(t_peak_obs - float(t.min()), dt)
+        scale = float(np.log(q0 / p0) / ((p0 + q0) * horizon))
+        x0 = [m0, p0 * scale, q0 * scale, float(t.min())]
+        lo = [1e-6, 1e-7, 1e-7, float(t.min()) - span]
+        hi = [m0 * 10.0 + 1.0, 2.0, 5.0, float(t.max())]
         res = least_squares(
-            lambda p: bass(t, *p) - y, x0, bounds=(lo, hi),
-            method="trf", max_nfev=3000,
+            lambda p: curve_of(p, t) - y, x0, bounds=(lo, hi),
+            method="trf", max_nfev=4000,
         )
-        m, p, q = (float(v) for v in res.x)
-        curve = bass(t, m, p, q)
-        r2 = _r_squared(y, curve)
+        m, p, q, t_launch = (float(v) for v in res.x)
+        curve = curve_of(res.x, t_eval)
+        r2 = _r_squared(y, curve_of(res.x, t))
         converged = bool(res.success and r2 >= self._min_fit_r2())
-        ll = _gaussian_loglik(y, curve)
+        ll = _gaussian_loglik(y, curve_of(res.x, t))
 
         # Bass headline: total reach + the innovation/imitation balance.
         return FitResult(
             cluster_id=cluster_id,
             model_name="bass",
             converged=converged,
-            aicc=aicc(ll, k=3, n=len(y)),
-            peak_time_mean=bass_peak_time(p, q),
+            aicc=aicc(ll, k=4, n=len(y)),
+            peak_time_mean=t_launch + bass_peak_time(p, q),
             param_summary={
-                "m": m, "p": p, "q": q, "r2": r2,
+                "m": m, "p": p, "q": q, "t_launch": t_launch, "r2": r2,
                 "total_reach": m,
                 "p_innovation": p,
                 "q_imitation": q,
@@ -495,6 +594,7 @@ def _lens_fit_signature(
     dyn = cfg["dynamics"]
     lens_cfg: dict[str, Any] = {
         "model": model_name,
+        "grid": "weekly-blocks-v1",  # weekly-mean fit grid; bump to invalidate
         "smoothing": dyn.get("smoothing_window_days"),
         "fit_window_strategy": dyn.get("fit_window_strategy", "central_mass"),
         "fit_window_mass_alpha": dyn.get("fit_window_mass_alpha"),
@@ -507,6 +607,31 @@ def _lens_fit_signature(
         + repr(lens_cfg).encode()
     )
     return hashlib.sha1(payload).hexdigest()[:12]
+
+
+def _weekly_blocks(y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Weekly-mean fit points from the smoothed daily series.
+
+    Blocks of 7 consecutive days from the series start (a trailing partial block
+    keeps its own mean); block times are the block centers in day units, so the
+    fitted parameters stay in per-day units and the curve can be evaluated back
+    on the daily grid for display. Returns ``(block_means, block_center_days)``.
+    """
+    y = np.asarray(y, dtype=float)
+    n = y.size
+    n_blocks = (n + 6) // 7
+    means = np.empty(n_blocks)
+    centers = np.empty(n_blocks)
+    for w in range(n_blocks):
+        d0, d1 = 7 * w, min(7 * w + 7, n)
+        means[w] = float(y[d0:d1].mean())
+        centers[w] = (d0 + d1 - 1) / 2.0
+    return means, centers
+
+
+def _weekly_to_daily_bounds(w0: int, w1: int, n_daily: int) -> tuple[int, int]:
+    """Daily index bounds [d0, d1] covered by weekly blocks w0..w1 (inclusive)."""
+    return 7 * w0, min(7 * w1 + 6, n_daily - 1)
 
 
 def _candidate_windows(
