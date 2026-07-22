@@ -155,6 +155,112 @@ def _terms_from_topic_info(path: str) -> dict[int, list[str]]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Tier-0 gold benchmark + shared clustering helpers (research, no pipeline use)
+# ---------------------------------------------------------------------------
+
+def _load_gold(path: str = "scripts/experiments/narrative_gold.json") -> list[dict]:
+    p = Path(path)
+    if not p.exists():
+        p = Path(__file__).resolve().parent / "narrative_gold.json"
+    return json.loads(p.read_text())["narratives"]
+
+
+def _score_gold(mf: pd.DataFrame, terms_by_topic: dict[int, list[str]] | None,
+                gold: list[dict], topic_col: str = "topic") -> dict:
+    """Score one clustering against the hand-labelled narratives (Tier 0).
+
+    For each gold narrative, find the cluster whose c-TF-IDF terms best overlap
+    its keyword set, then measure how concentrated that cluster's articles are in
+    the narrative's active window. A story-like clustering matches the terms AND
+    concentrates in-window; a bucket matches the terms but sprawls across the
+    corpus. Persistent narratives (r-star, climate) are excluded from the
+    concentration average — a low value there is correct, not a miss.
+    """
+    m = mf[mf[topic_col] != -1].drop_duplicates(subset=[topic_col, "article_id"])
+    dates_by = {int(t): g["published_at"] for t, g in m.groupby(topic_col)}
+    term_str = {int(t): " ".join(w.lower() for w in ws)
+                for t, ws in (terms_by_topic or {}).items()}
+    per: list[dict] = []
+    for nar in gold:
+        gterms = [t.lower() for t in nar["terms"]]
+        best_t, best_ov = None, 0
+        for t, s in term_str.items():
+            ov = sum(1 for g in gterms if g in s)
+            if ov > best_ov:
+                best_ov, best_t = ov, t
+        rec: dict = {"name": nar["name"], "persistent": bool(nar.get("persistent", False)),
+                     "overlap": int(best_ov), "matched_topic": best_t,
+                     "found": bool(best_ov >= 2)}
+        if rec["found"]:
+            d = pd.to_datetime(dates_by[best_t], utc=True, errors="coerce").dropna()
+            start = pd.Timestamp(nar["start"], tz="UTC")
+            end = pd.Timestamp(nar["end"], tz="UTC") + pd.offsets.MonthEnd(0)
+            rec["in_window_frac"] = round(float(((d >= start) & (d <= end)).mean()), 3) if len(d) else 0.0
+            rec["matched_span_y"] = round(float((d.max() - d.min()).days / 365.25), 2) if len(d) else 0.0
+            rec["matched_size"] = int(len(d))
+        per.append(rec)
+    found = [r for r in per if r["found"]]
+    ep = [r for r in found if not r["persistent"]]
+    return {
+        "recall": round(len(found) / max(len(gold), 1), 3),
+        "concentration_episodic": round(float(np.mean([r["in_window_frac"] for r in ep])), 3) if ep else None,
+        "median_matched_span_y": round(float(np.median([r["matched_span_y"] for r in found])), 2) if found else None,
+        "per_narrative": per,
+    }
+
+
+def _cluster_terms(docs: list[str], labels, topn: int = 8, max_chars: int = 500) -> dict[int, list[str]]:
+    """Lightweight c-TF-IDF terms per label (each cluster = one concatenated doc).
+
+    Mirrors BERTopic's c-TF-IDF closely enough for the diagnostics without
+    instantiating a full model. Stays sparse throughout so a many-thousand-cluster
+    grid does not densify a clusters x vocab matrix.
+    """
+    from sklearn.feature_extraction.text import CountVectorizer
+
+    labels = np.asarray(labels)
+    uniq = [int(l) for l in sorted(set(labels.tolist())) if l != -1]
+    if not uniq:
+        return {}
+    texts = [" ".join(docs[i][:max_chars] for i in np.nonzero(labels == l)[0]) for l in uniq]
+    cv = CountVectorizer(stop_words="english", ngram_range=(1, 2), min_df=1, max_features=40000)
+    X = cv.fit_transform(texts).astype(float)
+    rs = np.asarray(X.sum(axis=1)).ravel()
+    rs[rs == 0] = 1.0
+    tf = X.multiply((1.0 / rs)[:, None])
+    df_ = np.asarray((X > 0).sum(axis=0)).ravel()
+    idf = np.log(1.0 + X.shape[0] / (1.0 + df_))
+    ctf = tf.multiply(idf.reshape(1, -1)).tocsr()
+    vocab = np.array(cv.get_feature_names_out())
+    out: dict[int, list[str]] = {}
+    for r, l in enumerate(uniq):
+        row = ctf.getrow(r)
+        if row.nnz == 0:
+            out[l] = []
+            continue
+        order = row.indices[np.argsort(row.data)[::-1][:topn]]
+        out[l] = [str(vocab[j]) for j in order]
+    return out
+
+
+def _umap_reduce(embeddings, cfg, n_components: int):
+    from umap import UMAP
+
+    u = cfg["clustering"]["umap"]
+    return UMAP(n_neighbors=u["n_neighbors"], min_dist=u["min_dist"],
+                n_components=n_components, metric=u["metric"],
+                random_state=u["random_state"]).fit_transform(embeddings)
+
+
+def _hdbscan_labels(reduced, min_cluster_size: int, method: str, cfg):
+    from hdbscan import HDBSCAN
+
+    h = cfg["clustering"]["hdbscan"]
+    return HDBSCAN(min_cluster_size=min_cluster_size, cluster_selection_method=method,
+                   metric=h["metric"], prediction_data=False).fit_predict(reduced)
+
+
 def arm_control(cfg) -> dict:
     clusters_df, _ = _load_base(cfg, with_embeddings=False)
     terms = _terms_from_topic_info("data/processed/topic_info.parquet")
@@ -283,15 +389,142 @@ def arm_drift(cfg) -> dict:
     }
 
 
+def arm_grid(cfg, components: list[int], mcs_list: list[int], methods: list[str]) -> dict:
+    """Resolution sweep on the CACHED embeddings — no re-embed (Tier 1).
+
+    For each UMAP ``n_components`` (fit once, the expensive step), sweep HDBSCAN
+    ``min_cluster_size`` x ``cluster_selection_method`` (cheap). Reports the four
+    bucket-vs-story diagnostics plus the Tier-0 gold recall/concentration for
+    every cell, so we can read whether finer resolution breaks the long-lived
+    buckets into time-localized stories without paying GPU cost.
+    """
+    clusters_df, embeddings = _load_base(cfg)
+    if not clusters_df.index.equals(pd.RangeIndex(len(clusters_df))):
+        clusters_df = clusters_df.reset_index(drop=True)
+    docs = _docs_from(clusters_df)
+    gold = _load_gold()
+    results: list[dict] = []
+    for nc in components:
+        log.info("grid: UMAP fit n_components=%d on %d docs", nc, len(clusters_df))
+        reduced = _umap_reduce(embeddings, cfg, nc)
+        for mcs in mcs_list:
+            for method in methods:
+                labels = _hdbscan_labels(reduced, mcs, method, cfg)
+                mf = _member_frame(
+                    clusters_df.assign(topic_ab=labels), "topic_ab"
+                ).rename(columns={"topic_ab": "topic"})
+                terms = _cluster_terms(docs, labels)
+                m = cluster_metrics(mf, terms)
+                g = _score_gold(mf, terms, gold)
+                row = {
+                    "n_components": nc, "min_cluster_size": mcs, "selection": method,
+                    "n_clusters": m["n_clusters"], "n_ge_42": m["n_ge_42"],
+                    "noise_share": m["noise_share"],
+                    "duration_median_y": m["duration_median_y"],
+                    "share_gt10y": m["share_gt10y"],
+                    "single_source_ge90_share": m["single_source_ge90_share"],
+                    "person_top5_share": m["person_top5_share"],
+                    "gold_recall": g["recall"],
+                    "gold_concentration": g["concentration_episodic"],
+                    "gold_median_span_y": g["median_matched_span_y"],
+                }
+                results.append(row)
+                log.info("  mcs=%d %-4s → clusters=%d ge42=%d gt10y=%.2f gold_conc=%s span=%s",
+                         mcs, method, m["n_clusters"], m["n_ge_42"],
+                         m["share_gt10y"], g["concentration_episodic"],
+                         g["median_matched_span_y"])
+    return {"grid": results, "baseline_control": arm_control(cfg)}
+
+
+def arm_probe(cfg, top_k: int, sub_mcs: int) -> dict:
+    """Sub-cluster the largest surfaced buckets on their own members (Tier 1).
+
+    The single most diagnostic test: for each of the ``top_k`` biggest >=42
+    clusters, re-reduce and re-cluster ONLY that bucket's member embeddings at
+    fine resolution (leaf, small min_cluster_size). If coherent (framing x era)
+    sub-clusters fall out with much shorter spans than the parent, the framings
+    are separable in the current embedding space and the fix is a cheap
+    resolution change. If they do not, the embedding geometry blends framings and
+    a re-embed is required. Reads whether we are on the cheap or expensive branch.
+    """
+    clusters_df, embeddings = _load_base(cfg)
+    if not clusters_df.index.equals(pd.RangeIndex(len(clusters_df))):
+        clusters_df = clusters_df.reset_index(drop=True)
+    df = _member_frame(clusters_df)
+    docs = _docs_from(clusters_df)
+    parent_terms = _terms_from_topic_info("data/processed/topic_info.parquet")
+    nc = int(cfg["clustering"]["umap"]["n_components"])
+
+    sizes = df[df["topic"] != -1].groupby("topic")["article_id"].nunique().sort_values(ascending=False)
+    targets = [int(t) for t in sizes[sizes >= 42].index[:top_k]]
+    out: list[dict] = []
+    for tid in targets:
+        rows = df[df["topic"] == tid]
+        idx = rows.index.to_numpy()
+        emb = embeddings[idx]
+        pdt = pd.to_datetime(rows.drop_duplicates("article_id")["published_at"], utc=True).dropna()
+        pspan = float((pdt.max() - pdt.min()).days / 365.25) if len(pdt) else 0.0
+        reduced = _umap_reduce(emb, cfg, nc) if len(emb) > (nc + 2) * 5 else emb
+        sub = _hdbscan_labels(reduced, sub_mcs, "leaf", cfg)
+        sub_terms = _cluster_terms([docs[i] for i in idx], sub)
+        subframe = rows.assign(_sub=sub)
+        subs: list[dict] = []
+        for sid, g in subframe[subframe["_sub"] != -1].groupby("_sub"):
+            gd = pd.to_datetime(g.drop_duplicates("article_id")["published_at"], utc=True).dropna()
+            subs.append({
+                "sub": int(sid), "n_articles": int(g["article_id"].nunique()),
+                "span_y": round(float((gd.max() - gd.min()).days / 365.25), 2) if len(gd) else 0.0,
+                "center": str(gd.mean().date()) if len(gd) else None,
+                "terms": sub_terms.get(int(sid), [])[:8],
+            })
+        subs.sort(key=lambda s: -s["n_articles"])
+        med_sub = float(np.median([s["span_y"] for s in subs])) if subs else None
+        centers = sorted(s["center"] for s in subs if s["center"])
+        out.append({
+            "parent_topic": tid, "parent_terms": parent_terms.get(tid, [])[:8],
+            "parent_n_articles": int(sizes[tid]), "parent_span_y": round(pspan, 2),
+            "n_subclusters": len(subs),
+            "sub_noise_share": round(float((np.asarray(sub) == -1).mean()), 3),
+            "median_sub_span_y": round(med_sub, 2) if med_sub is not None else None,
+            "sub_center_range": [centers[0], centers[-1]] if centers else None,
+            "subclusters": subs[:12],
+        })
+        log.info("probe topic %d (n=%d span=%.1fy) → %d subs, median sub span %s",
+                 tid, int(sizes[tid]), pspan, len(subs), med_sub)
+    return {"top_k": top_k, "sub_min_cluster_size": sub_mcs, "buckets": out}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True,
-                    choices=["control", "leaf", "sliced", "drift"])
+                    choices=["control", "leaf", "sliced", "drift", "grid", "probe"])
+    # grid (Tier 1 resolution sweep) knobs
+    ap.add_argument("--grid-components", default="5,15",
+                    help="comma-separated UMAP n_components to sweep (grid arm)")
+    ap.add_argument("--grid-mcs", default="5,10",
+                    help="comma-separated HDBSCAN min_cluster_size to sweep (grid arm)")
+    ap.add_argument("--grid-methods", default="eom,leaf",
+                    help="comma-separated HDBSCAN selection methods (grid arm)")
+    # probe (Tier 1 within-bucket sub-clustering) knobs
+    ap.add_argument("--top-k", type=int, default=10,
+                    help="number of largest surfaced buckets to probe (probe arm)")
+    ap.add_argument("--sub-min-cluster", type=int, default=5,
+                    help="HDBSCAN min_cluster_size for sub-clustering (probe arm)")
     args = ap.parse_args()
     cfg = load_config()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    result = {"control": arm_control, "leaf": arm_leaf,
-              "sliced": arm_sliced, "drift": arm_drift}[args.arm](cfg)
+    if args.arm == "grid":
+        result = arm_grid(
+            cfg,
+            [int(x) for x in args.grid_components.split(",") if x],
+            [int(x) for x in args.grid_mcs.split(",") if x],
+            [m for m in args.grid_methods.split(",") if m],
+        )
+    elif args.arm == "probe":
+        result = arm_probe(cfg, args.top_k, args.sub_min_cluster)
+    else:
+        result = {"control": arm_control, "leaf": arm_leaf,
+                  "sliced": arm_sliced, "drift": arm_drift}[args.arm](cfg)
     out = OUT_DIR / f"{args.arm}.json"
     out.write_text(json.dumps(result, indent=2, default=float))
     log.info("arm %s → %s", args.arm, out)

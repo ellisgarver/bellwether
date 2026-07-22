@@ -1,0 +1,65 @@
+{
+  "_about": "Tier-0 evaluation set (cluster_ab). A small hand-labelled set of macro narratives that DID form/rise/fade in 2010-present institutional discourse, each with the terms that identify it and the window it was actually active. A story-like clustering surfaces each as a cluster that (a) matches the terms and (b) is temporally CONCENTRATED in the window; a bucket clustering matches the terms but spreads across the whole corpus. The scorer reports, per candidate clustering, term-match recall and in-window mass concentration. Windows are deliberately generous (month granularity) — the metric rewards concentration, not exact edges. 'persistent: true' marks narratives that are genuinely long-lived (r-star, climate) so a low concentration there is NOT a failure; they test that the architecture does not shatter a real slow-burn.",
+  "narratives": [
+    {
+      "name": "Transitory inflation debate",
+      "terms": ["transitory", "inflation", "supply chain", "base effects", "reopening", "bottlenecks"],
+      "start": "2021-01", "end": "2022-06", "persistent": false
+    },
+    {
+      "name": "Soft landing / disinflation",
+      "terms": ["soft landing", "disinflation", "immaculate", "no recession", "cooling"],
+      "start": "2023-04", "end": "2024-12", "persistent": false
+    },
+    {
+      "name": "SVB and regional bank stress",
+      "terms": ["silicon valley bank", "svb", "regional banks", "bank run", "uninsured deposits", "deposit outflows"],
+      "start": "2023-03", "end": "2023-10", "persistent": false
+    },
+    {
+      "name": "Taper tantrum",
+      "terms": ["taper", "tapering", "tantrum", "asset purchases", "bond yields"],
+      "start": "2013-05", "end": "2014-06", "persistent": false
+    },
+    {
+      "name": "European sovereign debt crisis",
+      "terms": ["greece", "sovereign debt", "euro area", "periphery", "bailout", "contagion"],
+      "start": "2010-04", "end": "2012-12", "persistent": false
+    },
+    {
+      "name": "COVID-19 policy response",
+      "terms": ["covid", "coronavirus", "pandemic", "lockdown", "cares act", "paycheck protection"],
+      "start": "2020-03", "end": "2021-06", "persistent": false
+    },
+    {
+      "name": "Stablecoins and crypto stress",
+      "terms": ["stablecoin", "crypto", "bitcoin", "digital assets", "terra", "ftx"],
+      "start": "2021-06", "end": "2023-06", "persistent": false
+    },
+    {
+      "name": "Quantitative tightening / balance-sheet runoff",
+      "terms": ["quantitative tightening", "balance sheet", "runoff", "reserves", "reverse repo"],
+      "start": "2022-01", "end": "2024-06", "persistent": false
+    },
+    {
+      "name": "2023 debt-ceiling standoff",
+      "terms": ["debt ceiling", "debt limit", "default", "extraordinary measures", "x-date"],
+      "start": "2023-01", "end": "2023-07", "persistent": false
+    },
+    {
+      "name": "Yield-curve inversion recession signal",
+      "terms": ["yield curve", "inversion", "inverted", "recession", "term spread"],
+      "start": "2022-07", "end": "2023-12", "persistent": false
+    },
+    {
+      "name": "R-star / secular stagnation",
+      "terms": ["secular stagnation", "r-star", "natural rate", "neutral rate", "equilibrium real rate"],
+      "start": "2013-11", "end": "2020-12", "persistent": true
+    },
+    {
+      "name": "Climate risk and the NGFS",
+      "terms": ["climate", "ngfs", "transition risk", "physical risk", "net zero", "green"],
+      "start": "2019-01", "end": "2025-06", "persistent": true
+    }
+  ]
+}
