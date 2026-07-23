@@ -21,7 +21,13 @@ Three per-document operations, all reversible-by-metadata:
    by/with Mr X, <office>, at <venue>, <date>." block that curated reprints
    (BIS central-bank speeches) prepend to the prose — are stripped from the
    body start.
-3. **PDF furniture** — bare page-number lines, "Page N of M" lines, short
+3. **Disclaimers & mastheads** — the institutional "views expressed … do not
+   necessarily reflect those of the <institution>" sentence and the "… Working
+   Papers describe research in progress …"/ISSN masthead, removed wherever they
+   sit. Identical across hundreds of curated speeches and staff papers, they
+   otherwise co-embed unrelated documents into a single disclaimer cluster (the
+   BIS speaker-disclaimer and IMF ISSN buckets the cluster_ab probe exposed).
+4. **PDF furniture** — bare page-number lines, "Page N of M" lines, short
    lines repeated across the same document (running headers/footers), and a
    trailing References/Bibliography section — are dropped line-wise. Raw
    ``pypdf`` extraction keeps all of these inline.
@@ -95,6 +101,31 @@ _LEADING_CREDIT_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# Institutional disclaimer sentence, anywhere in the body — the single most
+# common cross-document furniture on this corpus. Identical text across hundreds
+# of curated speeches (BIS) and staff papers (IMF/Fed), so it co-embeds
+# unrelated documents into one "disclaimer" cluster (the BIS speaker-disclaimer
+# bucket, topic 20) unless removed. Institution-agnostic: keyed on the invariant
+# "<views/opinions/analysis> <expressed/set forth> … not necessarily …
+# <reflect/represent/indicate> …." — a self-contained sentence removed wherever
+# it sits (head, foot, or mid-text), bounded so a stray period cannot run it on.
+_DISCLAIMER_RE = re.compile(
+    r"(?:the\s+)?(?:views?|opinions?|analysis(?:\s+and\s+conclusions?)?)\s+"
+    r"(?:expressed|presented|set\s+forth)\b[^.]{0,320}?"
+    r"\bnot\s+necessarily\b[^.]{0,180}?\.",
+    re.IGNORECASE,
+)
+# Working-paper masthead furniture: the ISSN stamp and the "… Working Papers
+# describe research in progress … encourage debate." front-matter sentence
+# (the IMF ISSN-1018-5941 bucket, topic 1). Institution-agnostic on the series
+# name; the ISSN branch also catches the bare number stamp.
+_MASTHEAD_RE = re.compile(
+    r"\bISSN\b[\s:]*\d{4}-?\d{3}[\dX]\b"
+    r"|\b(?:IMF|BIS|ECB|OFR|CBO|NBER)\s+working\s+papers?\s+(?:describe|are|should)\b[^.]{0,260}?\."
+    r"|\bworking\s+papers?\s+describe\s+research\s+in\s+progress\b[^.]{0,260}?\.",
+    re.IGNORECASE,
+)
+
 _PAGE_NUMBER_RE = re.compile(r"^\s*(?:-\s*)?\d{1,4}(?:\s*-)?\s*$")
 _PAGE_OF_RE = re.compile(r"^\s*page\s+\d+(?:\s+of\s+\d+)?\s*$", re.IGNORECASE)
 # Trailing scholarly apparatus — dropped when the heading sits in the document
@@ -133,6 +164,7 @@ class FurnitureReport:
     n_byline_titles_split: int = 0
     n_preambles_stripped: int = 0
     n_leading_stripped: int = 0
+    n_disclaimers_stripped: int = 0
     n_furniture_lines_dropped: int = 0
     n_reference_sections_dropped: int = 0
     n_articles_modified: int = 0
@@ -144,6 +176,7 @@ class FurnitureReport:
             "n_byline_titles_split": self.n_byline_titles_split,
             "n_leading_stripped": self.n_leading_stripped,
             "n_preambles_stripped": self.n_preambles_stripped,
+            "n_disclaimers_stripped": self.n_disclaimers_stripped,
             "n_furniture_lines_dropped": self.n_furniture_lines_dropped,
             "n_reference_sections_dropped": self.n_reference_sections_dropped,
             "n_articles_modified": self.n_articles_modified,
@@ -256,6 +289,30 @@ def strip_leading_furniture(body: str, title: str) -> tuple[str, bool]:
     text = _try(_LEADING_CREDIT_RE.sub("", text, count=1))
     text = text.lstrip()
     return (text, True) if text and text != original.lstrip() else (original, False)
+
+
+def strip_disclaimers(body: str) -> tuple[str, int]:
+    """Remove institutional disclaimer + working-paper masthead furniture, anywhere.
+
+    Unlike leading furniture, the "views expressed … do not necessarily reflect
+    those of the <institution>" disclaimer and the "… Working Papers describe
+    research in progress …" masthead sit at the head, foot, or mid-text of
+    curated reprints and staff papers. They are identical across hundreds of
+    documents, so they co-embed unrelated papers into a single 'disclaimer'
+    cluster (the BIS speaker-disclaimer bucket and the IMF ISSN bucket seen in
+    the cluster_ab probe). Each is a self-contained, institution-agnostic
+    sentence, excised wherever it appears; the doubled spaces left behind are
+    tidied without flattening newlines, so the later line-based pass still sees
+    the document structure. Returns ``(cleaned_body, n_spans_removed)``.
+    """
+    text, n1 = _DISCLAIMER_RE.subn(" ", body)
+    text, n2 = _MASTHEAD_RE.subn(" ", text)
+    n_total = n1 + n2
+    if not n_total:
+        return body, 0
+    # collapse only intra-line runs left by the excision; keep newlines intact.
+    text = re.sub(r"[ \t]{2,}", " ", text).strip()
+    return text, n_total
 
 
 def strip_attribution_preamble(body: str, title: str) -> tuple[str, bool]:
@@ -391,7 +448,7 @@ class FurnitureCleaner:
         touching the corpus. ``report_deltas`` is a dict of the per-document
         counts the aggregate report accumulates.
         """
-        deltas = {"byline": 0, "preamble": 0, "leading": 0,
+        deltas = {"byline": 0, "preamble": 0, "leading": 0, "disclaimer": 0,
                   "furniture_lines": 0, "reference": 0}
         speaker = None
         if source in self.byline_sources:
@@ -408,6 +465,11 @@ class FurnitureCleaner:
         if led:
             body = new_body
             deltas["leading"] = 1
+        # Corpus-wide disclaimer + working-paper masthead, removed anywhere.
+        new_body, n_disc = strip_disclaimers(body)
+        if n_disc:
+            body = new_body
+            deltas["disclaimer"] = n_disc
         new_body, n_dropped, ref_dropped = strip_body_furniture(
             body,
             max_running_line_words=self.max_running_line_words,
@@ -437,9 +499,11 @@ class FurnitureCleaner:
                 rep.by_source[source] = rep.by_source.get(source, 0) + 1
             rep.n_preambles_stripped += d["preamble"]
             rep.n_leading_stripped += d["leading"]
+            rep.n_disclaimers_stripped += d["disclaimer"]
             rep.n_furniture_lines_dropped += d["furniture_lines"]
             rep.n_reference_sections_dropped += d["reference"]
-            if speaker is not None or d["preamble"] or d["leading"] or d["furniture_lines"]:
+            if (speaker is not None or d["preamble"] or d["leading"]
+                    or d["disclaimer"] or d["furniture_lines"]):
                 a.body = new_body
                 rep.n_articles_modified += 1
         self.report = rep

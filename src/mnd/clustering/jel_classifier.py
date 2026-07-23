@@ -176,10 +176,13 @@ JEL_CODE_DESCRIPTIONS: dict[str, str] = {
 }
 
 # Macro-finance scope per ADR-020. Clusters whose primary JEL code is in this
-# set are retained for SIR/logistic dynamics analysis. Out-of-scope clusters
-# are reported but excluded from fitting — they are not dropped from the
-# embedded corpus.
-DEFAULT_MACRO_JEL_SCOPE: frozenset[str] = frozenset({"E", "F", "G", "H"})
+# set are marked in-scope (a display flag, never a fitting/analysis gate —
+# every non-noise cluster is still fit and staged; scope only drives the
+# default surfaced view). E macroeconomics/monetary, F international, G
+# financial, H public economics, and J labor & demographic economics — labor
+# is core macro (the Fed's dual mandate; the largest Fed cluster is labor+PCE),
+# so J joins E/F/G/H (2026-07-23). I (health/education/welfare) stays out.
+DEFAULT_MACRO_JEL_SCOPE: frozenset[str] = frozenset({"E", "F", "G", "H", "J"})
 
 
 @dataclass(frozen=True)

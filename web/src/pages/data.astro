@@ -55,7 +55,8 @@ const sourceBars = [...sourceTotals.entries()]
   .sort((a, b) => a.articles - b.articles); // ascending: Plotly h-bars read bottom→top
 
 // JEL-field totals (article-weighted), with in-scope flag for color.
-const IN_SCOPE = new Set(["E", "F", "G", "H"]);
+// Mirrors DEFAULT_MACRO_JEL_SCOPE in jel_classifier.py (E/F/G/H + J labor).
+const IN_SCOPE = new Set(["E", "F", "G", "H", "J"]);
 const jelTotals = new Map<string, number>();
 if (comp?.by_jel) {
   for (const [code, n] of Object.entries(comp.by_jel)) {

@@ -494,10 +494,100 @@ def arm_probe(cfg, top_k: int, sub_mcs: int) -> dict:
     return {"top_k": top_k, "sub_min_cluster_size": sub_mcs, "buckets": out}
 
 
+def arm_hier(cfg, parent_floor: int, sub_mcs: int, sub_method: str) -> dict:
+    """Two-level (divisive) clustering: keep the flat topic as the THEME, then
+    sub-cluster each theme on its own member embeddings to expose the STORIES.
+
+    The probe generalized to every theme and SCORED on the gold set at the leaf
+    level. This is the direct test of whether (theme x episode) is the right
+    unit of analysis: a flat pass gives 14-year persistent buckets, but the probe
+    showed the mini-stories separate cleanly inside each bucket. Here the leaves
+    become the narratives and we measure gold recall / in-window concentration /
+    span on them, comparably to the flat baseline and the grid cells.
+
+    Divisive (split down), not BERTopic's agglomerative ``hierarchical_topics``
+    (merge up): the problem is persistent buckets that must be SPLIT, and drift
+    already showed they would not merge with their own past. Runs on the CACHED
+    embeddings — no re-embed. A theme that does not sub-divide (HDBSCAN returns
+    all-noise) is kept whole as a single leaf, so a coherent short narrative is
+    never lost to leaf noise.
+    """
+    clusters_df, embeddings = _load_base(cfg)
+    if not clusters_df.index.equals(pd.RangeIndex(len(clusters_df))):
+        clusters_df = clusters_df.reset_index(drop=True)
+    docs = _docs_from(clusters_df)
+    gold = _load_gold()
+    topic = clusters_df["topic"].to_numpy()
+    nc = int(cfg["clustering"]["umap"]["n_components"])
+
+    sizes = pd.Series(topic[topic != -1]).value_counts()
+    targets = [int(t) for t in sizes[sizes >= parent_floor].index]
+    leaf = np.full(len(clusters_df), -1, dtype=int)
+    next_id = 0
+    leaf_spans: list[float] = []
+    dts = pd.to_datetime(clusters_df["published_at"], utc=True, errors="coerce")
+    for tid in targets:
+        idx = np.nonzero(topic == tid)[0]
+        emb = embeddings[idx]
+        reduced = _umap_reduce(emb, cfg, nc) if len(emb) > (nc + 2) * 5 else emb
+        sub = _hdbscan_labels(reduced, sub_mcs, sub_method, cfg)
+        groups = [np.nonzero(sub == s)[0] for s in sorted(set(sub)) if s != -1]
+        if not groups:                      # theme did not divide — keep it whole
+            groups = [np.arange(len(idx))]
+        for g in groups:
+            sel = idx[g]
+            leaf[sel] = next_id
+            gd = dts.iloc[sel].dropna()
+            if len(gd):
+                leaf_spans.append(float((gd.max() - gd.min()).days / 365.25))
+            next_id += 1
+
+    mf = _member_frame(clusters_df.assign(topic_ab=leaf), "topic_ab").rename(
+        columns={"topic_ab": "topic"})
+    terms = _cluster_terms(docs, leaf)
+    hier_metrics = cluster_metrics(mf, terms)
+    hier_gold = _score_gold(mf, terms, gold)
+
+    # Flat baseline on the same corpus, for a like-for-like comparison.
+    flat_terms = _terms_from_topic_info("data/processed/topic_info.parquet")
+    flat_mf = _member_frame(clusters_df)
+    flat_metrics = cluster_metrics(flat_mf, flat_terms)
+    flat_gold = _score_gold(flat_mf, flat_terms, gold)
+
+    ls = pd.Series(leaf_spans)
+    return {
+        "parent_floor": parent_floor, "sub_min_cluster_size": sub_mcs,
+        "sub_method": sub_method, "n_themes_split": len(targets),
+        "n_leaves": int(next_id),
+        "leaf_span_median_y": float(ls.median()) if len(ls) else None,
+        "leaf_span_p90_y": float(ls.quantile(0.9)) if len(ls) else None,
+        "leaf_share_gt10y": float((ls > 10).mean()) if len(ls) else None,
+        "hier": {
+            "n_ge_42": hier_metrics["n_ge_42"],
+            "duration_median_y": hier_metrics["duration_median_y"],
+            "share_gt10y": hier_metrics["share_gt10y"],
+            "single_source_ge90_share": hier_metrics["single_source_ge90_share"],
+            "gold_recall": hier_gold["recall"],
+            "gold_concentration": hier_gold["concentration_episodic"],
+            "gold_median_span_y": hier_gold["median_matched_span_y"],
+        },
+        "flat_baseline": {
+            "n_ge_42": flat_metrics["n_ge_42"],
+            "duration_median_y": flat_metrics["duration_median_y"],
+            "share_gt10y": flat_metrics["share_gt10y"],
+            "single_source_ge90_share": flat_metrics["single_source_ge90_share"],
+            "gold_recall": flat_gold["recall"],
+            "gold_concentration": flat_gold["concentration_episodic"],
+            "gold_median_span_y": flat_gold["median_matched_span_y"],
+        },
+        "gold_per_narrative": hier_gold["per_narrative"],
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True,
-                    choices=["control", "leaf", "sliced", "drift", "grid", "probe"])
+                    choices=["control", "leaf", "sliced", "drift", "grid", "probe", "hier"])
     # grid (Tier 1 resolution sweep) knobs
     ap.add_argument("--grid-components", default="5,15",
                     help="comma-separated UMAP n_components to sweep (grid arm)")
@@ -509,7 +599,12 @@ def main() -> None:
     ap.add_argument("--top-k", type=int, default=10,
                     help="number of largest surfaced buckets to probe (probe arm)")
     ap.add_argument("--sub-min-cluster", type=int, default=5,
-                    help="HDBSCAN min_cluster_size for sub-clustering (probe arm)")
+                    help="HDBSCAN min_cluster_size for sub-clustering (probe/hier arms)")
+    # hier (Tier 1 two-level divisive clustering) knobs
+    ap.add_argument("--parent-floor", type=int, default=42,
+                    help="min theme size to sub-divide (hier arm)")
+    ap.add_argument("--sub-method", default="leaf",
+                    help="HDBSCAN selection method for sub-clustering (hier arm)")
     args = ap.parse_args()
     cfg = load_config()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -522,6 +617,8 @@ def main() -> None:
         )
     elif args.arm == "probe":
         result = arm_probe(cfg, args.top_k, args.sub_min_cluster)
+    elif args.arm == "hier":
+        result = arm_hier(cfg, args.parent_floor, args.sub_min_cluster, args.sub_method)
     else:
         result = {"control": arm_control, "leaf": arm_leaf,
                   "sliced": arm_sliced, "drift": arm_drift}[args.arm](cfg)

@@ -482,7 +482,8 @@ def build_light_artifacts(
     out.mkdir(parents=True, exist_ok=True)
     smoothing = int(cfg["dynamics"]["smoothing_window_days"])
     heat_cfg = (cfg.get("display") or {}).get("corpus_heating") or {}
-    scope_codes = {"E", "F", "G", "H"}
+    from mnd.clustering.jel_classifier import DEFAULT_MACRO_JEL_SCOPE
+    scope_codes = set(DEFAULT_MACRO_JEL_SCOPE)  # single source of truth (incl. J)
 
     # Corpus frontier across every cluster's series (same reference as staging).
     lasts = [s.index[-1] for s in adj.values() if len(s)]

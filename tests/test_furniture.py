@@ -6,6 +6,7 @@ from mnd.filtering.furniture import (
     split_byline_title,
     strip_attribution_preamble,
     strip_body_furniture,
+    strip_disclaimers,
     strip_leading_furniture,
     strip_pdf_furniture,
 )
@@ -112,6 +113,57 @@ class TestBylineTitle:
                       "South Korea: export slowdown"):
             _, s = split_byline_title(title, title.lower() + " continues to worsen")
             assert s is None, title
+
+
+class TestDisclaimers:
+    def test_strips_bis_speaker_disclaimer_midtext(self):
+        # BIS curated-speech disclaimer, sitting after the opening prose.
+        body = (
+            "The euro area economy is recovering. The views expressed in this "
+            "speech are those of the speaker and do not necessarily reflect those "
+            "of the BIS. Price stability remains our mandate."
+        )
+        out, n = strip_disclaimers(body)
+        assert n == 1
+        assert "not necessarily" not in out
+        assert out.startswith("The euro area economy is recovering.")
+        assert out.rstrip().endswith("Price stability remains our mandate.")
+
+    def test_strips_imf_masthead_and_disclaimer(self):
+        body = (
+            "ISSN 1018-5941 IMF Working Papers describe research in progress by "
+            "the author(s) and are published to elicit comments and to encourage "
+            "debate. The views expressed in IMF Working Papers are those of the "
+            "author(s) and do not necessarily represent the views of the IMF. "
+            "Sovereign spreads widened sharply during the crisis."
+        )
+        out, n = strip_disclaimers(body)
+        assert n >= 2  # ISSN + masthead sentence + disclaimer
+        assert "ISSN" not in out and "not necessarily" not in out
+        assert out.strip().startswith("Sovereign spreads widened")
+
+    def test_strips_fed_analysis_disclaimer(self):
+        body = (
+            "Labor demand stayed strong. The analysis and conclusions set forth "
+            "are those of the authors and do not necessarily indicate concurrence "
+            "by the Board of Governors. Wage growth cooled by year end."
+        )
+        out, n = strip_disclaimers(body)
+        assert n == 1 and "not necessarily" not in out
+        assert "Labor demand stayed strong." in out
+        assert "Wage growth cooled by year end." in out
+
+    def test_ordinary_prose_untouched(self):
+        # "views expressed" without the disclaimer signature is real content.
+        body = ("The views expressed at the conference ranged widely, and the "
+                "panel debated whether inflation had peaked.")
+        out, n = strip_disclaimers(body)
+        assert n == 0 and out == body
+
+    def test_no_match_returns_original(self):
+        body = "Inflation rose in March. The committee held rates steady."
+        out, n = strip_disclaimers(body)
+        assert n == 0 and out == body
 
 
 class TestAttributionPreamble:
