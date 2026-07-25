@@ -261,6 +261,44 @@ def _hdbscan_labels(reduced, min_cluster_size: int, method: str, cfg):
                    metric=h["metric"], prediction_data=False).fit_predict(reduced)
 
 
+def _time_augment(embeddings, dates, time_weight: float):
+    """Append a time-weighted feature to L2-normalized embeddings (family B).
+
+    Time-aware document embeddings (Hazem et al., LREC 2024): fusing *when* a
+    document was written with *what* it says lets clustering separate recurring
+    episodes of one theme that pure semantics collapses. We approximate their
+    trained triplet-loss fusion with a cheap, transparent post-hoc augmentation
+    on the CACHED embeddings — no re-embed:
+
+      1. L2-normalize the semantic vectors so cosine geometry is preserved and
+         the appended feature is commensurate with unit-scale components.
+      2. Map each timestamp to [0, 1] over the corpus span and append it as
+         ``time_weight`` extra dimensions (repeated) — a bigger weight makes
+         calendar proximity count for more in the Euclidean neighbourhood UMAP
+         builds. ``time_weight = 0`` reproduces the pure-semantic space.
+
+    A single global weight is a deliberate first-order stand-in for the paper's
+    learned, event-type-specific time sensitivity: enough to test whether time
+    fusion breaks persistent buckets, cheap enough to sweep. Returns the
+    augmented matrix (float32).
+    """
+    X = np.asarray(embeddings, dtype=np.float32)
+    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    Xn = X / norms
+    if time_weight <= 0:
+        return Xn
+    t = pd.to_datetime(pd.Series(dates), utc=True, errors="coerce")
+    epoch = t.astype("int64").to_numpy().astype(np.float64)  # ns; NaT -> large negative
+    valid = epoch > 0
+    lo, hi = epoch[valid].min(), epoch[valid].max()
+    span = float(hi - lo) or 1.0
+    tn = np.clip((epoch - lo) / span, 0.0, 1.0)
+    tn[~valid] = 0.5  # undated docs sit at the midpoint, no temporal pull
+    feat = (time_weight * tn.astype(np.float32)).reshape(-1, 1)
+    return np.hstack([Xn, feat])
+
+
 def arm_control(cfg) -> dict:
     clusters_df, _ = _load_base(cfg, with_embeddings=False)
     terms = _terms_from_topic_info("data/processed/topic_info.parquet")
@@ -494,7 +532,8 @@ def arm_probe(cfg, top_k: int, sub_mcs: int) -> dict:
     return {"top_k": top_k, "sub_min_cluster_size": sub_mcs, "buckets": out}
 
 
-def arm_hier(cfg, parent_floor: int, sub_mcs: int, sub_method: str) -> dict:
+def arm_hier(cfg, parent_floor: int, sub_mcs: int, sub_method: str,
+             time_weight: float = 0.0) -> dict:
     """Two-level (divisive) clustering: keep the flat topic as the THEME, then
     sub-cluster each theme on its own member embeddings to expose the STORIES.
 
@@ -511,6 +550,14 @@ def arm_hier(cfg, parent_floor: int, sub_mcs: int, sub_method: str) -> dict:
     embeddings — no re-embed. A theme that does not sub-divide (HDBSCAN returns
     all-noise) is kept whole as a single leaf, so a coherent short narrative is
     never lost to leaf noise.
+
+    ``time_weight`` > 0 sub-clusters each theme on a TIME-AUGMENTED embedding
+    (family A x B): inside a semantically-flat theme the leftover signal is
+    calendar time, so fusing it lets episodes (transitory-2021 vs disinflation-
+    2023) separate at a moderate ``sub_mcs`` without the noise-fragmentation of a
+    tiny one. The gold set marks r-star/climate ``persistent`` — excluded from
+    the concentration score — so this run also reveals whether time-fusion
+    over-segments genuine slow-burns.
     """
     clusters_df, embeddings = _load_base(cfg)
     if not clusters_df.index.equals(pd.RangeIndex(len(clusters_df))):
@@ -519,6 +566,7 @@ def arm_hier(cfg, parent_floor: int, sub_mcs: int, sub_method: str) -> dict:
     gold = _load_gold()
     topic = clusters_df["topic"].to_numpy()
     nc = int(cfg["clustering"]["umap"]["n_components"])
+    all_dates = clusters_df["published_at"].to_numpy()
 
     sizes = pd.Series(topic[topic != -1]).value_counts()
     targets = [int(t) for t in sizes[sizes >= parent_floor].index]
@@ -528,7 +576,7 @@ def arm_hier(cfg, parent_floor: int, sub_mcs: int, sub_method: str) -> dict:
     dts = pd.to_datetime(clusters_df["published_at"], utc=True, errors="coerce")
     for tid in targets:
         idx = np.nonzero(topic == tid)[0]
-        emb = embeddings[idx]
+        emb = _time_augment(embeddings[idx], all_dates[idx], time_weight)
         reduced = _umap_reduce(emb, cfg, nc) if len(emb) > (nc + 2) * 5 else emb
         sub = _hdbscan_labels(reduced, sub_mcs, sub_method, cfg)
         groups = [np.nonzero(sub == s)[0] for s in sorted(set(sub)) if s != -1]
@@ -557,7 +605,8 @@ def arm_hier(cfg, parent_floor: int, sub_mcs: int, sub_method: str) -> dict:
     ls = pd.Series(leaf_spans)
     return {
         "parent_floor": parent_floor, "sub_min_cluster_size": sub_mcs,
-        "sub_method": sub_method, "n_themes_split": len(targets),
+        "sub_method": sub_method, "time_weight": time_weight,
+        "n_themes_split": len(targets),
         "n_leaves": int(next_id),
         "leaf_span_median_y": float(ls.median()) if len(ls) else None,
         "leaf_span_p90_y": float(ls.quantile(0.9)) if len(ls) else None,
@@ -584,10 +633,119 @@ def arm_hier(cfg, parent_floor: int, sub_mcs: int, sub_method: str) -> dict:
     }
 
 
+def arm_timeaug(cfg, weights: list[float], mcs: int, method: str) -> dict:
+    """Global (single-level) clustering on TIME-AUGMENTED embeddings (family B).
+
+    The ablation for the hier x time synthesis: does fusing calendar time into
+    the vector break persistent buckets at the TOP level, with no hierarchy at
+    all? Sweeps ``time_weight`` (0 = pure-semantic control) through one UMAP+
+    HDBSCAN pass each, scored on the four diagnostics + the gold set. Comparing
+    this to ``hier --time-weight`` isolates how much of any win comes from the
+    two-level structure vs. from time-fusion itself. Cached embeddings, no
+    re-embed.
+    """
+    clusters_df, embeddings = _load_base(cfg)
+    if not clusters_df.index.equals(pd.RangeIndex(len(clusters_df))):
+        clusters_df = clusters_df.reset_index(drop=True)
+    docs = _docs_from(clusters_df)
+    gold = _load_gold()
+    nc = int(cfg["clustering"]["umap"]["n_components"])
+    dates = clusters_df["published_at"].to_numpy()
+    results: list[dict] = []
+    for w in weights:
+        aug = _time_augment(embeddings, dates, w)
+        reduced = _umap_reduce(aug, cfg, nc)
+        labels = _hdbscan_labels(reduced, mcs, method, cfg)
+        mf = _member_frame(clusters_df.assign(topic_ab=labels), "topic_ab").rename(
+            columns={"topic_ab": "topic"})
+        terms = _cluster_terms(docs, labels)
+        m = cluster_metrics(mf, terms)
+        g = _score_gold(mf, terms, gold)
+        results.append({
+            "time_weight": w, "min_cluster_size": mcs, "selection": method,
+            "n_clusters": m["n_clusters"], "n_ge_42": m["n_ge_42"],
+            "noise_share": m["noise_share"],
+            "duration_median_y": m["duration_median_y"],
+            "share_gt10y": m["share_gt10y"],
+            "single_source_ge90_share": m["single_source_ge90_share"],
+            "gold_recall": g["recall"],
+            "gold_concentration": g["concentration_episodic"],
+            "gold_median_span_y": g["median_matched_span_y"],
+        })
+        log.info("timeaug w=%.2f → clusters=%d ge42=%d gt10y=%.2f gold_conc=%s span=%s",
+                 w, m["n_clusters"], m["n_ge_42"], m["share_gt10y"],
+                 g["concentration_episodic"], g["median_matched_span_y"])
+    return {"min_cluster_size": mcs, "selection": method, "sweep": results}
+
+
+def arm_seeded(cfg, mcs: int) -> dict:
+    """Semi-supervised UMAP steered by the gold narratives' seed terms (family C).
+
+    BERTopic's guided pattern: assign each document a partial label when its
+    embedding is close to a gold narrative's seed-term centroid, then let UMAP
+    reduce with those labels (``target_metric`` supervision) so the space is
+    nudged to honour the known-narrative structure before HDBSCAN. Tests the
+    CEILING — how separable the gold stories are when we tell UMAP they exist.
+    A circularity caveat applies (we steer toward what we labelled), so this is
+    read as an upper bound, not a shippable method. Seed labels are derived
+    purely from the 12 gold term-sets; every other document stays unlabelled
+    (-1). Cached embeddings, no re-embed.
+    """
+    clusters_df, embeddings = _load_base(cfg)
+    if not clusters_df.index.equals(pd.RangeIndex(len(clusters_df))):
+        clusters_df = clusters_df.reset_index(drop=True)
+    docs = _docs_from(clusters_df)
+    gold = _load_gold()
+
+    # Seed label per doc: nearest gold narrative by seed-term keyword hits in the
+    # doc text, within its declared window; unmatched docs stay unlabelled (-1).
+    low = [d.lower() for d in docs]
+    dts = pd.to_datetime(clusters_df["published_at"], utc=True, errors="coerce")
+    y = np.full(len(clusters_df), -1, dtype=int)
+    for gi, nar in enumerate(gold):
+        terms = [t.lower() for t in nar["terms"]]
+        start = pd.Timestamp(nar["start"], tz="UTC")
+        end = pd.Timestamp(nar["end"], tz="UTC") + pd.offsets.MonthEnd(0)
+        in_win = (dts >= start) & (dts <= end)
+        for i in np.nonzero(in_win.to_numpy())[0]:
+            if y[i] == -1 and sum(t in low[i] for t in terms) >= 2:
+                y[i] = gi
+    n_seeded = int((y != -1).sum())
+
+    from umap import UMAP
+    u = cfg["clustering"]["umap"]
+    reduced = UMAP(
+        n_neighbors=u["n_neighbors"], min_dist=u["min_dist"],
+        n_components=u["n_components"], metric=u["metric"],
+        random_state=u["random_state"],
+    ).fit_transform(embeddings, y=y)   # y drives semi-supervised reduction
+    labels = _hdbscan_labels(reduced, mcs, "eom", cfg)
+    mf = _member_frame(clusters_df.assign(topic_ab=labels), "topic_ab").rename(
+        columns={"topic_ab": "topic"})
+    terms = _cluster_terms(docs, labels)
+    m = cluster_metrics(mf, terms)
+    g = _score_gold(mf, terms, gold)
+    return {
+        "n_seeded_docs": n_seeded, "min_cluster_size": mcs,
+        "seeded": {
+            "n_clusters": m["n_clusters"], "n_ge_42": m["n_ge_42"],
+            "noise_share": m["noise_share"],
+            "duration_median_y": m["duration_median_y"],
+            "share_gt10y": m["share_gt10y"],
+            "single_source_ge90_share": m["single_source_ge90_share"],
+            "gold_recall": g["recall"],
+            "gold_concentration": g["concentration_episodic"],
+            "gold_median_span_y": g["median_matched_span_y"],
+        },
+        "gold_per_narrative": g["per_narrative"],
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True,
-                    choices=["control", "leaf", "sliced", "drift", "grid", "probe", "hier"])
+                    choices=["control", "leaf", "sliced", "drift", "grid", "probe",
+                             "hier", "timeaug", "seeded"])
     # grid (Tier 1 resolution sweep) knobs
     ap.add_argument("--grid-components", default="5,15",
                     help="comma-separated UMAP n_components to sweep (grid arm)")
@@ -605,6 +763,15 @@ def main() -> None:
                     help="min theme size to sub-divide (hier arm)")
     ap.add_argument("--sub-method", default="leaf",
                     help="HDBSCAN selection method for sub-clustering (hier arm)")
+    # time-fusion knobs (hier --time-weight, timeaug sweep)
+    ap.add_argument("--time-weight", type=float, default=0.0,
+                    help="weight of the appended time feature in sub-clustering (hier arm)")
+    ap.add_argument("--time-weights", default="0,0.15,0.35,0.6",
+                    help="comma-separated time_weight sweep (timeaug arm)")
+    ap.add_argument("--mcs", type=int, default=10,
+                    help="HDBSCAN min_cluster_size for timeaug/seeded arms")
+    ap.add_argument("--method", default="eom",
+                    help="HDBSCAN selection method for the timeaug arm")
     args = ap.parse_args()
     cfg = load_config()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -618,7 +785,14 @@ def main() -> None:
     elif args.arm == "probe":
         result = arm_probe(cfg, args.top_k, args.sub_min_cluster)
     elif args.arm == "hier":
-        result = arm_hier(cfg, args.parent_floor, args.sub_min_cluster, args.sub_method)
+        result = arm_hier(cfg, args.parent_floor, args.sub_min_cluster,
+                          args.sub_method, args.time_weight)
+    elif args.arm == "timeaug":
+        result = arm_timeaug(
+            cfg, [float(x) for x in args.time_weights.split(",") if x != ""],
+            args.mcs, args.method)
+    elif args.arm == "seeded":
+        result = arm_seeded(cfg, args.mcs)
     else:
         result = {"control": arm_control, "leaf": arm_leaf,
                   "sliced": arm_sliced, "drift": arm_drift}[args.arm](cfg)
