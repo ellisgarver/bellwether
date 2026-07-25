@@ -671,6 +671,12 @@ def arm_timeaug(cfg, weights: list[float], mcs: int, method: str) -> dict:
             "gold_recall": g["recall"],
             "gold_concentration": g["concentration_episodic"],
             "gold_median_span_y": g["median_matched_span_y"],
+            # per-narrative so we can watch the PERSISTENT slow-burns (r-star,
+            # climate): a high time weight must not shred a genuine 10-year theme.
+            "persistent_spans": {
+                r["name"]: r.get("matched_span_y")
+                for r in g["per_narrative"] if r["persistent"] and r["found"]
+            },
         })
         log.info("timeaug w=%.2f → clusters=%d ge42=%d gt10y=%.2f gold_conc=%s span=%s",
                  w, m["n_clusters"], m["n_ge_42"], m["share_gt10y"],
