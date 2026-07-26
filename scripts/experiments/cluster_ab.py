@@ -747,11 +747,88 @@ def arm_seeded(cfg, mcs: int) -> dict:
     }
 
 
+def arm_dump(cfg, time_weight: float, mcs: int, method: str, n_show: int) -> dict:
+    """Qualitative read: cluster once, then WRITE THE ACTUAL CLUSTERS to read.
+
+    Metrics have taken us as far as a crude proxy can; this dumps the real
+    output of a chosen method (default: the winning time-augmented global pass)
+    so we can judge by eye whether the clusters read like true macro narratives.
+    For the largest clusters and for every gold-matched cluster it records: top
+    terms, size, date span, peak quarter, source mix, and in-window fraction.
+    Cached embeddings, no re-embed.
+    """
+    clusters_df, embeddings = _load_base(cfg)
+    if not clusters_df.index.equals(pd.RangeIndex(len(clusters_df))):
+        clusters_df = clusters_df.reset_index(drop=True)
+    docs = _docs_from(clusters_df)
+    gold = _load_gold()
+    nc = int(cfg["clustering"]["umap"]["n_components"])
+    dates_all = clusters_df["published_at"].to_numpy()
+
+    aug = _time_augment(embeddings, dates_all, time_weight)
+    reduced = _umap_reduce(aug, cfg, nc)
+    labels = _hdbscan_labels(reduced, mcs, method, cfg)
+    terms = _cluster_terms(docs, labels)
+
+    df = clusters_df.assign(topic_ab=labels)
+    df["published_at"] = pd.to_datetime(df["published_at"], utc=True, errors="coerce")
+    m = df[(df["topic_ab"] != -1)].dropna(subset=["published_at"])
+    m = m.drop_duplicates(subset=["topic_ab", "article_id"])
+
+    def _profile(tid: int) -> dict:
+        g = m[m["topic_ab"] == tid]
+        d = g["published_at"]
+        src = g["source_id"].value_counts()
+        top_src = [(str(s), int(c)) for s, c in src.head(3).items()]
+        return {
+            "cluster": int(tid), "n_articles": int(len(g)),
+            "span_y": round(float((d.max() - d.min()).days / 365.25), 2),
+            "peak_quarter": str(d.dt.to_period("Q").mode().iloc[0]) if len(d) else None,
+            "date_range": [str(d.min().date()), str(d.max().date())],
+            "single_source_frac": round(float(src.iloc[0] / src.sum()), 2),
+            "source_mix": top_src,
+            "terms": terms.get(int(tid), [])[:8],
+        }
+
+    sizes = m["topic_ab"].value_counts()
+    largest = [_profile(int(t)) for t in sizes.head(n_show).index]
+
+    # Gold-matched clusters: best term-overlap cluster per gold narrative, with
+    # its in-window fraction — the direct "is SVB a clean 2023 cluster?" read.
+    term_str = {int(t): " ".join(w.lower() for w in ws) for t, ws in terms.items()}
+    gold_hits = []
+    for nar in gold:
+        gterms = [t.lower() for t in nar["terms"]]
+        best_t, best_ov = None, 0
+        for t, s in term_str.items():
+            ov = sum(1 for gt in gterms if gt in s)
+            if ov > best_ov:
+                best_ov, best_t = ov, t
+        rec = {"name": nar["name"], "persistent": bool(nar.get("persistent")),
+               "overlap": int(best_ov)}
+        if best_ov >= 2:
+            prof = _profile(best_t)
+            gd = m[m["topic_ab"] == best_t]["published_at"]
+            start = pd.Timestamp(nar["start"], tz="UTC")
+            end = pd.Timestamp(nar["end"], tz="UTC") + pd.offsets.MonthEnd(0)
+            prof["in_window_frac"] = round(float(((gd >= start) & (gd <= end)).mean()), 2)
+            prof["gold_window"] = [nar["start"], nar["end"]]
+            rec.update(prof)
+        gold_hits.append(rec)
+
+    return {
+        "method": f"timeaug(w={time_weight}) global, mcs={mcs}, {method}",
+        "n_clusters": int(len(sizes)),
+        "largest_clusters": largest,
+        "gold_matched_clusters": gold_hits,
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True,
                     choices=["control", "leaf", "sliced", "drift", "grid", "probe",
-                             "hier", "timeaug", "seeded"])
+                             "hier", "timeaug", "seeded", "dump"])
     # grid (Tier 1 resolution sweep) knobs
     ap.add_argument("--grid-components", default="5,15",
                     help="comma-separated UMAP n_components to sweep (grid arm)")
@@ -777,7 +854,9 @@ def main() -> None:
     ap.add_argument("--mcs", type=int, default=10,
                     help="HDBSCAN min_cluster_size for timeaug/seeded arms")
     ap.add_argument("--method", default="eom",
-                    help="HDBSCAN selection method for the timeaug arm")
+                    help="HDBSCAN selection method for the timeaug/dump arms")
+    ap.add_argument("--n-show", type=int, default=40,
+                    help="number of largest clusters to profile (dump arm)")
     args = ap.parse_args()
     cfg = load_config()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -799,6 +878,8 @@ def main() -> None:
             args.mcs, args.method)
     elif args.arm == "seeded":
         result = arm_seeded(cfg, args.mcs)
+    elif args.arm == "dump":
+        result = arm_dump(cfg, args.time_weight, args.mcs, args.method, args.n_show)
     else:
         result = {"control": arm_control, "leaf": arm_leaf,
                   "sliced": arm_sliced, "drift": arm_drift}[args.arm](cfg)
