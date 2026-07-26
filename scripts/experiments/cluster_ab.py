@@ -261,6 +261,75 @@ def _hdbscan_labels(reduced, min_cluster_size: int, method: str, cfg):
                    metric=h["metric"], prediction_data=False).fit_predict(reduced)
 
 
+def _graph_communities(reduced, k: int, resolution: float, min_size: int):
+    """Community detection on a k-NN graph (family F) — dependency-robust.
+
+    Builds a mutual-ish symmetric k-NN graph on the reduced coordinates with
+    Gaussian-similarity edge weights, then partitions it into communities. Graph
+    communities can follow a story thread that HDBSCAN's density view misses.
+    Tries the fast C backend (leidenalg/igraph) → networkx-Louvain → a pure
+    scipy connected-components fallback, so it runs whatever the env has.
+    Communities smaller than ``min_size`` become noise (-1). Returns
+    ``(labels, backend_name)``.
+    """
+    from sklearn.neighbors import kneighbors_graph
+
+    n = reduced.shape[0]
+    A = kneighbors_graph(reduced, n_neighbors=k, mode="distance", include_self=False)
+    A = A.maximum(A.T)                     # symmetrize (union of k-NN)
+    d = A.data
+    sig = float(np.median(d)) or 1.0
+    A.data = np.exp(-(d ** 2) / (2.0 * sig ** 2))   # distance → similarity weight
+
+    labels = np.full(n, -1, dtype=int)
+    backend = None
+    try:
+        import igraph as ig
+        import leidenalg
+        src, tgt = A.nonzero()
+        mask = src < tgt
+        g = ig.Graph(n=n, edges=list(zip(src[mask].tolist(), tgt[mask].tolist())))
+        g.es["weight"] = A[src[mask], tgt[mask]].A1.tolist()
+        part = leidenalg.find_partition(
+            g, leidenalg.RBConfigurationVertexPartition,
+            weights="weight", resolution_parameter=resolution, seed=42)
+        for c in part:
+            for v in c:
+                labels[v] = 0  # placeholder; renumbered below
+        comm = np.array(part.membership)
+        backend = "leidenalg"
+    except Exception:
+        try:
+            import networkx as nx
+            g = nx.from_scipy_sparse_array(A)
+            comms = nx.community.louvain_communities(
+                g, weight="weight", resolution=resolution, seed=42)
+            comm = np.full(n, -1, dtype=int)
+            for ci, nodes in enumerate(comms):
+                for v in nodes:
+                    comm[v] = ci
+            backend = "networkx-louvain"
+        except Exception:
+            from scipy.sparse.csgraph import connected_components
+            _, comm = connected_components(A, directed=False)
+            backend = "scipy-connected-components"
+
+    # size-filter: small communities → noise
+    comm = np.asarray(comm)
+    vals, counts = np.unique(comm[comm >= 0], return_counts=True)
+    keep = {int(v) for v, c in zip(vals, counts) if c >= min_size}
+    out = np.full(n, -1, dtype=int)
+    nxt = 0
+    remap: dict[int, int] = {}
+    for i, c in enumerate(comm):
+        if c in keep:
+            if c not in remap:
+                remap[c] = nxt
+                nxt += 1
+            out[i] = remap[c]
+    return out, backend
+
+
 def _time_augment(embeddings, dates, time_weight: float):
     """Append a time-weighted feature to L2-normalized embeddings (family B).
 
@@ -824,11 +893,56 @@ def arm_dump(cfg, time_weight: float, mcs: int, method: str, n_show: int) -> dic
     }
 
 
+def arm_graph(cfg, k: int, resolution: float, min_size: int, time_weight: float) -> dict:
+    """Event/storyline graph clustering (family F) on cached embeddings.
+
+    Reduces the (optionally time-augmented) embeddings, then partitions a k-NN
+    graph into communities instead of running HDBSCAN — a different paradigm
+    that can trace story threads density-clustering misses. Scored on the same
+    four diagnostics + gold set, so it is directly comparable to control /
+    timeaug / hier. Sweeps the resolution to trade granularity. No re-embed.
+    """
+    clusters_df, embeddings = _load_base(cfg)
+    if not clusters_df.index.equals(pd.RangeIndex(len(clusters_df))):
+        clusters_df = clusters_df.reset_index(drop=True)
+    docs = _docs_from(clusters_df)
+    gold = _load_gold()
+    nc = int(cfg["clustering"]["umap"]["n_components"])
+    dates = clusters_df["published_at"].to_numpy()
+    aug = _time_augment(embeddings, dates, time_weight)
+    reduced = _umap_reduce(aug, cfg, nc)
+
+    labels, backend = _graph_communities(reduced, k, resolution, min_size)
+    mf = _member_frame(clusters_df.assign(topic_ab=labels), "topic_ab").rename(
+        columns={"topic_ab": "topic"})
+    terms = _cluster_terms(docs, labels)
+    m = cluster_metrics(mf, terms)
+    g = _score_gold(mf, terms, gold)
+    log.info("graph[%s] k=%d res=%.2f tw=%.2f → clusters=%d gt10y=%.2f gold_conc=%s span=%s",
+             backend, k, resolution, time_weight, m["n_clusters"], m["share_gt10y"],
+             g["concentration_episodic"], g["median_matched_span_y"])
+    return {
+        "backend": backend, "k": k, "resolution": resolution,
+        "min_size": min_size, "time_weight": time_weight,
+        "graph": {
+            "n_clusters": m["n_clusters"], "n_ge_42": m["n_ge_42"],
+            "noise_share": m["noise_share"],
+            "duration_median_y": m["duration_median_y"],
+            "share_gt10y": m["share_gt10y"],
+            "single_source_ge90_share": m["single_source_ge90_share"],
+            "gold_recall": g["recall"],
+            "gold_concentration": g["concentration_episodic"],
+            "gold_median_span_y": g["median_matched_span_y"],
+        },
+        "gold_per_narrative": g["per_narrative"],
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True,
                     choices=["control", "leaf", "sliced", "drift", "grid", "probe",
-                             "hier", "timeaug", "seeded", "dump"])
+                             "hier", "timeaug", "seeded", "dump", "graph"])
     # grid (Tier 1 resolution sweep) knobs
     ap.add_argument("--grid-components", default="5,15",
                     help="comma-separated UMAP n_components to sweep (grid arm)")
@@ -857,6 +971,12 @@ def main() -> None:
                     help="HDBSCAN selection method for the timeaug/dump arms")
     ap.add_argument("--n-show", type=int, default=40,
                     help="number of largest clusters to profile (dump arm)")
+    # graph (family F) knobs
+    ap.add_argument("--knn", type=int, default=15, help="k for the k-NN graph (graph arm)")
+    ap.add_argument("--resolution", type=float, default=1.0,
+                    help="community-detection resolution (graph arm)")
+    ap.add_argument("--min-size", type=int, default=10,
+                    help="min community size before -> noise (graph arm)")
     args = ap.parse_args()
     cfg = load_config()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -880,6 +1000,8 @@ def main() -> None:
         result = arm_seeded(cfg, args.mcs)
     elif args.arm == "dump":
         result = arm_dump(cfg, args.time_weight, args.mcs, args.method, args.n_show)
+    elif args.arm == "graph":
+        result = arm_graph(cfg, args.knn, args.resolution, args.min_size, args.time_weight)
     else:
         result = {"control": arm_control, "leaf": arm_leaf,
                   "sliced": arm_sliced, "drift": arm_drift}[args.arm](cfg)
