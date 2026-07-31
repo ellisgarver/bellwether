@@ -130,8 +130,18 @@ def main() -> None:
     docs = docs.reset_index(drop=True)
     log.info("Inflation-engaging documents in window: %d", len(docs))
 
-    # Embed poles into the SAME space (same instruction as the corpus).
-    embedder = Embedder.from_config()
+    # Embed poles into the SAME space (same instruction as the corpus). Only 16
+    # short sentences, so run wherever: on a GPU node use fp16, but on a CPU node
+    # force fp32 (fp16 matmul is unsupported on CPU) so this can skip the A100
+    # queue entirely and run on caslake.
+    import torch
+    use_cuda = torch.cuda.is_available()
+    ecfg = cfg["embedding"]["primary"]
+    embedder = Embedder(
+        model_name=ecfg["model"], revision=ecfg.get("revision", "main"),
+        instruction_aware=True, instruction_prefix=ecfg.get("instruction_prefix", ""),
+        max_seq_len=ecfg.get("max_seq_len", 1024),
+        device="cuda" if use_cuda else "cpu", fp16=use_cuda, batch_size=8)
     pole_t = _unit(embedder.encode(POLE_TRANSITORY, show_progress=False)).mean(axis=0)
     pole_e = _unit(embedder.encode(POLE_ENTRENCHED, show_progress=False)).mean(axis=0)
     axis = _unit(pole_e - pole_t)                 # + = entrenched, - = transitory
