@@ -66,6 +66,38 @@ POLE_ENTRENCHED = [
     "Persistent, demand-side inflation is here to stay absent decisive action.",
 ]
 
+# HELD-OUT face-validity probes — distinct from the axis-defining poles, so this
+# is a real test, not circular. If the axis measures STANCE, the transitory set
+# lands below the neutral set and the entrenched set above it. If it only
+# measures inflation-concern INTENSITY, all three pile up together (all are
+# high-concern) — the discriminating test between the two hypotheses.
+TEST_TRANSITORY = [
+    "The recent rise in prices reflects temporary reopening effects and should ease next year.",
+    "Bottleneck-driven price increases are a passing phenomenon, not a lasting trend.",
+    "We expect inflation to return to normal as pandemic distortions unwind.",
+    "The price surge is concentrated in a few reopening-sensitive categories and will fade.",
+    "Inflation should prove short-lived once goods demand rebalances toward services.",
+    "This is a temporary price adjustment tied to supply disruptions that will resolve.",
+]
+TEST_ENTRENCHED = [
+    "Wage growth and services prices show inflation has become self-reinforcing.",
+    "Price increases have broadened well beyond supply-affected sectors, signaling persistence.",
+    "The labor market is too tight to allow inflation to fade on its own.",
+    "Sticky services inflation means the last mile of disinflation will be slow and hard.",
+    "Inflation risks are now embedded in expectations and require forceful tightening.",
+    "Underlying inflation pressures are durable and demand-driven.",
+]
+# High inflation-concern but NO position on transitory-vs-entrenched: the
+# intensity control, and the calibration zero-point ("no stance").
+TEST_NEUTRAL = [
+    "Inflation is one of the most serious challenges facing the economy today.",
+    "Policymakers are intensely focused on the inflation problem.",
+    "Rising prices have become a central concern for households and markets.",
+    "The inflation debate dominates current economic policy discussions.",
+    "There is enormous attention on the trajectory of inflation.",
+    "Inflation is a critical issue that requires careful monitoring.",
+]
+
 # Documents that engage the inflation debate at all (whole-word-ish match).
 _INFLATION_RE = re.compile(
     r"\b(inflation|consumer price|cpi|pce|price stability|price pressures|"
@@ -146,7 +178,24 @@ def main() -> None:
     pole_e = _unit(embedder.encode(POLE_ENTRENCHED, show_progress=False)).mean(axis=0)
     axis = _unit(pole_e - pole_t)                 # + = entrenched, - = transitory
 
-    stance = _unit(dvec) @ axis                    # SemAxis projection, [-1, 1]-ish
+    # Face-validity + calibration: project the held-out probe sets. The neutral
+    # (high-concern, no-stance) set defines the zero-point, so a real stance axis
+    # puts transitory below zero and entrenched above; an intensity axis piles
+    # all three near the same (high) value.
+    def _proj(sents):
+        return (_unit(embedder.encode(sents, show_progress=False)) @ axis)
+    p_neu, p_tra, p_ent = _proj(TEST_NEUTRAL), _proj(TEST_TRANSITORY), _proj(TEST_ENTRENCHED)
+    zero = float(p_neu.mean())                     # calibration anchor = "no stance"
+    face = {
+        "transitory_mean": round(float(p_tra.mean()) - zero, 4),
+        "neutral_mean": round(float(p_neu.mean()) - zero, 4),
+        "entrenched_mean": round(float(p_ent.mean()) - zero, 4),
+        "separation": round(float(p_ent.mean() - p_tra.mean()), 4),
+        "transitory_below_entrenched": bool(p_tra.mean() < p_ent.mean()),
+        "neutral_between": bool(p_tra.mean() < p_neu.mean() < p_ent.mean()),
+    }
+
+    stance = (_unit(dvec) @ axis) - zero           # calibrated: 0 = no stance
     docs["stance"] = stance
     docs["month"] = docs["published_at"].dt.to_period("M").dt.to_timestamp()
 
@@ -169,6 +218,7 @@ def main() -> None:
     result = {
         "n_docs": int(len(docs)),
         "window": [args.start, args.end],
+        "face_validity": face,
         "stance_cpi_correlation": corr,
         "monthly": [
             {"month": str(r["month"].date()), "stance_mean": round(float(r["stance_mean"]), 4),
@@ -182,6 +232,11 @@ def main() -> None:
     log.info("wrote %s", OUT_DIR / "inflation.json")
 
     print(f"\nInflation stance axis — {len(docs)} docs, {args.start}..{args.end}")
+    print("FACE VALIDITY (calibrated; want transitory<0<entrenched, neutral~0):")
+    print(f"  transitory={face['transitory_mean']}  neutral={face['neutral_mean']}"
+          f"  entrenched={face['entrenched_mean']}  separation={face['separation']}")
+    print(f"  -> stance meter? transitory<entrenched={face['transitory_below_entrenched']}, "
+          f"neutral_between={face['neutral_between']}")
     print(f"stance<->CPI correlation: {corr}")
     print(f"{'month':<10}{'stance':>9}{'%entr':>7}{'ndocs':>7}{'CPI_yoy':>9}")
     for r in result["monthly"]:
