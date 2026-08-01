@@ -1,0 +1,1 @@
+import{m as o}from"./chart.Cjypojx0.js";import{c as n}from"./countup.BPHoBNVe.js";import"./hoisted.p8d2CTt3.js";n(document.querySelectorAll(".hero-stats .num"));const t=document.getElementById("map"),m=document.getElementById("map-data");if(t&&m){const a=JSON.parse(m.textContent).filter(e=>e.umap_xyz||e.umap_xy);o(t,a,t.dataset.base||"")}
