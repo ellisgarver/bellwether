@@ -118,6 +118,49 @@ def _unit(x: np.ndarray) -> np.ndarray:
     return x / np.where(n == 0, 1.0, n)
 
 
+def _discover_axis(dvec: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Unsupervised contested-axis discovery (Exp 1): 2-component Gaussian mixture
+    on PCA-reduced document embeddings; the axis is the difference of the two
+    component centroids in embedding space. Deterministic (fixed seed) — no LLM,
+    no hand-written poles. Returns (unit axis, projection of docs onto it)."""
+    from sklearn.decomposition import PCA
+    from sklearn.mixture import GaussianMixture
+
+    Xn = _unit(dvec)
+    k = int(min(30, Xn.shape[0] - 1, Xn.shape[1]))
+    red = PCA(n_components=k, random_state=42).fit_transform(Xn)
+    gm = GaussianMixture(n_components=2, covariance_type="full", random_state=42, n_init=5).fit(red)
+    lab = gm.predict(red)
+    if lab.sum() == 0 or lab.sum() == len(lab):     # degenerate split
+        lab = (red[:, 0] > np.median(red[:, 0])).astype(int)
+    axis = _unit(Xn[lab == 1].mean(axis=0) - Xn[lab == 0].mean(axis=0))
+    return axis, Xn @ axis
+
+
+def _bimodality(proj: np.ndarray) -> dict:
+    """Is the projection genuinely bimodal (a real debate) vs unimodal (consensus)?
+    Reports dBIC (1- minus 2-component GMM; positive => two modes preferred),
+    Sarle's bimodality coefficient (>0.555 suggests bimodality), and Hartigan's
+    dip-test p-value when the ``diptest`` package is available."""
+    from sklearn.mixture import GaussianMixture
+
+    x = proj.reshape(-1, 1)
+    b1 = GaussianMixture(1, random_state=42).fit(x).bic(x)
+    b2 = GaussianMixture(2, random_state=42, n_init=5).fit(x).bic(x)
+    from scipy import stats as st
+    g = float(st.skew(proj)); ku = float(st.kurtosis(proj, fisher=True)); n = len(proj)
+    bc = (g ** 2 + 1) / (ku + 3 * (n - 1) ** 2 / ((n - 2) * (n - 3))) if n > 3 else None
+    dip_p = None
+    try:
+        import diptest
+        dip_p = round(float(diptest.diptest(proj)[1]), 4)
+    except Exception:
+        pass
+    return {"delta_bic_1_minus_2": round(float(b1 - b2), 1),
+            "bimodality_coef": (round(float(bc), 3) if bc is not None else None),
+            "dip_p": dip_p}
+
+
 def _doc_frame(cfg, doc_re: re.Pattern) -> tuple[pd.DataFrame, np.ndarray]:
     clusters = pd.read_parquet(cfg["paths"]["processed_clusters"]).reset_index(drop=True)
     emb = np.load(cfg["paths"]["processed_embeddings"])
@@ -154,6 +197,9 @@ def main() -> None:
     ap.add_argument("--debate", choices=list(DEBATES), default="inflation")
     ap.add_argument("--start", default="2020-06")
     ap.add_argument("--end", default="2024-06")
+    ap.add_argument("--discover", action="store_true",
+                    help="also discover the axis unsupervised (GMM+bimodality) and "
+                         "compare it to the hand-built axis (Exp 1)")
     args = ap.parse_args()
     cfg = load_config()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -191,6 +237,22 @@ def main() -> None:
         "sides_separate": bool(tb > ta),
     }
 
+    # Exp 1: unsupervised axis discovery, validated against the hand-built axis.
+    discovery = None
+    if args.discover:
+        disc_axis, disc_proj = _discover_axis(dvec)
+        if float(disc_axis @ axis) < 0:               # orient to the hand-built axis
+            disc_axis, disc_proj = -disc_axis, -disc_proj
+        dta = float((proj(D["test_a"]) @ disc_axis).mean())
+        dtb = float((proj(D["test_b"]) @ disc_axis).mean())
+        discovery = {
+            "cosine_to_handbuilt": round(float(disc_axis @ axis), 3),
+            "bimodality": _bimodality(disc_proj),
+            "face_validity_on_discovered": {
+                "test_a_mean": round(dta, 4), "test_b_mean": round(dtb, 4),
+                "separation": round(dtb - dta, 4), "sides_separate": bool(dtb > dta)},
+        }
+
     docs["stance"] = stance
     docs["month"] = docs["published_at"].dt.to_period("M").dt.to_timestamp()
     monthly = docs.groupby("month").agg(
@@ -209,7 +271,8 @@ def main() -> None:
 
     result = {
         "debate": args.debate, "n_docs": int(len(docs)), "window": [args.start, args.end],
-        "face_validity": face, "fred_series": series, "stance_fred_correlation": corr,
+        "face_validity": face, "discovery": discovery,
+        "fred_series": series, "stance_fred_correlation": corr,
         "monthly": [
             {"month": str(r["month"].date()), "stance_mean": round(float(r["stance_mean"]), 4),
              "n_docs": int(r["n_docs"]),
@@ -221,6 +284,14 @@ def main() -> None:
     print(f"\n[{args.debate}] {len(docs)} docs, {args.start}..{args.end}  (+ = {D['label_b']}, - = {D['label_a']})")
     print(f"FACE VALIDITY: {D['label_a']}={face['test_a_mean']}  {D['label_b']}={face['test_b_mean']}"
           f"  separation={face['separation']}  sides_separate={face['sides_separate']}")
+    if discovery:
+        b = discovery["bimodality"]
+        print(f"DISCOVERY (unsupervised axis): cosine_to_handbuilt={discovery['cosine_to_handbuilt']}")
+        print(f"  bimodal? dBIC={b['delta_bic_1_minus_2']} (>>0 => two modes), "
+              f"bimod_coef={b['bimodality_coef']} (>0.555), dip_p={b['dip_p']}")
+        fv = discovery["face_validity_on_discovered"]
+        print(f"  face-validity on DISCOVERED axis: separation={fv['separation']} "
+              f"sides_separate={fv['sides_separate']}")
     print(f"stance<->{series} correlation: {corr}")
     print(f"{'month':<10}{'stance':>9}{'ndocs':>7}{'  '+series:>10}")
     for r in result["monthly"]:
