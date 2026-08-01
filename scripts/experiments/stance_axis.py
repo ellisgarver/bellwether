@@ -118,23 +118,61 @@ def _unit(x: np.ndarray) -> np.ndarray:
     return x / np.where(n == 0, 1.0, n)
 
 
-def _discover_axis(dvec: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Unsupervised contested-axis discovery (Exp 1): 2-component Gaussian mixture
-    on PCA-reduced document embeddings; the axis is the difference of the two
-    component centroids in embedding space. Deterministic (fixed seed) — no LLM,
-    no hand-written poles. Returns (unit axis, projection of docs onto it)."""
-    from sklearn.decomposition import PCA
+def _gmm_axis(Z: np.ndarray, X_for_axis: np.ndarray) -> np.ndarray:
+    """2-component GMM on reduced coords Z; axis = centroid difference measured in
+    ``X_for_axis`` (embedding-space rows aligned with Z)."""
     from sklearn.mixture import GaussianMixture
+    gm = GaussianMixture(n_components=2, covariance_type="full", random_state=42, n_init=5).fit(Z)
+    lab = gm.predict(Z)
+    if lab.sum() == 0 or lab.sum() == len(lab):
+        lab = (Z[:, 0] > np.median(Z[:, 0])).astype(int)
+    return _unit(X_for_axis[lab == 1].mean(axis=0) - X_for_axis[lab == 0].mean(axis=0))
 
+
+def _discover_gmm(dvec: np.ndarray) -> np.ndarray:
+    """Variance baseline: GMM on PCA-reduced embeddings (finds the biggest split)."""
+    from sklearn.decomposition import PCA
     Xn = _unit(dvec)
     k = int(min(30, Xn.shape[0] - 1, Xn.shape[1]))
-    red = PCA(n_components=k, random_state=42).fit_transform(Xn)
-    gm = GaussianMixture(n_components=2, covariance_type="full", random_state=42, n_init=5).fit(red)
-    lab = gm.predict(red)
-    if lab.sum() == 0 or lab.sum() == len(lab):     # degenerate split
-        lab = (red[:, 0] > np.median(red[:, 0])).astype(int)
-    axis = _unit(Xn[lab == 1].mean(axis=0) - Xn[lab == 0].mean(axis=0))
-    return axis, Xn @ axis
+    return _gmm_axis(PCA(n_components=k, random_state=42).fit_transform(Xn), Xn)
+
+
+def _discover_register(dvec: np.ndarray, sources: np.ndarray) -> np.ndarray:
+    """Within-context disagreement: remove between-source variance (center each
+    source to its own mean), then GMM on the residual — the stance hypothesis is
+    that disagreement lives *within* register, not between it."""
+    from sklearn.decomposition import PCA
+    Xn = _unit(dvec)
+    Xc = Xn.copy()
+    for u in np.unique(sources):
+        m = sources == u
+        Xc[m] = Xn[m] - Xn[m].mean(axis=0)
+    k = int(min(30, Xc.shape[0] - 1, Xc.shape[1]))
+    return _gmm_axis(PCA(n_components=k, random_state=42).fit_transform(Xc), Xc)
+
+
+def _discover_temporal(dvec: np.ndarray, periods: np.ndarray) -> np.ndarray:
+    """NEW criterion: the direction of maximal *systematic temporal shift* — a
+    between-time-bin discriminant (Fisher-in-time). A narrative is a position that
+    moves over time (Shiller); register is temporally static. In whitened PCA
+    space the within-bin scatter ~ I, so the top eigenvector of the between-bin
+    scatter is the direction along which the corpus's position most systematically
+    evolves. Deterministic; grounded in LDA / slow-feature / DMD."""
+    from sklearn.decomposition import PCA
+    Xn = _unit(dvec)
+    k = int(min(50, Xn.shape[0] - 1, Xn.shape[1]))
+    pca = PCA(n_components=k, random_state=42, whiten=True)
+    Z = pca.fit_transform(Xn)
+    gmean = Z.mean(axis=0)
+    Sb = np.zeros((k, k))
+    for u in np.unique(periods):
+        Zi = Z[periods == u]
+        if len(Zi) < 3:
+            continue
+        d = (Zi.mean(axis=0) - gmean).reshape(-1, 1)
+        Sb += len(Zi) * (d @ d.T)
+    _, V = np.linalg.eigh(Sb)               # whitened -> Sw ~ I; top eigvec = max shift
+    return _unit(pca.components_.T @ V[:, -1])
 
 
 def _bimodality(proj: np.ndarray) -> dict:
@@ -237,21 +275,30 @@ def main() -> None:
         "sides_separate": bool(tb > ta),
     }
 
-    # Exp 1: unsupervised axis discovery, validated against the hand-built axis.
+    # Exp 1: unsupervised axis discovery, three criteria head-to-head, each
+    # validated against the hand-built axis (cosine) + bimodality + face-validity.
     discovery = None
     if args.discover:
-        disc_axis, disc_proj = _discover_axis(dvec)
-        if float(disc_axis @ axis) < 0:               # orient to the hand-built axis
-            disc_axis, disc_proj = -disc_axis, -disc_proj
-        dta = float((proj(D["test_a"]) @ disc_axis).mean())
-        dtb = float((proj(D["test_b"]) @ disc_axis).mean())
-        discovery = {
-            "cosine_to_handbuilt": round(float(disc_axis @ axis), 3),
-            "bimodality": _bimodality(disc_proj),
-            "face_validity_on_discovered": {
-                "test_a_mean": round(dta, 4), "test_b_mean": round(dtb, 4),
-                "separation": round(dtb - dta, 4), "sides_separate": bool(dtb > dta)},
+        ta_e = proj(D["test_a"]); tb_e = proj(D["test_b"])
+        sources = docs["source_id"].to_numpy()
+        periods = docs["published_at"].dt.to_period("Q").astype(str).to_numpy()
+        methods = {
+            "gmm_variance": _discover_gmm(dvec),
+            "register_projected": _discover_register(dvec, sources),
+            "temporal_shift": _discover_temporal(dvec, periods),
         }
+        discovery = {}
+        for name, da in methods.items():
+            if float(da @ axis) < 0:                   # orient to hand-built
+                da = -da
+            dp = _unit(dvec) @ da
+            dta = float((ta_e @ da).mean()); dtb = float((tb_e @ da).mean())
+            discovery[name] = {
+                "cosine_to_handbuilt": round(float(da @ axis), 3),
+                "bimodality": _bimodality(dp),
+                "face_separation": round(dtb - dta, 4),
+                "sides_separate": bool(dtb > dta),
+            }
 
     docs["stance"] = stance
     docs["month"] = docs["published_at"].dt.to_period("M").dt.to_timestamp()
@@ -285,13 +332,12 @@ def main() -> None:
     print(f"FACE VALIDITY: {D['label_a']}={face['test_a_mean']}  {D['label_b']}={face['test_b_mean']}"
           f"  separation={face['separation']}  sides_separate={face['sides_separate']}")
     if discovery:
-        b = discovery["bimodality"]
-        print(f"DISCOVERY (unsupervised axis): cosine_to_handbuilt={discovery['cosine_to_handbuilt']}")
-        print(f"  bimodal? dBIC={b['delta_bic_1_minus_2']} (>>0 => two modes), "
-              f"bimod_coef={b['bimodality_coef']} (>0.555), dip_p={b['dip_p']}")
-        fv = discovery["face_validity_on_discovered"]
-        print(f"  face-validity on DISCOVERED axis: separation={fv['separation']} "
-              f"sides_separate={fv['sides_separate']}")
+        print("DISCOVERY (unsupervised, 3 criteria; want cosine~1 & face_sep large):")
+        print(f"  {'method':<20}{'cos_handbuilt':>14}{'face_sep':>10}{'dBIC':>9}{'bimod':>8}")
+        for name, r in discovery.items():
+            b = r["bimodality"]
+            print(f"  {name:<20}{r['cosine_to_handbuilt']:>14}{r['face_separation']:>10}"
+                  f"{b['delta_bic_1_minus_2']:>9}{str(b['bimodality_coef']):>8}")
     print(f"stance<->{series} correlation: {corr}")
     print(f"{'month':<10}{'stance':>9}{'ndocs':>7}{'  '+series:>10}")
     for r in result["monthly"]:

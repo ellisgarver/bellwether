@@ -60,6 +60,9 @@ def main() -> None:
     ap.add_argument("--debate", default="inflation")
     ap.add_argument("--target", type=float, default=2.0,
                     help="reality-field reference (e.g. 2%% inflation target); field = fred - target")
+    ap.add_argument("--field", choices=["level", "cumexcess", "surprise"], default="level",
+                    help="reality-field spec: level (fred-target), cumexcess (running sum of "
+                         "excess = evidence a mean-reversion prediction failed), surprise (delta fred)")
     args = ap.parse_args()
 
     d = json.loads((IN_DIR / f"{args.debate}.json").read_text())
@@ -67,7 +70,16 @@ def main() -> None:
             if r["stance_mean"] is not None and r["fred"] is not None]
     rows.sort(key=lambda r: r[0])
     s = np.array([r[1] for r in rows], dtype=float)
-    h = np.array([r[2] for r in rows], dtype=float) - args.target   # reality field
+    excess = np.array([r[2] for r in rows], dtype=float) - args.target
+    # Field spec. "cumexcess" is the economically-correct adjudicator for a
+    # mean-reversion narrative (transitory): mounting cumulative evidence that
+    # inflation did NOT return to target. "surprise" is the monthly change.
+    if args.field == "cumexcess":
+        h = np.cumsum(excess)
+    elif args.field == "surprise":
+        h = np.concatenate([[0.0], np.diff(np.array([r[2] for r in rows], dtype=float))])
+    else:
+        h = excess
 
     # Align to the AR-X design: y=s[t], regressors s[t-1] and h[t].
     y = s[1:]
