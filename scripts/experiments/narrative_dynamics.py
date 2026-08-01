@@ -89,21 +89,32 @@ def main() -> None:
     if n < 8:
         print(f"too few monthly points ({n}) for a stable fit"); return
 
+    trend = np.arange(n, dtype=float)
     X_full = np.column_stack([np.ones(n), s_lag, field])
     X_ar = np.column_stack([np.ones(n), s_lag])
+    # Spuriousness control: a trending field can beat an AR null just by co-trending.
+    # The real test is whether the field adds over a DETERMINISTIC TIME TREND.
+    X_trend = np.column_stack([np.ones(n), s_lag, trend])
+    X_trend_field = np.column_stack([np.ones(n), s_lag, trend, field])
     full = _ols(X_full, y)
     ar = _ols(X_ar, y)
+    tr = _ols(X_trend, y)
+    trf = _ols(X_trend_field, y)
 
     phi = float(full["beta"][1])
     lam = float(full["beta"][2])
     cap = 1.0 - phi                          # capitulation rate (invariant)
     lr = lam / cap if abs(cap) > 1e-6 else float("nan")   # long-run pass-through
 
-    # F-test: does the reality field add explanatory power over AR(1)?
-    df1 = full["k"] - ar["k"]
-    df2 = full["n"] - full["k"]
-    F = ((ar["rss"] - full["rss"]) / df1) / (full["rss"] / df2)
-    F_p = float(stats.f.sf(F, df1, df2))
+    def _ftest(restr, fullm):
+        d1 = fullm["k"] - restr["k"]; d2 = fullm["n"] - fullm["k"]
+        Fv = ((restr["rss"] - fullm["rss"]) / d1) / (fullm["rss"] / d2)
+        return float(Fv), float(stats.f.sf(Fv, d1, d2))
+
+    # does the field add over AR(1)?  (can be spurious if the field trends)
+    F, F_p = _ftest(ar, full)
+    # THE honest test: does the field add over AR(1) + a linear time trend?
+    F_tr, F_tr_p = _ftest(tr, trf)
 
     result = {
         "debate": args.debate, "n_months": n, "target": args.target,
@@ -112,7 +123,9 @@ def main() -> None:
         "reality_lambda": round(lam, 5), "lambda_p": round(float(full["p"][2]), 4),
         "long_run_passthrough": round(lr, 5),
         "r2_full": round(full["r2"], 4), "r2_ar_null": round(ar["r2"], 4),
-        "field_adds_F": round(float(F), 3), "field_adds_p": round(F_p, 5),
+        "field_adds_over_ar_F": round(float(F), 3), "field_adds_over_ar_p": round(F_p, 5),
+        "r2_trend_null": round(tr["r2"], 4), "r2_trend_plus_field": round(trf["r2"], 4),
+        "field_adds_over_TREND_F": round(float(F_tr), 3), "field_adds_over_TREND_p": round(F_tr_p, 5),
     }
     (IN_DIR / f"{args.debate}_dynamics.json").write_text(json.dumps(result, indent=2))
 
@@ -122,12 +135,11 @@ def main() -> None:
     print(f"  reality response lambda  = {result['reality_lambda']}  (p={result['lambda_p']})")
     print(f"  long-run passthrough     = {result['long_run_passthrough']}")
     print(f"  fit R^2 = {result['r2_full']}  vs AR(1) null R^2 = {result['r2_ar_null']}")
-    print(f"  does reality add over persistence?  F={result['field_adds_F']}  p={result['field_adds_p']}")
-    verdict = ("reality MATTERS and narrative is STICKY (ratchet-and-stick)"
-               if result["field_adds_p"] < 0.05 and phi > 0.5 else
-               "reality matters" if result["field_adds_p"] < 0.05 else
-               "no reality signal over persistence")
-    print(f"  -> {verdict}")
+    print(f"  field adds over AR(1)?         F={result['field_adds_over_ar_F']}  p={result['field_adds_over_ar_p']}")
+    print(f"  field adds over AR(1)+TREND?   F={result['field_adds_over_TREND_F']}  p={result['field_adds_over_TREND_p']}"
+          f"   (R^2 trend={result['r2_trend_null']} -> +field={result['r2_trend_plus_field']})")
+    real = result["field_adds_over_TREND_p"] < 0.05
+    print(f"  -> {'REAL: field beats a plain time trend (not spurious co-trending)' if real else 'SPURIOUS: a plain time trend explains it just as well'}")
 
 
 if __name__ == "__main__":
