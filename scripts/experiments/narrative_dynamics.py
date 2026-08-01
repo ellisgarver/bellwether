@@ -60,6 +60,9 @@ def main() -> None:
     ap.add_argument("--debate", default="inflation")
     ap.add_argument("--target", type=float, default=2.0,
                     help="reality-field reference (e.g. 2%% inflation target); field = fred - target")
+    ap.add_argument("--surrogate", action="store_true",
+                    help="circular-shift surrogate test: is the field's TIMING special, "
+                         "or would any time-shift of an equally-structured field do as well?")
     ap.add_argument("--field", choices=["level", "cumexcess", "surprise"], default="level",
                     help="reality-field spec: level (fred-target), cumexcess (running sum of "
                          "excess = evidence a mean-reversion prediction failed), surprise (delta fred)")
@@ -140,6 +143,27 @@ def main() -> None:
           f"   (R^2 trend={result['r2_trend_null']} -> +field={result['r2_trend_plus_field']})")
     real = result["field_adds_over_TREND_p"] < 0.05
     print(f"  -> {'REAL: field beats a plain time trend (not spurious co-trending)' if real else 'SPURIOUS: a plain time trend explains it just as well'}")
+
+    if args.surrogate:
+        # Detrend the field; the trend-controlled test is exactly whether the
+        # field's detrended fluctuations add over [1, s_lag, trend]. Circularly
+        # shift those fluctuations (preserving their autocorrelation) and see how
+        # often a shifted copy matches the true alignment. Exhaustive => exact p.
+        Xt = np.column_stack([np.ones(n), trend])
+        r = field - Xt @ (np.linalg.inv(Xt.T @ Xt) @ Xt.T @ field)
+        base = _ols(np.column_stack([np.ones(n), s_lag, trend]), y)
+        F_obs, _ = _ftest(base, _ols(np.column_stack([np.ones(n), s_lag, trend, r]), y))
+        Fs = []
+        for k in range(1, n):
+            rk = np.roll(r, k)
+            Fk, _ = _ftest(base, _ols(np.column_stack([np.ones(n), s_lag, trend, rk]), y))
+            Fs.append(Fk)
+        Fs = np.array(Fs)
+        p_emp = (1 + int((Fs >= F_obs).sum())) / (len(Fs) + 1)
+        print(f"  SURROGATE (circular-shift null, {len(Fs)} shifts):")
+        print(f"    observed F={F_obs:.2f}  vs surrogate F median={np.median(Fs):.2f} max={Fs.max():.2f}")
+        print(f"    empirical p = {p_emp:.4f}  -> "
+              f"{'REAL: true timing beats shifted copies' if p_emp < 0.05 else 'ARTIFACT: shifts match it, timing not special'}")
 
 
 if __name__ == "__main__":
